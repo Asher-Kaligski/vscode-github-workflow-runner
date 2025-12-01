@@ -1,0 +1,190 @@
+name: 🔌 Extension Workflow
+
+# This workflow is designed to test the GitHub Workflow Runner VSCode extension
+# It includes workflow_dispatch trigger with various input types for comprehensive testing
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: "Target environment for deployment"
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+        default: "development"
+
+      version:
+        description: "Version number or tag to deploy"
+        required: true
+        type: string
+        default: "latest"
+
+      enable_debug:
+        description: "Enable debug logging"
+        required: false
+        type: boolean
+        default: false
+
+      timeout_minutes:
+        description: "Timeout in minutes for the workflow"
+        required: false
+        type: number
+        default: 30
+
+      custom_message:
+        description: "Custom message to display during execution"
+        required: false
+        type: string
+        default: "Running test workflow"
+
+      notification_channels:
+        description: "Comma-separated list of notification channels (e.g., slack,email,teams)"
+        required: false
+        type: string
+        default: "slack,email"
+
+jobs:
+  validate-inputs:
+    name: Validate Inputs
+    runs-on: ubuntu-latest
+    steps:
+      - name: Display workflow inputs
+        run: |
+          echo "🎯 Workflow Inputs:"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Version: ${{ inputs.version }}"
+          echo "Debug Mode: ${{ inputs.enable_debug }}"
+          echo "Timeout: ${{ inputs.timeout_minutes }} minutes"
+          echo "Custom Message: ${{ inputs.custom_message }}"
+          echo "Notification Channels: ${{ inputs.notification_channels }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          # Parse and display comma-separated notification channels
+          echo ""
+          echo "📢 Parsed Notification Channels:"
+          IFS=',' read -ra CHANNELS <<< "${{ inputs.notification_channels }}"
+          for channel in "${CHANNELS[@]}"; do
+            echo "  - ${channel// /}"
+          done
+
+      - name: Validate environment
+        run: |
+          if [[ "${{ inputs.environment }}" =~ ^(development|staging|production)$ ]]; then
+            echo "✅ Valid environment: ${{ inputs.environment }}"
+          else
+            echo "❌ Invalid environment: ${{ inputs.environment }}"
+            exit 1
+          fi
+
+      - name: Check version format
+        run: |
+          echo "📦 Version: ${{ inputs.version }}"
+          if [[ -n "${{ inputs.version }}" ]]; then
+            echo "✅ Version is set"
+          else
+            echo "⚠️ Version is empty"
+          fi
+
+  build:
+    name: Build Application
+    runs-on: ubuntu-latest
+    needs: validate-inputs
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Display custom message
+        run: |
+          echo "💬 ${{ inputs.custom_message }}"
+
+      - name: Simulate build process
+        run: |
+          echo "🔨 Building application..."
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Version: ${{ inputs.version }}"
+          sleep 5
+          echo "✅ Build completed successfully!"
+
+      - name: Debug information
+        if: inputs.enable_debug == true
+        run: |
+          echo "🐛 Debug Mode Enabled"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Runner OS: ${{ runner.os }}"
+          echo "Runner Arch: ${{ runner.arch }}"
+          echo "Workflow: ${{ github.workflow }}"
+          echo "Run ID: ${{ github.run_id }}"
+          echo "Run Number: ${{ github.run_number }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Ref: ${{ github.ref }}"
+          echo "SHA: ${{ github.sha }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+  test:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run unit tests
+        run: |
+          echo "🧪 Running unit tests..."
+          sleep 3
+          echo "✅ All tests passed!"
+
+      - name: Run integration tests
+        if: inputs.environment != 'development'
+        run: |
+          echo "🔗 Running integration tests for ${{ inputs.environment }}..."
+          sleep 3
+          echo "✅ Integration tests passed!"
+
+  deploy:
+    name: Deploy to ${{ inputs.environment }}
+    runs-on: ubuntu-latest
+    needs: test
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Deploy application
+        run: |
+          echo "🚀 Deploying to ${{ inputs.environment }}..."
+          echo "Version: ${{ inputs.version }}"
+          sleep 5
+          echo "✅ Deployment completed successfully!"
+
+      - name: Verify deployment
+        run: |
+          echo "🔍 Verifying deployment..."
+          sleep 2
+          echo "✅ Deployment verified!"
+
+      - name: Send notification
+        run: |
+          echo "📧 Sending deployment notification..."
+          echo "Deployed version ${{ inputs.version }} to ${{ inputs.environment }}"
+
+  summary:
+    name: Workflow Summary
+    runs-on: ubuntu-latest
+    needs: [validate-inputs, build, test, deploy]
+    if: always()
+    steps:
+      - name: Generate summary
+        run: |
+          echo "📊 Workflow Execution Summary"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Environment: ${{ inputs.environment }}"
+          echo "Version: ${{ inputs.version }}"
+          echo "Status: ${{ job.status }}"
+          echo "Triggered by: ${{ github.actor }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "✨ Workflow completed!"

@@ -1,0 +1,347 @@
+name: ✅ Success with Artifacts
+
+# This workflow demonstrates successful execution with artifacts and job summaries
+# Designed to test the extension's ability to handle workflow inputs, artifacts, and summaries
+
+on:
+  workflow_dispatch:
+    inputs:
+      build_type:
+        description: "Type of build to execute"
+        required: true
+        type: choice
+        options:
+          - debug
+          - release
+          - production
+        default: "debug"
+
+      version:
+        description: "Build version number"
+        required: true
+        type: string
+        default: "1.0.0"
+
+      include_tests:
+        description: "Include test results in artifacts"
+        required: false
+        type: boolean
+        default: true
+
+      artifact_retention_days:
+        description: "Number of days to retain artifacts"
+        required: false
+        type: number
+        default: 7
+
+      custom_tag:
+        description: "Custom tag for this build"
+        required: false
+        type: string
+        default: "test-build"
+
+      build_components:
+        description: "Comma-separated list of components to build (e.g., api,frontend,backend,database)"
+        required: false
+        type: string
+        default: "api,frontend,backend"
+
+jobs:
+  job-inputs-parameters:
+    name: Save Build Parameters
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create parameters JSON
+        run: |
+          echo "📝 Creating build parameters file..."
+          cat > build-parameters.json << EOF
+          {
+            "workflow": "${{ github.workflow }}",
+            "run_id": "${{ github.run_id }}",
+            "run_number": "${{ github.run_number }}",
+            "triggered_by": "${{ github.actor }}",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "inputs": {
+              "build_type": "${{ inputs.build_type }}",
+              "version": "${{ inputs.version }}",
+              "include_tests": ${{ inputs.include_tests }},
+              "artifact_retention_days": ${{ inputs.artifact_retention_days }},
+              "custom_tag": "${{ inputs.custom_tag }}",
+              "build_components": "${{ inputs.build_components }}"
+            },
+            "repository": {
+              "owner": "${{ github.repository_owner }}",
+              "name": "${{ github.event.repository.name }}",
+              "full_name": "${{ github.repository }}"
+            },
+            "ref": "${{ github.ref }}",
+            "sha": "${{ github.sha }}"
+          }
+          EOF
+
+          echo "✅ Build parameters file created"
+          cat build-parameters.json
+
+      - name: Upload build parameters
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-parameters
+          path: build-parameters.json
+          retention-days: ${{ fromJSON(inputs.artifact_retention_days) }}
+
+      - name: Display parameters summary
+        run: |
+          echo "📊 Build Parameters Summary"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "Build Type: ${{ inputs.build_type }}"
+          echo "Version: ${{ inputs.version }}"
+          echo "Include Tests: ${{ inputs.include_tests }}"
+          echo "Retention Days: ${{ inputs.artifact_retention_days }}"
+          echo "Custom Tag: ${{ inputs.custom_tag }}"
+          echo "Build Components: ${{ inputs.build_components }}"
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+
+          # Parse and display comma-separated components
+          echo ""
+          echo "🔧 Components to Build:"
+          IFS=',' read -ra COMPONENTS <<< "${{ inputs.build_components }}"
+          for component in "${COMPONENTS[@]}"; do
+            echo "  - ${component// /}"
+          done
+
+  build-application:
+    name: Build Application (${{ inputs.build_type }})
+    runs-on: ubuntu-latest
+    needs: job-inputs-parameters
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build application
+        run: |
+          echo "🔨 Building application..."
+          echo "Build Type: ${{ inputs.build_type }}"
+          echo "Version: ${{ inputs.version }}"
+
+          # Simulate build process
+          mkdir -p build/output
+
+          # Create build artifacts
+          echo "Build completed at $(date)" > build/output/build-info.txt
+          echo "Version: ${{ inputs.version }}" >> build/output/build-info.txt
+          echo "Type: ${{ inputs.build_type }}" >> build/output/build-info.txt
+          echo "Tag: ${{ inputs.custom_tag }}" >> build/output/build-info.txt
+
+          # Create a mock binary
+          echo "Mock binary content for ${{ inputs.build_type }} build" > build/output/app.bin
+
+          # Create build metadata JSON
+          cat > build/output/metadata.json << EOF
+          {
+            "version": "${{ inputs.version }}",
+            "build_type": "${{ inputs.build_type }}",
+            "custom_tag": "${{ inputs.custom_tag }}",
+            "build_timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "commit_sha": "${{ github.sha }}",
+            "runner_os": "${{ runner.os }}"
+          }
+          EOF
+
+          sleep 3
+          echo "✅ Build completed successfully!"
+
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-output-${{ inputs.build_type }}
+          path: build/output/
+          retention-days: ${{ fromJSON(inputs.artifact_retention_days) }}
+
+      - name: Generate build summary
+        run: |
+          echo "# 🎉 Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Build Information" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Type**: \`${{ inputs.build_type }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: \`${{ inputs.version }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Custom Tag**: \`${{ inputs.custom_tag }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ✅ Success" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Artifacts" >> $GITHUB_STEP_SUMMARY
+          echo "- Build output uploaded as \`build-output-${{ inputs.build_type }}\`" >> $GITHUB_STEP_SUMMARY
+          echo "- Retention period: ${{ inputs.artifact_retention_days }} days" >> $GITHUB_STEP_SUMMARY
+
+  run-tests:
+    name: Run Tests
+    runs-on: ubuntu-latest
+    needs: build-application
+    if: inputs.include_tests == true
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run unit tests
+        run: |
+          echo "🧪 Running unit tests..."
+          mkdir -p test-results
+
+          # Simulate test execution
+          cat > test-results/unit-tests.json << EOF
+          {
+            "test_suite": "unit_tests",
+            "total_tests": 42,
+            "passed": 42,
+            "failed": 0,
+            "skipped": 0,
+            "duration_seconds": 12.5,
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          }
+          EOF
+
+          sleep 2
+          echo "✅ All unit tests passed! (42/42)"
+
+      - name: Run integration tests
+        run: |
+          echo "🔗 Running integration tests..."
+
+          # Simulate integration test execution
+          cat > test-results/integration-tests.json << EOF
+          {
+            "test_suite": "integration_tests",
+            "total_tests": 18,
+            "passed": 18,
+            "failed": 0,
+            "skipped": 0,
+            "duration_seconds": 8.3,
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          }
+          EOF
+
+          sleep 2
+          echo "✅ All integration tests passed! (18/18)"
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        with:
+          name: test-results
+          path: test-results/
+          retention-days: ${{ fromJSON(inputs.artifact_retention_days) }}
+
+      - name: Generate test summary
+        run: |
+          echo "# 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Unit Tests" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total**: 42" >> $GITHUB_STEP_SUMMARY
+          echo "- **Passed**: ✅ 42" >> $GITHUB_STEP_SUMMARY
+          echo "- **Failed**: ❌ 0" >> $GITHUB_STEP_SUMMARY
+          echo "- **Duration**: 12.5s" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Integration Tests" >> $GITHUB_STEP_SUMMARY
+          echo "- **Total**: 18" >> $GITHUB_STEP_SUMMARY
+          echo "- **Passed**: ✅ 18" >> $GITHUB_STEP_SUMMARY
+          echo "- **Failed**: ❌ 0" >> $GITHUB_STEP_SUMMARY
+          echo "- **Duration**: 8.3s" >> $GITHUB_STEP_SUMMARY
+
+  generate-documentation:
+    name: Generate Documentation
+    runs-on: ubuntu-latest
+    needs: build-application
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Generate docs
+        run: |
+          echo "📚 Generating documentation..."
+          mkdir -p docs/output
+
+          # Create documentation files
+          cat > docs/output/README.md << EOF
+          # Build Documentation
+
+          Version: ${{ inputs.version }}
+          Build Type: ${{ inputs.build_type }}
+          Custom Tag: ${{ inputs.custom_tag }}
+
+          ## Overview
+          This documentation was generated for build ${{ github.run_number }}.
+
+          ## Build Details
+          - Triggered by: ${{ github.actor }}
+          - Timestamp: $(date -u +"%Y-%m-%dT%H:%M:%SZ")
+          - Commit: ${{ github.sha }}
+          EOF
+
+          # Create API documentation JSON
+          cat > docs/output/api-docs.json << EOF
+          {
+            "version": "${{ inputs.version }}",
+            "endpoints": [
+              {"path": "/api/v1/status", "method": "GET"},
+              {"path": "/api/v1/build", "method": "POST"},
+              {"path": "/api/v1/health", "method": "GET"}
+            ],
+            "generated_at": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+          }
+          EOF
+
+          sleep 2
+          echo "✅ Documentation generated successfully!"
+
+      - name: Upload documentation
+        uses: actions/upload-artifact@v4
+        with:
+          name: documentation
+          path: docs/output/
+          retention-days: ${{ fromJSON(inputs.artifact_retention_days) }}
+
+      - name: Generate documentation summary
+        run: |
+          echo "# 📚 Documentation Generated" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Documentation has been generated and uploaded as an artifact." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Contents" >> $GITHUB_STEP_SUMMARY
+          echo "- README.md" >> $GITHUB_STEP_SUMMARY
+          echo "- API Documentation (JSON)" >> $GITHUB_STEP_SUMMARY
+
+  workflow-summary:
+    name: Workflow Summary
+    runs-on: ubuntu-latest
+    needs:
+      [
+        job-inputs-parameters,
+        build-application,
+        run-tests,
+        generate-documentation,
+      ]
+    if: always()
+    steps:
+      - name: Generate final summary
+        run: |
+          echo "# 🎯 Workflow Execution Complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Workflow Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run Number**: #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered By**: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ✅ Success" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Input Parameters" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Type**: ${{ inputs.build_type }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Include Tests**: ${{ inputs.include_tests }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Custom Tag**: ${{ inputs.custom_tag }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Artifacts Generated" >> $GITHUB_STEP_SUMMARY
+          echo "1. 📦 Build Parameters" >> $GITHUB_STEP_SUMMARY
+          echo "2. 🔨 Build Output (${{ inputs.build_type }})" >> $GITHUB_STEP_SUMMARY
+          if [ "${{ inputs.include_tests }}" == "true" ]; then
+            echo "3. 🧪 Test Results" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "4. 📚 Documentation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "✨ All jobs completed successfully!" >> $GITHUB_STEP_SUMMARY

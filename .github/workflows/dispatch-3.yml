@@ -1,0 +1,68 @@
+name: Dispatch Workflow 3
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_run_name:
+        description: "Custom workflow run name"
+        required: false
+        type: string
+        default: "Test Run 3"
+      additional_parameters:
+        description: "Additional parameters (e.g., key1=value1, key2=value2)"
+        required: false
+        type: string
+      enable_feature:
+        description: "Run integration tests"
+        required: false
+        type: boolean
+        default: false
+      environment:
+        description: "Test environment"
+        required: true
+        type: choice
+        options:
+          - local
+          - ci
+          - integration
+          - e2e
+        default: ci
+
+run-name: ${{ inputs.workflow_run_name || 'Test Dispatch Workflow 3' }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Display test configuration
+        run: |
+          echo "Test Run: ${{ inputs.workflow_run_name }}"
+          echo "Extra Params: ${{ inputs.additional_parameters }}"
+          echo "Integration Tests: ${{ inputs.enable_feature }}"
+          echo "Environment: ${{ inputs.environment }}"
+
+      - name: Run unit tests
+        run: |
+          echo "Running unit tests in ${{ inputs.environment }}..."
+          sleep 1
+          echo "Unit tests passed!"
+
+      - name: Run integration tests
+        if: inputs.enable_feature == true
+        run: |
+          echo "Running integration tests..."
+          sleep 2
+          echo "Integration tests passed!"
+
+      - name: Apply additional parameters
+        if: inputs.additional_parameters != ''
+        run: |
+          echo "Applying parameters: ${{ inputs.additional_parameters }}"

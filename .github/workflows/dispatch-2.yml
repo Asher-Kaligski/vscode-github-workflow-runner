@@ -1,0 +1,63 @@
+name: Dispatch Workflow 2
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_run_name:
+        description: "Custom workflow run name"
+        required: false
+        type: string
+        default: "Test Run 2"
+      additional_parameters:
+        description: "Additional parameters (e.g., key1=value1, key2=value2)"
+        required: false
+        type: string
+      enable_feature:
+        description: "Enable debug mode"
+        required: false
+        type: boolean
+        default: true
+      environment:
+        description: "Deployment target"
+        required: true
+        type: choice
+        options:
+          - dev
+          - test
+          - uat
+          - prod
+        default: dev
+
+run-name: ${{ inputs.workflow_run_name || 'Test Dispatch Workflow 2' }}
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show configuration
+        run: |
+          echo "=== Workflow Configuration ==="
+          echo "Run Name: ${{ inputs.workflow_run_name }}"
+          echo "Parameters: ${{ inputs.additional_parameters }}"
+          echo "Debug Mode: ${{ inputs.enable_feature }}"
+          echo "Target: ${{ inputs.environment }}"
+
+      - name: Debug mode actions
+        if: inputs.enable_feature == true
+        run: |
+          echo "Debug mode is enabled"
+          echo "Running with verbose output..."
+
+      - name: Process parameters
+        if: inputs.additional_parameters != ''
+        run: |
+          echo "Processing: ${{ inputs.additional_parameters }}"
+
+      - name: Deploy to environment
+        run: |
+          echo "Deploying to ${{ inputs.environment }}..."
+          sleep 2
+          echo "Deployment complete!"

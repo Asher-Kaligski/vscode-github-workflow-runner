@@ -1,0 +1,62 @@
+name: Dispatch Workflow 1
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_run_name:
+        description: "Custom workflow run name"
+        required: true
+        type: string
+        default: "Test Run 1"
+      additional_parameters:
+        description: "Additional parameters (e.g., key1=value1, key2=value2)"
+        required: false
+        type: string
+      enable_feature:
+        description: "Enable feature flag"
+        required: false
+        type: boolean
+        default: false
+      environment:
+        description: "Target environment"
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+        default: development
+
+run-name: ${{ inputs.workflow_run_name || 'Test Dispatch Workflow 1' }}
+
+jobs:
+  test-job:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Display inputs
+        run: |
+          echo "Workflow Run Name: ${{ inputs.workflow_run_name }}"
+          echo "Additional Parameters: ${{ inputs.additional_parameters }}"
+          echo "Feature Enabled: ${{ inputs.enable_feature }}"
+          echo "Environment: ${{ inputs.environment }}"
+
+      - name: Parse additional parameters
+        if: inputs.additional_parameters != ''
+        run: |
+          echo "Parsing additional parameters..."
+          IFS=',' read -ra PARAMS <<< "${{ inputs.additional_parameters }}"
+          for param in "${PARAMS[@]}"; do
+            echo "Parameter: $param"
+          done
+
+      - name: Feature flag check
+        if: inputs.enable_feature == true
+        run: |
+          echo "Feature is enabled!"
+
+      - name: Environment-specific task
+        run: |
+          echo "Running in ${{ inputs.environment }} environment"

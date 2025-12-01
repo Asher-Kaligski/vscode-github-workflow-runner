@@ -1,0 +1,399 @@
+name: ⚠️ Mixed Results
+
+# This workflow demonstrates mixed success/failure scenarios
+# Designed to test the extension's ability to handle failed jobs and various states
+
+on:
+  workflow_dispatch:
+    inputs:
+      deployment_target:
+        description: "Target deployment environment"
+        required: true
+        type: choice
+        options:
+          - development
+          - staging
+          - production
+        default: "development"
+
+      version:
+        description: "Version to deploy"
+        required: true
+        type: string
+        default: "2.0.0"
+
+      force_failure:
+        description: "Force specific job to fail (for testing)"
+        required: false
+        type: choice
+        options:
+          - none
+          - validation
+          - security-scan
+          - deployment
+        default: "security-scan"
+
+      enable_rollback:
+        description: "Enable automatic rollback on failure"
+        required: false
+        type: boolean
+        default: true
+
+      timeout_minutes:
+        description: "Maximum timeout for deployment"
+        required: false
+        type: number
+        default: 15
+
+      deployment_tags:
+        description: "Comma-separated list of deployment tags (e.g., feature,bugfix,hotfix,security)"
+        required: false
+        type: string
+        default: "feature,bugfix"
+
+jobs:
+  job-inputs-parameters:
+    name: Save Build Parameters
+    runs-on: ubuntu-latest
+    steps:
+      - name: Create parameters JSON
+        run: |
+          echo "📝 Saving workflow parameters..."
+          cat > workflow-parameters.json << EOF
+          {
+            "workflow": "${{ github.workflow }}",
+            "run_id": "${{ github.run_id }}",
+            "run_number": "${{ github.run_number }}",
+            "triggered_by": "${{ github.actor }}",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "inputs": {
+              "deployment_target": "${{ inputs.deployment_target }}",
+              "version": "${{ inputs.version }}",
+              "force_failure": "${{ inputs.force_failure }}",
+              "enable_rollback": ${{ inputs.enable_rollback }},
+              "timeout_minutes": ${{ inputs.timeout_minutes }},
+              "deployment_tags": "${{ inputs.deployment_tags }}"
+            },
+            "repository": {
+              "owner": "${{ github.repository_owner }}",
+              "name": "${{ github.event.repository.name }}",
+              "full_name": "${{ github.repository }}"
+            },
+            "ref": "${{ github.ref }}",
+            "sha": "${{ github.sha }}"
+          }
+          EOF
+
+          echo "✅ Parameters saved"
+          cat workflow-parameters.json
+
+          # Parse and display comma-separated deployment tags
+          echo ""
+          echo "🏷️ Deployment Tags:"
+          IFS=',' read -ra TAGS <<< "${{ inputs.deployment_tags }}"
+          for tag in "${TAGS[@]}"; do
+            echo "  - ${tag// /}"
+          done
+
+      - name: Upload workflow parameters
+        uses: actions/upload-artifact@v4
+        with:
+          name: workflow-parameters
+          path: workflow-parameters.json
+          retention-days: 7
+
+  validation:
+    name: Validate Configuration
+    runs-on: ubuntu-latest
+    needs: job-inputs-parameters
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Validate deployment target
+        run: |
+          echo "🔍 Validating deployment target: ${{ inputs.deployment_target }}"
+
+          if [ "${{ inputs.force_failure }}" == "validation" ]; then
+            echo "❌ Validation failed (forced failure for testing)"
+            echo "Error: Invalid configuration detected"
+            exit 1
+          fi
+
+          echo "✅ Deployment target is valid"
+
+      - name: Check version format
+        run: |
+          echo "📦 Checking version: ${{ inputs.version }}"
+
+          # Validate version format (simple check)
+          if [[ "${{ inputs.version }}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "✅ Version format is valid"
+          else
+            echo "⚠️ Version format may be non-standard"
+          fi
+
+      - name: Create validation report
+        run: |
+          mkdir -p reports
+          cat > reports/validation.json << EOF
+          {
+            "validation_status": "passed",
+            "deployment_target": "${{ inputs.deployment_target }}",
+            "version": "${{ inputs.version }}",
+            "timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "checks": {
+              "target_valid": true,
+              "version_format": true
+            }
+          }
+          EOF
+
+      - name: Upload validation report
+        uses: actions/upload-artifact@v4
+        with:
+          name: validation-report
+          path: reports/validation.json
+
+  security-scan:
+    name: Security Scan
+    runs-on: ubuntu-latest
+    needs: validation
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Run security scan
+        run: |
+          echo "🔒 Running security scan..."
+          sleep 2
+
+          if [ "${{ inputs.force_failure }}" == "security-scan" ]; then
+            echo "❌ Security vulnerabilities detected (forced failure for testing)"
+            echo ""
+            echo "Critical Issues Found:"
+            echo "  - CVE-2024-12345: High severity vulnerability in dependency"
+            echo "  - CVE-2024-67890: Medium severity vulnerability in package"
+            echo ""
+            exit 1
+          fi
+
+          echo "✅ No security vulnerabilities detected"
+
+      - name: Generate security report
+        if: always()
+        run: |
+          mkdir -p reports
+
+          if [ "${{ inputs.force_failure }}" == "security-scan" ]; then
+            STATUS="failed"
+            VULNERABILITIES=2
+          else
+            STATUS="passed"
+            VULNERABILITIES=0
+          fi
+
+          cat > reports/security-scan.json << EOF
+          {
+            "scan_status": "$STATUS",
+            "vulnerabilities_found": $VULNERABILITIES,
+            "scan_timestamp": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "scanned_version": "${{ inputs.version }}"
+          }
+          EOF
+
+      - name: Upload security report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: security-report
+          path: reports/security-scan.json
+
+      - name: Generate security summary
+        if: always()
+        run: |
+          echo "# 🔒 Security Scan Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.force_failure }}" == "security-scan" ]; then
+            echo "## ❌ Scan Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Critical vulnerabilities detected!**" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Issues Found" >> $GITHUB_STEP_SUMMARY
+            echo "- CVE-2024-12345 (High)" >> $GITHUB_STEP_SUMMARY
+            echo "- CVE-2024-67890 (Medium)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ✅ Scan Passed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "No security vulnerabilities detected." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  build-package:
+    name: Build Deployment Package
+    runs-on: ubuntu-latest
+    needs: validation
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Build package
+        run: |
+          echo "📦 Building deployment package..."
+          mkdir -p package/dist
+
+          # Create package files
+          echo "Application v${{ inputs.version }}" > package/dist/app.txt
+          echo "Target: ${{ inputs.deployment_target }}" >> package/dist/app.txt
+
+          cat > package/dist/manifest.json << EOF
+          {
+            "version": "${{ inputs.version }}",
+            "target": "${{ inputs.deployment_target }}",
+            "build_time": "$(date -u +"%Y-%m-%dT%H:%M:%SZ")",
+            "commit": "${{ github.sha }}"
+          }
+          EOF
+
+          sleep 2
+          echo "✅ Package built successfully"
+
+      - name: Upload deployment package
+        uses: actions/upload-artifact@v4
+        with:
+          name: deployment-package
+          path: package/dist/
+
+      - name: Generate build summary
+        run: |
+          echo "# 📦 Build Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Target**: ${{ inputs.deployment_target }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ✅ Success" >> $GITHUB_STEP_SUMMARY
+
+  deployment:
+    name: Deploy to ${{ inputs.deployment_target }}
+    runs-on: ubuntu-latest
+    needs: [security-scan, build-package]
+    if: always() && needs.build-package.result == 'success'
+    timeout-minutes: ${{ fromJSON(inputs.timeout_minutes) }}
+    steps:
+      - name: Download deployment package
+        uses: actions/download-artifact@v4
+        with:
+          name: deployment-package
+          path: ./package
+
+      - name: Deploy application
+        run: |
+          echo "🚀 Deploying to ${{ inputs.deployment_target }}..."
+          echo "Version: ${{ inputs.version }}"
+
+          sleep 3
+
+          if [ "${{ inputs.force_failure }}" == "deployment" ]; then
+            echo "❌ Deployment failed (forced failure for testing)"
+            echo "Error: Connection timeout to ${{ inputs.deployment_target }} environment"
+            exit 1
+          fi
+
+          echo "✅ Deployment completed successfully"
+
+      - name: Verify deployment
+        if: success()
+        run: |
+          echo "🔍 Verifying deployment..."
+          sleep 2
+          echo "✅ Deployment verified"
+
+      - name: Generate deployment summary
+        if: always()
+        run: |
+          echo "# 🚀 Deployment Results" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "${{ inputs.force_failure }}" == "deployment" ]; then
+            echo "## ❌ Deployment Failed" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "**Error**: Connection timeout to ${{ inputs.deployment_target }} environment" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "## ✅ Deployment Successful" >> $GITHUB_STEP_SUMMARY
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "- **Environment**: ${{ inputs.deployment_target }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Version**: ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  rollback:
+    name: Rollback on Failure
+    runs-on: ubuntu-latest
+    needs: [deployment]
+    if: always() && inputs.enable_rollback == true && needs.deployment.result == 'failure'
+    steps:
+      - name: Execute rollback
+        run: |
+          echo "⏪ Executing automatic rollback..."
+          echo "Target: ${{ inputs.deployment_target }}"
+          sleep 2
+          echo "✅ Rollback completed successfully"
+
+      - name: Generate rollback summary
+        run: |
+          echo "# ⏪ Automatic Rollback Executed" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Deployment failed, automatic rollback was triggered." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "- **Environment**: ${{ inputs.deployment_target }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Status**: ✅ Rollback successful" >> $GITHUB_STEP_SUMMARY
+
+  final-summary:
+    name: Final Summary
+    runs-on: ubuntu-latest
+    needs:
+      [
+        job-inputs-parameters,
+        validation,
+        security-scan,
+        build-package,
+        deployment,
+        rollback,
+      ]
+    if: always()
+    steps:
+      - name: Generate comprehensive summary
+        run: |
+          echo "# 📊 Workflow Execution Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Workflow Details" >> $GITHUB_STEP_SUMMARY
+          echo "- **Workflow**: ${{ github.workflow }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Run Number**: #${{ github.run_number }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Triggered By**: @${{ github.actor }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Input Parameters" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment Target**: ${{ inputs.deployment_target }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Version**: ${{ inputs.version }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Forced Failure**: ${{ inputs.force_failure }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Rollback Enabled**: ${{ inputs.enable_rollback }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "## Job Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Parameters**: ${{ needs.save-build-parameters.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Validation**: ${{ needs.validation.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Security Scan**: ${{ needs.security-scan.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Build Package**: ${{ needs.build-package.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Deployment**: ${{ needs.deployment.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Rollback**: ${{ needs.rollback.result }}" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+
+          # Determine overall status
+          if [ "${{ needs.deployment.result }}" == "failure" ]; then
+            if [ "${{ inputs.enable_rollback }}" == "true" ]; then
+              echo "⚠️ Deployment failed but rollback was successful" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ Deployment failed (rollback disabled)" >> $GITHUB_STEP_SUMMARY
+            fi
+          elif [ "${{ needs.security-scan.result }}" == "failure" ]; then
+            echo "⚠️ Security scan failed - deployment may have been skipped" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "✨ Workflow completed with mixed results" >> $GITHUB_STEP_SUMMARY
+          fi

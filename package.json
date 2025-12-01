@@ -1,0 +1,324 @@
+{
+  "name": "github-workflow-runner",
+  "displayName": "GitHub Actions Runner",
+  "description": "Run, monitor, and manage GitHub Actions workflows directly from VS Code. Dispatch workflows with inputs, track runs in real-time, filter by PR/branch, view logs, download artifacts, and more.",
+  "publisher": "asher-kaligski",
+  "icon": "media/icon.png",
+  "version": "1.0.0",
+  "engines": {
+    "vscode": "^1.93.0"
+  },
+  "categories": [
+    "SCM Providers",
+    "Other"
+  ],
+  "keywords": [
+    "github",
+    "actions",
+    "workflow",
+    "ci/cd",
+    "automation",
+    "workflow-dispatch",
+    "github-actions",
+    "continuous integration",
+    "continuous deployment",
+    "devops",
+    "pipeline",
+    "build",
+    "deploy",
+    "testing",
+    "runner"
+  ],
+  "galleryBanner": {
+    "color": "#2088FF",
+    "theme": "dark"
+  },
+  "qna": "https://github.com/Asher-Kaligski/vscode-github-workflow-runner/discussions",
+  "sponsor": {
+    "url": "https://github.com/sponsors/Asher-Kaligski"
+  },
+  "activationEvents": [
+    "onView:github-workflow-runner-sidebar",
+    "onCommand:github-workflow-runner.show-workflow-runs",
+    "onCommand:github-workflow-runner.hide-workflow-runs",
+    "onCommand:github-workflow-runner.refresh-workflows",
+    "onCommand:github-workflow-runner.run-last-workflow"
+  ],
+  "main": "./dist/extension.js",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/Asher-Kaligski/vscode-github-workflow-runner.git"
+  },
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "github-workflow-runner-sidebar-view",
+          "title": "GitHub Actions Runner",
+          "icon": "media/workflow-icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "github-workflow-runner-sidebar-view": [
+        {
+          "type": "webview",
+          "id": "github-workflow-runner-sidebar",
+          "name": "Dispatch",
+          "icon": "media/workflow-icon.svg",
+          "contextualTitle": "GitHub Actions Runner"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "github-workflow-runner.show-workflow-runs",
+        "category": "GitHub Actions Runner",
+        "title": "Show Workflow Runs",
+        "icon": "$(eye)"
+      },
+      {
+        "command": "github-workflow-runner.hide-workflow-runs",
+        "category": "GitHub Actions Runner",
+        "title": "Hide Workflow Runs",
+        "icon": "$(eye-closed)"
+      },
+      {
+        "command": "github-workflow-runner.refresh-workflows",
+        "category": "GitHub Actions Runner",
+        "title": "Refresh Workflows",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "github-workflow-runner.run-last-workflow",
+        "category": "GitHub Actions Runner",
+        "title": "Run Last Workflow",
+        "icon": "$(debug-restart)"
+      }
+    ],
+    "configuration": {
+      "title": "GitHub Actions Runner",
+      "properties": {
+        "githubWorkflowRunner.repository.owner": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub repository owner/organization name (auto-detected from git remote)"
+        },
+        "githubWorkflowRunner.repository.name": {
+          "type": "string",
+          "default": "",
+          "description": "GitHub repository name (auto-detected from git remote)"
+        },
+        "githubWorkflowRunner.repository.manualOwner": {
+          "type": "string",
+          "default": "",
+          "description": "Manual override for repository owner (takes precedence over auto-detection)"
+        },
+        "githubWorkflowRunner.repository.manualName": {
+          "type": "string",
+          "default": "",
+          "description": "Manual override for repository name (takes precedence over auto-detection)"
+        },
+        "githubWorkflowRunner.defaultBranch": {
+          "type": "string",
+          "default": "main",
+          "description": "Default branch for workflow dispatch"
+        },
+        "githubWorkflowRunner.monitoring.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh workflow runs"
+        },
+        "githubWorkflowRunner.monitoring.refreshInterval": {
+          "type": "number",
+          "default": 15,
+          "minimum": 5,
+          "maximum": 300,
+          "description": "Auto-refresh interval in seconds for workflow monitoring"
+        },
+        "githubWorkflowRunner.monitoring.maxRuns": {
+          "type": "number",
+          "default": 20,
+          "minimum": 5,
+          "maximum": 200,
+          "description": "Maximum number of workflow runs to display"
+        },
+        "githubWorkflowRunner.ui.confirmBeforeDispatch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show confirmation dialog before dispatching workflow"
+        },
+        "githubWorkflowRunner.ui.rememberLastWorkflow": {
+          "type": "boolean",
+          "default": true,
+          "description": "Remember and pre-select the last used workflow"
+        },
+        "githubWorkflowRunner.git.autoDetectBranch": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically detect and pre-populate current Git branch"
+        },
+        "githubWorkflowRunner.notifications.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show desktop notifications for workflow completion"
+        },
+        "githubWorkflowRunner.notifications.onSuccess": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show notification when workflow succeeds"
+        },
+        "githubWorkflowRunner.notifications.onFailure": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show notification when workflow fails"
+        },
+        "githubWorkflowRunner.workflows.excludePatterns": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Workflow name patterns to exclude (glob patterns supported)"
+        },
+        "githubWorkflowRunner.favorites.scope": {
+          "type": "string",
+          "enum": [
+            "workspace",
+            "global"
+          ],
+          "default": "workspace",
+          "description": "Storage scope for workflow favorites (workspace: per-workspace, global: across all workspaces)"
+        },
+        "githubWorkflowRunner.authentication.method": {
+          "type": "string",
+          "enum": [
+            "auto",
+            "oauth",
+            "pat"
+          ],
+          "default": "auto",
+          "description": "Preferred authentication method: 'oauth' uses VS Code GitHub sign-in, 'pat' uses a Personal Access Token, 'auto' prompts each time"
+        },
+        "githubWorkflowRunner.favoriteRepositories": {
+          "type": "array",
+          "description": "List of favorite repositories shown in the repository selector",
+          "items": {
+            "type": "object",
+            "properties": {
+              "owner": {
+                "type": "string",
+                "description": "Repository owner or organization"
+              },
+              "name": {
+                "type": "string",
+                "description": "Repository name"
+              }
+            },
+            "required": [
+              "owner",
+              "name"
+            ],
+            "additionalProperties": false
+          },
+          "default": []
+        },
+        "githubWorkflowRunner.filePathDetection.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Enable automatic file path parameter detection"
+        },
+        "githubWorkflowRunner.filePathDetection.keywords": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "path",
+            "file",
+            "config",
+            "script",
+            "template",
+            "yaml",
+            "json"
+          ],
+          "description": "Keywords to detect file path parameters"
+        },
+        "githubWorkflowRunner.filePathDetection.preferRelativePaths": {
+          "type": "boolean",
+          "default": true,
+          "description": "Use workspace-relative paths when possible"
+        },
+        "githubWorkflowRunner.filePathDetection.warnSizeThreshold": {
+          "type": "number",
+          "default": 1048576,
+          "description": "File size threshold (bytes) for warnings (default: 1MB)"
+        },
+        "githubWorkflowRunner.filePathDetection.maxFileSize": {
+          "type": "number",
+          "default": 10485760,
+          "description": "Maximum file size (bytes) allowed (default: 10MB)"
+        },
+        "githubWorkflowRunner.logs.debug": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable verbose debug logging for fetching job logs and artifacts"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "concurrently \"rollup -c -w --bundleConfigAsCjs\" \"webpack --watch\"",
+    "prepackage": "node tools/generate-icon.mjs",
+    "package": "webpack --mode production --devtool hidden-source-map && rollup -c",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile",
+    "test": "vitest",
+    "vsce:package": "vsce package",
+    "vsce:package:patch": "npm version patch && vsce package",
+    "clear-storage": "node scripts/clear-dev-storage.js"
+  },
+  "dependencies": {
+    "adm-zip": "^0.5.16",
+    "ansi-to-html": "^0.7.2",
+    "js-yaml": "^4.1.0"
+  },
+  "devDependencies": {
+    "@resvg/resvg-js": "^2.6.2",
+    "@rollup/plugin-commonjs": "^29.0.0",
+    "@rollup/plugin-node-resolve": "^16.0.3",
+    "@rollup/plugin-terser": "^0.4.4",
+    "@rollup/plugin-typescript": "^12.3.0",
+    "@tsconfig/svelte": "^5.0.5",
+    "@types/adm-zip": "^0.5.7",
+    "@types/js-yaml": "^4.0.9",
+    "@types/node": "^24.10.0",
+    "@types/vscode": "^1.93.0",
+    "@vscode/codicons": "^0.0.42",
+    "@vscode/vsce": "^3.7.0",
+    "concurrently": "^9.2.1",
+    "rollup": "^4.53.1",
+    "rollup-plugin-postcss": "^4.0.2",
+    "rollup-plugin-svelte": "^7.2.3",
+    "svelte": "^5.43.5",
+    "svelte-check": "^4.3.3",
+    "svelte-preprocess": "^6.0.3",
+    "ts-loader": "^9.5.4",
+    "typescript": "^5.9.3",
+    "vitest": "^4.0.8",
+    "webpack": "^5.102.1",
+    "webpack-cli": "^6.0.1"
+  },
+  "author": {
+    "name": "Asher Kaligski",
+    "url": "https://github.com/Asher-Kaligski"
+  },
+  "license": "Apache-2.0",
+  "bugs": {
+    "url": "https://github.com/Asher-Kaligski/vscode-github-workflow-runner/issues"
+  },
+  "homepage": "https://github.com/Asher-Kaligski/vscode-github-workflow-runner#readme"
+}

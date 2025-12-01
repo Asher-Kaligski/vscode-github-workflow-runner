@@ -1,0 +1,382 @@
+# 🚀 GitHub Actions Runner for VS Code
+
+[![Requires VS Code](https://img.shields.io/badge/VS%20Code-%E2%89%A51.93-007ACC?logo=visual-studio-code)](https://code.visualstudio.com/)
+[![GitHub Stars](https://img.shields.io/github/stars/Asher-Kaligski/vscode-github-workflow-runner?style=social)](https://github.com/Asher-Kaligski/vscode-github-workflow-runner)
+[![License](https://img.shields.io/badge/License-Apache--2.0-blue.svg)](LICENSE)
+[![Sponsor](https://img.shields.io/github/sponsors/Asher-Kaligski?label=Sponsor&logo=github)](https://github.com/sponsors/Asher-Kaligski)
+
+**Run and monitor GitHub Actions workflows directly from VS Code — no browser needed.**
+
+Dispatch workflows with dynamic inputs, monitor runs in real-time, save presets, and view logs/artifacts without leaving your editor.
+
+---
+
+## 🎬 See It in Action
+
+![GitHub Actions Runner Demo](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/vscode-github-workflow-runner.gif)
+
+> **Watch the extension in action:** Dispatch workflows, fill dynamic inputs, monitor runs in real-time — all without leaving VS Code.
+
+---
+
+## 💡 Why Use GitHub Actions Runner?
+
+### ⚡ **Stay in Your Flow**
+
+Stop switching between VS Code and GitHub's web UI. Dispatch workflows, monitor runs, and view logs without breaking your development flow.
+
+### 🎯 **Smart & Dynamic**
+
+- **Auto-generated forms** from your workflow YAML — no manual configuration
+- **Intelligent input recovery** — rerun workflows with prefilled inputs from previous runs
+- **Branch auto-detection** — automatically uses your current Git branch
+- **File path detection** — browse and select files with VS Code's native picker
+
+### 💾 **Reusable Presets**
+
+Save workflow configurations as named presets (e.g., "Staging Deploy", "Production Release") and dispatch them with one click. Export/import presets to share with your team.
+
+### ⭐ **Favorites & Quick Access**
+
+Mark frequently used workflows as favorites for instant access. Pin workflows to filter runs and find what matters most.
+
+### 📊 **Real-Time Monitoring**
+
+- Live status updates with color-coded indicators
+- Filter by workflow, branch, PR, or marked workflows
+- View logs directly in VS Code editor
+- Download artifacts with one click
+- Rerun failed jobs or entire workflows
+
+### 🔐 **Secure & Flexible**
+
+- GitHub OAuth or Personal Access Token (PAT) authentication
+- Secure token storage using VS Code SecretStorage
+- Works with any GitHub repository
+
+---
+
+## 🚀 Quick Start
+
+### 1️⃣ **Install the Extension**
+
+Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=asher-kaligski.github-workflow-runner) or search for "GitHub Actions Runner" in VS Code.
+
+### 2️⃣ **Authenticate with GitHub**
+
+1. Click the **GitHub Actions Runner** icon in the sidebar
+2. Click **"Sign in with GitHub"** or **"Use Personal Access Token"**
+3. If using PAT, create one with `workflow` scope at [github.com/settings/tokens](https://github.com/settings/tokens)
+
+### 3️⃣ **Dispatch Your First Workflow**
+
+1. Open a repository with GitHub Actions workflows
+2. Select a workflow from the dropdown (only `workflow_dispatch` workflows are shown)
+3. Fill in any required inputs
+4. Select a branch (defaults to your current branch)
+5. Click **"Dispatch Workflow"** 🚀
+
+### 4️⃣ **Monitor Workflow Runs**
+
+1. Click **"Open Workflow Runs"** to view all runs
+2. Filter by workflow, branch, PR, or marked workflows
+3. Click **"View Logs"** to see job logs in VS Code
+4. Click **"Download Artifacts"** to download build artifacts
+5. Click **"Rerun"** to rerun workflows with smart input recovery
+
+### 5️⃣ **Save Presets for Quick Access**
+
+1. Fill in workflow inputs
+2. Click the **💾 quick save icon** or **"Save preset"**
+3. Give it a name (e.g., "Production Deploy")
+4. Load it anytime from the preset dropdown
+
+**Pro Tip**: Use **Export/Import** to share presets with your team!
+
+---
+
+## 📸 Screenshots
+
+### Workflow Dispatch
+
+![Workflow Dispatch](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/hero-workflow-dispatch.png)
+
+> Select workflows, fill inputs, and dispatch with one click
+
+### Workflow Runs
+
+![Workflow Runs](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-runs-panel.png)
+
+> Monitor runs in real-time with powerful filters
+
+### Preset Management
+
+![Preset Management](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management.png)
+
+> Save and load workflow configurations as reusable presets
+
+### Favorites
+
+![Workflow Favorites](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-favorites.png)
+
+> Quick access to frequently used workflows
+
+### Marked Workflows
+
+![Marked Workflows](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/marked-workflows.png)
+
+> Pin workflows for easy filtering and quick access
+
+### Logs View
+
+![Logs View](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/logs-view.png)
+
+> View workflow logs directly in VS Code editor
+
+---
+
+## ✨ Features
+
+### 🔧 Workflow Runs Panel
+
+| Feature                | Description                                                                   |
+| ---------------------- | ----------------------------------------------------------------------------- |
+| **View Logs**          | Open workflow run logs directly in VS Code editor                             |
+| **View Jobs & Steps**  | Expand any run to see individual jobs with status, duration, and step details |
+| **Download Artifacts** | Download workflow artifacts as ZIP files                                      |
+| **Rerun Workflows**    | Rerun all jobs or only failed jobs                                            |
+| **Cancel Runs**        | Cancel in-progress workflows with loading states and error handling           |
+| **Enhanced Metadata**  | View branch, commit, actor, and duration information                          |
+
+### 🔍 Advanced Filtering & Auto-Refresh
+
+| Feature                  | Description                                              |
+| ------------------------ | -------------------------------------------------------- |
+| **Filter by Status**     | Success, Failure, In Progress, Queued, Cancelled         |
+| **Filter by Actor**      | "My Runs" or "All Users"                                 |
+| **Filter by Date Range** | Predefined (Today, Last 7/30 Days) or custom date ranges |
+| **Filter by Workflow**   | Focus on runs from a specific workflow                   |
+| **Filter by Branch/PR**  | Filter runs by branch name or pull request               |
+| **Pagination**           | Configure runs per page (20/50/100)                      |
+| **Progressive Loading**  | Fetches up to 1000 runs with smart caching               |
+| **Auto-Refresh**         | Configurable interval (15s–3m) with smart pause          |
+
+### 👁️ Watched Runs
+
+- **Watch Important Runs** — Mark any run as "watched" to track it regardless of filters
+- **Persistent Tracking** — Watched runs persist across sessions (up to 20 per repository)
+- **Dedicated Filter** — Toggle "Watched Runs Only" to see all your tracked runs
+
+### 💾 Presets & Templates
+
+- **Save Presets** — Save workflow configurations with custom names (e.g., "Staging Deploy")
+- **Quick Load** — Select presets from dropdown to populate inputs instantly
+- **Export/Import** — Share presets with your team via JSON export
+- **Workflow History** — Track your dispatched workflows and rerun with one click
+
+### ⭐ Favorites System
+
+- **Mark Favorites** — Star frequently used workflows for instant access
+- **Pre-filled Inputs** — Automatically populate workflow inputs from favorites
+- **Workspace/Global Scope** — Choose between workspace-specific or global storage
+- **Visual Cards** — Browse favorites with workflow name, repository, and branch info
+
+### 📁 File Path Detection
+
+- **Auto-Detection** — Detects file path parameters based on configurable keywords
+- **Native File Picker** — Browse and select files using VS Code's file picker
+- **Smart Paths** — Uses workspace-relative paths when possible
+- **Size Warnings** — Warnings for large files (configurable threshold)
+
+### 🔐 Authentication
+
+- **OAuth Support** — Use VS Code's built-in GitHub authentication (recommended)
+- **PAT Support** — Personal Access Token with `workflow` scope
+- **Secure Storage** — Tokens stored in VS Code SecretStorage (encrypted)
+- **User Display** — Shows authenticated GitHub username with profile icon
+
+### 🔔 Notifications
+
+- **Desktop Notifications** — Get notified when workflows complete
+- **Configurable Alerts** — Choose when to receive notifications (success/failure)
+- **Non-Intrusive** — Stay informed without switching contexts
+
+## ⚙️ Configuration
+
+Access settings via `File > Preferences > Settings` and search for "GitHub Actions Runner". You can also open settings directly from the Sidebar using the ⚙️ Settings button in the Repository Configuration section.
+
+### Repository Settings
+
+- `githubWorkflowRunner.repository.owner`: Repository owner/organization (auto-detected)
+- `githubWorkflowRunner.repository.name`: Repository name (auto-detected)
+- `githubWorkflowRunner.repository.manualOwner`: Manual override for repository owner
+- `githubWorkflowRunner.repository.manualName`: Manual override for repository name
+- `githubWorkflowRunner.defaultBranch`: Default branch for dispatch
+
+**Note**: Repository settings can be configured directly in the sidebar UI. Manual overrides take precedence over auto-detection.
+
+### Monitoring Settings
+
+- `githubWorkflowRunner.monitoring.autoRefresh`: Enable auto-refresh
+- `githubWorkflowRunner.monitoring.refreshInterval`: Refresh interval (seconds)
+- `githubWorkflowRunner.monitoring.maxRuns`: Max runs to display
+
+### UI Settings
+
+- `githubWorkflowRunner.ui.confirmBeforeDispatch`: Show confirmation dialog
+- `githubWorkflowRunner.ui.rememberLastWorkflow`: Remember last workflow
+
+### Git Settings
+
+- `githubWorkflowRunner.git.autoDetectBranch`: Auto-detect current branch
+
+### Notification Settings
+
+- `githubWorkflowRunner.notifications.enabled`: Enable notifications
+- `githubWorkflowRunner.notifications.onSuccess`: Notify on success
+- `githubWorkflowRunner.notifications.onFailure`: Notify on failure
+
+### Authentication Settings
+
+- `githubWorkflowRunner.authentication.method`: Authentication method to use. Options:
+  - `auto` (default): Try OAuth first, fall back to PAT
+  - `oauth`: Use VS Code's built-in GitHub authentication (recommended)
+  - `pat`: Use Personal Access Token only
+
+### Workflow Settings
+
+- `githubWorkflowRunner.workflows.excludePatterns`: Array of glob-like patterns to exclude workflows from the list (e.g., `["**/experimental-*", "**/legacy.yml"]`). Default: `[]`
+
+### Favorites Settings
+
+- `githubWorkflowRunner.favorites.scope`: Storage scope for favorites, either `workspace` (per-workspace) or `global` (across all workspaces). Default: `workspace`
+- `githubWorkflowRunner.favoriteRepositories`: Array of favorite repositories to show in the repository selector. Each item is an object `{ owner: string, name: string }`.
+
+Example:
+
+```json
+{
+  "githubWorkflowRunner.favoriteRepositories": [
+    { "owner": "my-org", "name": "service-a" },
+    { "owner": "my-org", "name": "service-b" }
+  ]
+}
+```
+
+### File Path Detection
+
+- `githubWorkflowRunner.filePathDetection.enabled`: Enable automatic file path parameter detection. Default: `true`
+- `githubWorkflowRunner.filePathDetection.keywords`: Keywords used to detect file path-like inputs. Default: `["path", "file", "config", "script", "template", "yaml", "json"]`
+- `githubWorkflowRunner.filePathDetection.preferRelativePaths`: Prefer workspace-relative paths when possible. Default: `true`
+- `githubWorkflowRunner.filePathDetection.warnSizeThreshold`: File size threshold (bytes) above which a warning is shown when loading file contents. Default: `1048576` (1MB)
+- `githubWorkflowRunner.filePathDetection.maxFileSize`: Maximum file size (bytes) allowed when loading a file content into an input. Default: `10485760` (10MB)
+
+### Logs
+
+- `githubWorkflowRunner.logs.debug`: Enable verbose debug logging for fetching job logs and artifacts. Default: `false`
+
+## 🎮 Commands
+
+| Command                                     | Description            |
+| ------------------------------------------- | ---------------------- |
+| `GitHub Actions Runner: Show Workflow Runs` | Open monitoring panel  |
+| `GitHub Actions Runner: Hide Workflow Runs` | Close monitoring panel |
+| `GitHub Actions Runner: Refresh Workflows`  | Reload workflow list   |
+| `GitHub Actions Runner: Run Last Workflow`  | Rerun last workflow    |
+
+## 🏗️ Architecture
+
+### Documentation
+
+For detailed architecture documentation, see:
+
+- **[📘 Complete Architecture Guide](docs/WORKFLOW_RUNS_ARCHITECTURE.md)** - Comprehensive guide with embedded diagrams, code examples, and detailed explanations
+- **[Workflow Runs Filtering System](docs/architecture/WORKFLOW_RUNS_FILTERING.md)** - Detailed implementation guide
+- **[Architecture Diagrams](docs/architecture/WORKFLOW_RUNS_ARCHITECTURE_DIAGRAMS.md)** - Standalone Mermaid diagrams
+
+### Supported Input Types
+
+- **string**: Text input field
+- **choice**: Dropdown select with options
+- **boolean**: Checkbox
+- **number**: Number input
+- **environment**: Environment selector (if defined)
+
+### Workflow Requirements
+
+Workflows must have a `workflow_dispatch` trigger with optional inputs:
+
+```yaml
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy'
+        required: true
+        type: choice
+        options:
+          - dev
+          - staging
+          - production
+      version:
+        description: 'Version to deploy'
+        required: true
+        type: string
+      dry_run:
+        description: 'Perform dry run'
+        required: false
+        type: boolean
+        default: false
+```
+
+## 🔧 Troubleshooting
+
+### Authentication Issues
+
+- Verify token has `workflow` scope
+- Try signing out and back in
+
+### Workflow Not Found
+
+- Ensure workflow has `workflow_dispatch` trigger
+- Check workflow file is in `.github/workflows/`
+- Verify YAML syntax is valid
+
+### Branch Not Detected
+
+- Ensure you're in a Git repository
+- Check Git extension is enabled in VS Code
+- Verify repository has commits
+
+### Git Context Changed Warning
+
+If you see a warning about "Git repository or branch has changed":
+
+- This occurs when you switch branches or repositories while the extension is open
+- Click the **"Reload"** button in the sidebar to refresh the extension state
+- This safety feature prevents accidentally dispatching workflows to the wrong branch/repository
+
+## 📝 License
+
+Apache-2.0 License - see the [LICENSE](LICENSE) file for details.
+
+## 🤝 Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+## 💖 Sponsor
+
+If you find this extension helpful, please consider [sponsoring my work](https://github.com/sponsors/Asher-Kaligski)! Your support helps me:
+
+- ⏰ Dedicate more time to development and maintenance
+- 🐛 Fix bugs and improve stability faster
+- ✨ Build new features requested by the community
+- 📚 Create better documentation and tutorials
+
+Every contribution, no matter the size, makes a real difference and is greatly appreciated! 🙏
+
+[![Sponsor](https://img.shields.io/github/sponsors/Asher-Kaligski?label=Sponsor&logo=github&style=for-the-badge)](https://github.com/sponsors/Asher-Kaligski)
+
+## 📞 Support
+
+For issues or questions, please [open an issue](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/issues) on GitHub.

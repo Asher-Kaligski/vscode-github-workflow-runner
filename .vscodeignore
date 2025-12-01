@@ -1,0 +1,21 @@
+.vscode/**
+.vscode-test/**
+src/**
+webview/**
+.gitignore
+.yarnrc
+webpack.config.js
+rollup.config.js
+**/tsconfig.json
+**/.eslintrc.json
+**/*.map
+**/*.ts
+!dist/**/*.js
+node_modules/**
+
+
+# Do not package env files
+.env
+.env.*
+**/.env
+**/.env.*

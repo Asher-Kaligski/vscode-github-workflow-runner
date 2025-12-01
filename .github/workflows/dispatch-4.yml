@@ -1,0 +1,65 @@
+name: Dispatch Workflow 4
+
+on:
+  workflow_dispatch:
+    inputs:
+      workflow_run_name:
+        description: "Custom workflow run name"
+        required: false
+        type: string
+        default: "Test Run 4"
+      additional_parameters:
+        description: "Additional parameters (e.g., key1=value1, key2=value2)"
+        required: false
+        type: string
+      enable_feature:
+        description: "Enable notifications"
+        required: false
+        type: boolean
+        default: true
+      environment:
+        description: "Notification channel"
+        required: true
+        type: choice
+        options:
+          - slack
+          - email
+          - teams
+          - discord
+        default: slack
+
+run-name: ${{ inputs.workflow_run_name || 'Test Dispatch Workflow 4' }}
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Show notification config
+        run: |
+          echo "=== Notification Configuration ==="
+          echo "Run Name: ${{ inputs.workflow_run_name }}"
+          echo "Parameters: ${{ inputs.additional_parameters }}"
+          echo "Notifications Enabled: ${{ inputs.enable_feature }}"
+          echo "Channel: ${{ inputs.environment }}"
+
+      - name: Process workflow
+        run: |
+          echo "Processing workflow..."
+          sleep 1
+          echo "Workflow processing complete!"
+
+      - name: Send notification
+        if: inputs.enable_feature == true
+        run: |
+          echo "Sending notification to ${{ inputs.environment }}..."
+          echo "Notification sent successfully!"
+
+      - name: Handle additional parameters
+        if: inputs.additional_parameters != ''
+        run: |
+          echo "Additional parameters provided: ${{ inputs.additional_parameters }}"
+          # Parse and process parameters
+          echo "Parameters processed!"
