@@ -30,7 +30,7 @@
     "runner"
   ],
   "galleryBanner": {
-    "color": "#2088FF",
+    "color": "#0d1117",
     "theme": "dark"
   },
   "qna": "https://github.com/Asher-Kaligski/vscode-github-workflow-runner/discussions",
