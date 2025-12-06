@@ -1,34 +1,12 @@
 <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg">
   <!-- Play Node (Top Left) -->
-  <!-- Increased radius to 4 for maximum visibility -->
-  <circle cx="5" cy="5" r="4" stroke="currentColor" stroke-width="1.5"/>
-  <path d="M3.5 3.5 L 7.5 5 L 3.5 6.5 Z" fill="currentColor"/>
+  <circle cx="7" cy="7" r="6.375" stroke="currentColor" stroke-width="1.25"/>
+  <path d="M 4 4 L 10.75 7 L 4 10 Z" fill="currentColor"/>
 
-  <!-- Connecting Lines -->
-  <path d="M5 9 V 10.5 Q 5 12.5 7 12.5 H 11.25" stroke="currentColor" stroke-width="1.5" fill="none"/>
-  <path d="M5 9 V 18 Q 5 20 7 20 H 11.25" stroke="currentColor" stroke-width="1.5" fill="none"/>
+  <!-- Connecting Line -->
+  <path d="M 7 13.375 V 16 Q 7 18 9.5 18 H 13" stroke="currentColor" stroke-width="1.25" fill="none"/>
 
-  <!-- Top Row Nodes (Pass -> Pass) at y=12.5 -->
-  <!-- Node T1 (x=13.5) -->
-  <circle cx="13.5" cy="12.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
-  <path d="M12.7 12.5 L 13.1 12.9 L 14.3 11.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  
-  <!-- Node T2 (x=20.5) -->
-  <circle cx="20.5" cy="12.5" r="2.25" stroke="currentColor" stroke-width="1.5"/>
-  <path d="M19.7 12.5 L 20.1 12.9 L 21.3 11.7" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  
-  <!-- Connection T1-T2 -->
-  <path d="M15.75 12.5 H 18.25" stroke="currentColor" stroke-width="1.5"/>
-
-  <!-- Bottom Row Nodes (Skip -> Pass) at y=20 -->
-  <!-- Node B1 (x=13.5) Skip -->
-  <circle cx="13.5" cy="20" r="2.25" stroke="currentColor" stroke-width="1.5"/>
-  <path d="M12.7 20.8 L 14.3 19.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"/>
-  
-  <!-- Node B2 (x=20.5) Pass -->
-  <circle cx="20.5" cy="20" r="2.25" stroke="currentColor" stroke-width="1.5"/>
-  <path d="M19.7 20 L 20.1 20.4 L 21.3 19.2" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  
-  <!-- Connection B1-B2 -->
-  <path d="M15.75 20 H 18.25" stroke="currentColor" stroke-width="1.5"/>
+  <!-- Bottom Row Node (Pass) -->
+  <circle cx="18" cy="18" r="5" stroke="currentColor" stroke-width="1.25"/>
+  <path d="M 16 18 L 17 19 L 20 16" stroke="currentColor" stroke-width="1.25" stroke-linecap="round" stroke-linejoin="round"/>
 </svg>
