@@ -15,7 +15,7 @@ import {
   getWorkflowRunArtifacts,
   getWorkflowRunJobs,
   getWorkflowRuns,
-  rerunWorkflow
+  rerunWorkflow,
 } from '../api/workflow-monitor';
 import { getConfig } from '../utils/config';
 import { getNonce } from '../utils/get-nonce';
