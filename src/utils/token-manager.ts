@@ -12,11 +12,7 @@ export class TokenManager {
   private static secrets: vscode.SecretStorage;
 
   // Scopes requested from VS Code's built-in GitHub authentication provider
-  private static readonly GITHUB_AUTH_SCOPES = [
-    'read:user',
-    'repo',
-    'workflow',
-  ];
+  private static readonly GITHUB_AUTH_SCOPES = ['read:user', 'repo', 'workflow'];
 
   /**
    * Initialize the TokenManager with VS Code context
@@ -37,10 +33,7 @@ export class TokenManager {
    */
   private static getPreferredAuthMethod(): 'auto' | 'oauth' | 'pat' {
     const config = vscode.workspace.getConfiguration('githubWorkflowRunner');
-    const method = config.get<'auto' | 'oauth' | 'pat'>(
-      'authentication.method',
-      'auto'
-    );
+    const method = config.get<'auto' | 'oauth' | 'pat'>('authentication.method', 'auto');
     return method;
   }
 
@@ -52,11 +45,10 @@ export class TokenManager {
     silent: boolean = true
   ): Promise<string | undefined> {
     try {
-      const session = await vscode.authentication.getSession(
-        'github',
-        this.GITHUB_AUTH_SCOPES,
-        { createIfNone: !silent, silent }
-      );
+      const session = await vscode.authentication.getSession('github', this.GITHUB_AUTH_SCOPES, {
+        createIfNone: !silent,
+        silent,
+      });
       return session?.accessToken;
     } catch (err) {
       // Provider might be unavailable or user cancelled
@@ -73,9 +65,13 @@ export class TokenManager {
 
     if (method === 'oauth' || method === 'auto') {
       const oauthToken = await this.getTokenFromAuthProvider(true /* silent */);
-      if (oauthToken) return oauthToken;
+      if (oauthToken) {
+        return oauthToken;
+      }
       // If explicitly oauth and none available, do not fallback silently
-      if (method === 'oauth') return undefined;
+      if (method === 'oauth') {
+        return undefined;
+      }
     }
 
     // Fallback to stored PAT

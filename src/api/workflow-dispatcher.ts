@@ -3,10 +3,7 @@
  */
 import * as vscode from 'vscode';
 import { TokenManager } from '../utils/token-manager';
-import type {
-  WorkflowDefinition,
-  WorkflowDispatchRequest,
-} from '../types/workflow-types';
+import type { WorkflowDefinition, WorkflowDispatchRequest } from '../types/workflow-types';
 import { validateWorkflowInputs } from '../utils/workflow-parser';
 
 /**
@@ -116,28 +113,16 @@ export async function dispatchWorkflowWithRunId(
   definition: WorkflowDefinition,
   request: WorkflowDispatchRequest
 ): Promise<{ success: boolean; error?: string; runId?: number }> {
-  const result = await dispatchWorkflowWithValidation(
-    owner,
-    repo,
-    definition,
-    request
-  );
+  const result = await dispatchWorkflowWithValidation(owner, repo, definition, request);
 
   if (!result.success) {
     // Keep existing behaviour of surfacing dispatch/validation errors via a
     // VS Code error message so callers don't need to duplicate this logic.
-    vscode.window.showErrorMessage(
-      `❌ Failed to dispatch workflow: ${result.error}`
-    );
+    vscode.window.showErrorMessage(`❌ Failed to dispatch workflow: ${result.error}`);
     return { success: false, error: result.error };
   }
 
-  const runId = await fetchLatestRunId(
-    owner,
-    repo,
-    definition.filename,
-    request.ref
-  );
+  const runId = await fetchLatestRunId(owner, repo, definition.filename, request.ref);
 
   return { success: true, runId };
 }
@@ -206,12 +191,7 @@ export async function dispatchWorkflowWithConfirmation(
   }
 
   // Dispatch without additional UI and resolve runId
-  const result = await dispatchWorkflowWithRunId(
-    owner,
-    repo,
-    definition,
-    request
-  );
+  const result = await dispatchWorkflowWithRunId(owner, repo, definition, request);
 
   if (!result.success) {
     return { success: false, error: result.error };
@@ -268,9 +248,7 @@ export async function fetchLatestRunId(
     };
 
     if (data.workflow_runs && data.workflow_runs.length > 0) {
-      const matchingRun = data.workflow_runs.find(
-        (run) => run.head_branch === branch
-      );
+      const matchingRun = data.workflow_runs.find((run) => run.head_branch === branch);
       if (matchingRun) {
         return matchingRun.id;
       }

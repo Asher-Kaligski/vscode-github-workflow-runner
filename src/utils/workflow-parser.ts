@@ -5,11 +5,7 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
-import type {
-  WorkflowDefinition,
-  WorkflowInput,
-  WorkflowInputType,
-} from '../types/workflow-types';
+import type { WorkflowDefinition, WorkflowInput, WorkflowInputType } from '../types/workflow-types';
 
 /**
  * Parse a single workflow file
@@ -45,8 +41,7 @@ export async function parseWorkflowFile(
 
     // Extract inputs
     const inputs: WorkflowInput[] = [];
-    const workflowDispatchConfig =
-      typeof doc.on === 'object' ? doc.on.workflow_dispatch : {};
+    const workflowDispatchConfig = typeof doc.on === 'object' ? doc.on.workflow_dispatch : {};
 
     if (workflowDispatchConfig && workflowDispatchConfig.inputs) {
       for (const [inputName, inputConfig] of Object.entries(
@@ -74,9 +69,7 @@ export async function parseWorkflowFile(
 
     // Determine workspace-relative path for file (normalize to forward slashes)
     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const relativeFilepath = workspaceRoot
-      ? path.relative(workspaceRoot, filepath)
-      : filepath;
+    const relativeFilepath = workspaceRoot ? path.relative(workspaceRoot, filepath) : filepath;
     const normalizedFilepath = relativeFilepath.split(path.sep).join('/');
 
     return {
@@ -126,11 +119,7 @@ export async function getWorkflowFiles(): Promise<string[]> {
       return [];
     }
 
-    const workflowsDir = path.join(
-      workspaceFolders[0].uri.fsPath,
-      '.github',
-      'workflows'
-    );
+    const workflowsDir = path.join(workspaceFolders[0].uri.fsPath, '.github', 'workflows');
 
     if (!fs.existsSync(workflowsDir)) {
       return [];
@@ -186,30 +175,21 @@ export async function getAllWorkflowDefinitions(
 /**
  * Get a specific workflow definition by filename
  */
-export async function getWorkflowDefinition(
-  filename: string
-): Promise<WorkflowDefinition | null> {
+export async function getWorkflowDefinition(filename: string): Promise<WorkflowDefinition | null> {
   try {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
       return null;
     }
 
-    const filepath = path.join(
-      workspaceFolders[0].uri.fsPath,
-      '.github',
-      'workflows',
-      filename
-    );
+    const filepath = path.join(workspaceFolders[0].uri.fsPath, '.github', 'workflows', filename);
 
     if (!fs.existsSync(filepath)) {
       return null;
     }
 
     // Prefer unsaved in-memory content when the workflow file is open.
-    const openDoc = vscode.workspace.textDocuments.find(
-      (doc) => doc.uri.fsPath === filepath
-    );
+    const openDoc = vscode.workspace.textDocuments.find((doc) => doc.uri.fsPath === filepath);
     if (openDoc) {
       return await parseWorkflowFile(filepath, false, openDoc.getText());
     }
@@ -254,11 +234,7 @@ export function validateWorkflowInputs(
           break;
         case 'choice':
           if (input.options && !input.options.includes(value)) {
-            errors.push(
-              `Input "${input.name}" must be one of: ${input.options.join(
-                ', '
-              )}`
-            );
+            errors.push(`Input "${input.name}" must be one of: ${input.options.join(', ')}`);
           }
           break;
       }
@@ -274,20 +250,14 @@ export function validateWorkflowInputs(
 /**
  * Watch workflow directory for changes
  */
-export function watchWorkflowDirectory(
-  callback: () => void
-): vscode.Disposable | null {
+export function watchWorkflowDirectory(callback: () => void): vscode.Disposable | null {
   try {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
       return null;
     }
 
-    const workflowsDir = path.join(
-      workspaceFolders[0].uri.fsPath,
-      '.github',
-      'workflows'
-    );
+    const workflowsDir = path.join(workspaceFolders[0].uri.fsPath, '.github', 'workflows');
 
     if (!fs.existsSync(workflowsDir)) {
       return null;
@@ -311,21 +281,14 @@ export function watchWorkflowDirectory(
 /**
  * Get workflow file content for display/editing
  */
-export async function getWorkflowFileContent(
-  filename: string
-): Promise<string | null> {
+export async function getWorkflowFileContent(filename: string): Promise<string | null> {
   try {
     const workspaceFolders = vscode.workspace.workspaceFolders;
     if (!workspaceFolders || workspaceFolders.length === 0) {
       return null;
     }
 
-    const filepath = path.join(
-      workspaceFolders[0].uri.fsPath,
-      '.github',
-      'workflows',
-      filename
-    );
+    const filepath = path.join(workspaceFolders[0].uri.fsPath, '.github', 'workflows', filename);
 
     if (!fs.existsSync(filepath)) {
       return null;
@@ -333,10 +296,7 @@ export async function getWorkflowFileContent(
 
     return fs.readFileSync(filepath, 'utf8');
   } catch (error) {
-    console.error(
-      `Failed to get workflow file content for ${filename}:`,
-      error
-    );
+    console.error(`Failed to get workflow file content for ${filename}:`, error);
     return null;
   }
 }
@@ -344,10 +304,7 @@ export async function getWorkflowFileContent(
 /**
  * Check if an input parameter is likely a file path
  */
-export function isFilePathParameter(
-  input: WorkflowInput,
-  keywords: string[] = []
-): boolean {
+export function isFilePathParameter(input: WorkflowInput, keywords: string[] = []): boolean {
   const defaultKeywords = [
     'path',
     'file',
@@ -364,17 +321,13 @@ export function isFilePathParameter(
   const desc = (input.description || '').toLowerCase();
   const name = input.name.toLowerCase();
 
-  return allKeywords.some(
-    (keyword) => desc.includes(keyword) || name.includes(keyword)
-  );
+  return allKeywords.some((keyword) => desc.includes(keyword) || name.includes(keyword));
 }
 
 /**
  * Detect and mark file path parameters in workflow inputs
  */
-export function detectFilePathParameters(
-  inputs: WorkflowInput[]
-): WorkflowInput[] {
+export function detectFilePathParameters(inputs: WorkflowInput[]): WorkflowInput[] {
   const config = vscode.workspace.getConfiguration('githubWorkflowRunner');
   const enabled = config.get<boolean>('filePathDetection.enabled', true);
 
@@ -421,10 +374,7 @@ export async function getAllWorkflowDefinitionsIncludingNonDispatch(
 
     return definitions;
   } catch (error) {
-    console.error(
-      'Failed to get all workflow definitions (including non-dispatch):',
-      error
-    );
+    console.error('Failed to get all workflow definitions (including non-dispatch):', error);
     return [];
   }
 }

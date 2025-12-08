@@ -26,11 +26,11 @@ export async function fetchGitHubUserInfo(): Promise<GitHubUserInfo | null> {
       return null;
     }
 
-    const user = await response.json() as GitHubUserInfo;
-    
+    const user = (await response.json()) as GitHubUserInfo;
+
     // Store username for future use
     await TokenManager.setGithubUsername(user.login);
-    
+
     return user;
   } catch (error) {
     console.error('Error fetching GitHub user info:', error);
@@ -44,13 +44,12 @@ export async function fetchGitHubUserInfo(): Promise<GitHubUserInfo | null> {
 export async function getGitHubUserInfo(): Promise<GitHubUserInfo | null> {
   // Try to get cached username first
   const cachedUsername = await TokenManager.getGithubUsername();
-  
+
   if (cachedUsername) {
     // Return cached info (we don't cache avatar, so fetch fresh if needed)
     return fetchGitHubUserInfo();
   }
-  
+
   // Fetch fresh user info
   return fetchGitHubUserInfo();
 }
-

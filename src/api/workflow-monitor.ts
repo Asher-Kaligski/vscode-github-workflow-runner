@@ -48,17 +48,12 @@ export async function getWorkflowRuns(
     // GitHub API supports: created=YYYY-MM-DDTHH:MM:SSZ..YYYY-MM-DDTHH:MM:SSZ
     // This is critical for workflows with 1000+ runs per day
     if (options.createdFrom || options.createdTo) {
-      const fromStr = options.createdFrom
-        ? options.createdFrom.toISOString()
-        : '*';
+      const fromStr = options.createdFrom ? options.createdFrom.toISOString() : '*';
       const toStr = options.createdTo ? options.createdTo.toISOString() : '*';
       const createdRange = `${fromStr}..${toStr}`;
       params.append('created', createdRange);
 
-      console.log(
-        '[getWorkflowRuns] Using GitHub API date filter:',
-        createdRange
-      );
+      console.log('[getWorkflowRuns] Using GitHub API date filter:', createdRange);
     }
 
     // We still intentionally avoid branch/actor/status query parameters.
@@ -82,11 +77,7 @@ export async function getWorkflowRuns(
     });
 
     if (!response.ok) {
-      console.error(
-        'Failed to fetch workflow runs:',
-        response.status,
-        response.statusText
-      );
+      console.error('Failed to fetch workflow runs:', response.status, response.statusText);
       return null;
     }
 
@@ -479,11 +470,7 @@ export async function cancelWorkflowRun(
 
     if (!response.ok) {
       const errorText = await response.text();
-      console.error(
-        'Failed to cancel workflow run:',
-        response.status,
-        errorText
-      );
+      console.error('Failed to cancel workflow run:', response.status, errorText);
       return {
         success: false,
         error: `Failed to cancel workflow run: ${response.statusText}`,

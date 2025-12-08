@@ -3,24 +3,13 @@
  */
 import * as vscode from 'vscode';
 import { dispatchWorkflowWithRunId } from '../api/workflow-dispatcher';
-import type {
-  ExtensionConfig,
-  WebviewMessage,
-  WorkflowDefinition,
-} from '../types/workflow-types';
+import type { ExtensionConfig, WebviewMessage, WorkflowDefinition } from '../types/workflow-types';
 import { isAuthenticated, signOut } from '../utils/authenticate';
 import { getConfig } from '../utils/config';
 import { FavoritesManager } from '../utils/favorites-manager';
 import { getNonce } from '../utils/get-nonce';
-import {
-  ensureGitContextValidOrWarn,
-  refreshGitContext,
-} from '../utils/git-context-validation';
-import {
-  getCurrentBranch,
-  getRecentBranches,
-  getRepositoryInfo,
-} from '../utils/git-operations';
+import { ensureGitContextValidOrWarn, refreshGitContext } from '../utils/git-context-validation';
+import { getCurrentBranch, getRecentBranches, getRepositoryInfo } from '../utils/git-operations';
 import { fetchGitHubUserInfo } from '../utils/github-user';
 import {
   getRepositoryConfig,
@@ -29,10 +18,7 @@ import {
 } from '../utils/repository-config';
 import { Storage } from '../utils/storage';
 import { TokenManager } from '../utils/token-manager';
-import {
-  getAllWorkflowDefinitions,
-  getWorkflowDefinition,
-} from '../utils/workflow-parser';
+import { getAllWorkflowDefinitions, getWorkflowDefinition } from '../utils/workflow-parser';
 import { WorkflowRunsPanel } from './workflow-runs-panel';
 import type { WorkflowRunsProvider } from './workflow-runs-provider';
 
@@ -103,9 +89,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
     // Create a promise that will be resolved when webviewReady message arrives
     if (!this._readyPromise) {
-      console.log(
-        '[SidebarProvider] Creating promise to wait for webviewReady'
-      );
+      console.log('[SidebarProvider] Creating promise to wait for webviewReady');
       this._readyPromise = new Promise<void>((resolve) => {
         this._readyResolve = resolve;
       });
@@ -195,9 +179,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           this._readyResolve = null;
           this._readyPromise = null;
         } else {
-          console.log(
-            '[SidebarProvider] No ready promise to resolve (already ready)'
-          );
+          console.log('[SidebarProvider] No ready promise to resolve (already ready)');
         }
         break;
 
@@ -219,9 +201,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case 'signOut':
         console.log('Sidebar: Received signOut message');
         await signOut();
-        console.log(
-          'Sidebar: Sign out completed, sending confirmation to webview'
-        );
+        console.log('Sidebar: Sign out completed, sending confirmation to webview');
         // Send confirmation back to webview to update UI
         this._view?.webview.postMessage({
           type: 'signOut',
@@ -239,9 +219,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         break;
 
       case 'setRepositoryConfig':
-        await this._setRepositoryConfig(
-          message.data as { owner: string; name: string }
-        );
+        await this._setRepositoryConfig(message.data as { owner: string; name: string });
         break;
 
       case 'resetRepositoryConfig':
@@ -338,19 +316,13 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           workflowData?.showBotRuns !== undefined
         ) {
           // Use smart panel opening logic for "View Last Run" action
-          await WorkflowRunsPanel.createOrShowForAction(
-            this._extensionUri,
-            'viewLastRun',
-            {
-              workflowName: workflowData.workflowName,
-              actorFilter: workflowData.actorFilter,
-              showBotRuns: workflowData.showBotRuns,
-            }
-          );
+          await WorkflowRunsPanel.createOrShowForAction(this._extensionUri, 'viewLastRun', {
+            workflowName: workflowData.workflowName,
+            actorFilter: workflowData.actorFilter,
+            showBotRuns: workflowData.showBotRuns,
+          });
         } else {
-          vscode.commands.executeCommand(
-            'github-workflow-runner.showWorkflowRuns'
-          );
+          vscode.commands.executeCommand('github-workflow-runner.showWorkflowRuns');
         }
         break;
 
@@ -407,10 +379,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       }
 
       case 'openSettings':
-        vscode.commands.executeCommand(
-          'workbench.action.openSettings',
-          'githubWorkflowRunner'
-        );
+        vscode.commands.executeCommand('workbench.action.openSettings', 'githubWorkflowRunner');
         break;
 
       case 'openWorkflowFile': {
@@ -520,9 +489,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       });
     } catch (error) {
       vscode.window.showErrorMessage(
-        `Failed to open workflow file: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
+        `Failed to open workflow file: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
@@ -532,9 +499,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    */
   private async _sendWorkflows() {
     const config = getConfig();
-    const workflows = await getAllWorkflowDefinitions(
-      config.workflows.excludePatterns
-    );
+    const workflows = await getAllWorkflowDefinitions(config.workflows.excludePatterns);
 
     this._view?.webview.postMessage({
       type: 'getWorkflows',
@@ -631,15 +596,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }) {
     try {
       // Validate Git context before any GitHub API operation
-      const isValidContext = await ensureGitContextValidOrWarn(
-        'dispatchWorkflow'
-      );
+      const isValidContext = await ensureGitContextValidOrWarn('dispatchWorkflow');
       if (!isValidContext) {
         this._view?.webview.postMessage({
           type: 'gitContextMismatch',
           success: false,
-          error:
-            'Repository or branch has changed. Please reload the extension data.',
+          error: 'Repository or branch has changed. Please reload the extension data.',
         });
         return;
       }
@@ -684,15 +646,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         addToWatchList = confirmation.addToWatchList;
       }
 
-      const result = await dispatchWorkflowWithRunId(
-        repoConfig.owner,
-        repoConfig.name,
-        workflow,
-        {
-          ref: data.branch,
-          inputs: data.inputs,
-        }
-      );
+      const result = await dispatchWorkflowWithRunId(repoConfig.owner, repoConfig.name, workflow, {
+        ref: data.branch,
+        inputs: data.inputs,
+      });
 
       if (result.success) {
         // Save to history
@@ -730,15 +687,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         // Add to watch list if requested in the confirmation modal and we
         // were able to resolve a runId.
         if (addToWatchList && result.runId) {
-          const error = await Storage.watchRun(
-            result.runId,
-            repoConfig.owner,
-            repoConfig.name
-          );
+          const error = await Storage.watchRun(result.runId, repoConfig.owner, repoConfig.name);
           if (error) {
-            vscode.window.showWarningMessage(
-              `⚠️ Failed to add run to watch list: ${error}`
-            );
+            vscode.window.showWarningMessage(`⚠️ Failed to add run to watch list: ${error}`);
           } else {
             // Keep the Workflow Runs panel's in-memory watchedRuns set in
             // sync so that "Watched Runs Only" reflects newly watched runs
@@ -748,16 +699,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         }
 
         // Auto-open workflow runs panel with smart logic
-        await WorkflowRunsPanel.createOrShowForAction(
-          this._extensionUri,
-          'dispatch',
-          {
-            workflowName: workflow.filename, // Use filename for consistent comparison with filter
-            actorFilter: 'all', // Default to "All Users" for dispatch actions
-            showBotRuns: false,
-            runId: result.runId,
-          }
-        );
+        await WorkflowRunsPanel.createOrShowForAction(this._extensionUri, 'dispatch', {
+          workflowName: workflow.filename, // Use filename for consistent comparison with filter
+          actorFilter: 'all', // Default to "All Users" for dispatch actions
+          showBotRuns: false,
+          runId: result.runId,
+        });
 
         // Highlight the newly dispatched run if runId is available
         if (result.runId) {
@@ -863,10 +810,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'getDefaultBranch',
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to get default branch',
+        error: error instanceof Error ? error.message : 'Failed to get default branch',
       });
     }
   }
@@ -1043,8 +987,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'getUserInfo',
         success: false,
-        error:
-          error instanceof Error ? error.message : 'Failed to fetch user info',
+        error: error instanceof Error ? error.message : 'Failed to fetch user info',
       });
     }
   }
@@ -1065,10 +1008,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'getRepositoryConfig',
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to get repository config',
+        error: error instanceof Error ? error.message : 'Failed to get repository config',
       });
     }
   }
@@ -1092,10 +1032,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'error',
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to save repository config',
+        error: error instanceof Error ? error.message : 'Failed to save repository config',
       });
     }
   }
@@ -1119,10 +1056,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'error',
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to reset repository config',
+        error: error instanceof Error ? error.message : 'Failed to reset repository config',
       });
     }
   }
@@ -1143,8 +1077,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'addFavoriteResponse',
         success: false,
-        error:
-          error instanceof Error ? error.message : 'Failed to add favorite',
+        error: error instanceof Error ? error.message : 'Failed to add favorite',
       });
     }
   }
@@ -1165,8 +1098,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'removeFavoriteResponse',
         success: false,
-        error:
-          error instanceof Error ? error.message : 'Failed to remove favorite',
+        error: error instanceof Error ? error.message : 'Failed to remove favorite',
       });
     }
   }
@@ -1176,10 +1108,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    */
   private async _updateFavorite(data: { id: string; updates: any }) {
     try {
-      const favorite = await FavoritesManager.updateFavorite(
-        data.id,
-        data.updates
-      );
+      const favorite = await FavoritesManager.updateFavorite(data.id, data.updates);
       this._view?.webview.postMessage({
         type: 'updateFavoriteResponse',
         success: true,
@@ -1189,8 +1118,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'updateFavoriteResponse',
         success: false,
-        error:
-          error instanceof Error ? error.message : 'Failed to update favorite',
+        error: error instanceof Error ? error.message : 'Failed to update favorite',
       });
     }
   }
@@ -1198,9 +1126,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   /**
    * Send favorites to webview
    */
-  private async _sendFavorites(data?: {
-    repository?: { owner: string; name: string };
-  }) {
+  private async _sendFavorites(data?: { repository?: { owner: string; name: string } }) {
     try {
       const favorites = await FavoritesManager.getFavorites(data?.repository);
       this._view?.webview.postMessage({
@@ -1212,8 +1138,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'getFavoritesResponse',
         success: false,
-        error:
-          error instanceof Error ? error.message : 'Failed to get favorites',
+        error: error instanceof Error ? error.message : 'Failed to get favorites',
       });
     }
   }
@@ -1237,10 +1162,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'getRepositoryFavoritesResponse',
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to get repository favorites',
+        error: error instanceof Error ? error.message : 'Failed to get repository favorites',
       });
     }
   }
@@ -1268,10 +1190,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'saveRepositoryFavoritesResponse',
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to save repository favorites',
+        error: error instanceof Error ? error.message : 'Failed to save repository favorites',
       });
     }
   }
@@ -1279,10 +1198,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   /**
    * Dispatch a favorite workflow
    */
-  private async _dispatchFavorite(data: {
-    id: string;
-    overrideInputs?: Record<string, string>;
-  }) {
+  private async _dispatchFavorite(data: { id: string; overrideInputs?: Record<string, string> }) {
     try {
       const favorites = await FavoritesManager.getFavorites();
       const favorite = favorites.find((f) => f.id === data.id);
@@ -1310,10 +1226,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'dispatchFavoriteResponse',
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to dispatch favorite',
+        error: error instanceof Error ? error.message : 'Failed to dispatch favorite',
       });
     }
   }
@@ -1321,11 +1234,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   /**
    * Select a file using VS Code file picker
    */
-  private async _selectFile(data: {
-    parameterName: string;
-    currentPath?: string;
-    filters?: any;
-  }) {
+  private async _selectFile(data: { parameterName: string; currentPath?: string; filters?: any }) {
     try {
       // Determine default URI
       let defaultUri: vscode.Uri | undefined;
@@ -1366,19 +1275,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
       // Check file size
       const config = vscode.workspace.getConfiguration('githubWorkflowRunner');
-      const warnThreshold = config.get<number>(
-        'filePathDetection.warnSizeThreshold',
-        1048576
-      ); // 1MB
+      const warnThreshold = config.get<number>('filePathDetection.warnSizeThreshold', 1048576); // 1MB
       let warning: string | undefined;
       if (stat.size > warnThreshold) {
         warning = `File size (${(stat.size / 1024 / 1024).toFixed(
           2
-        )}MB) exceeds recommended limit of ${(
-          warnThreshold /
-          1024 /
-          1024
-        ).toFixed(0)}MB`;
+        )}MB) exceeds recommended limit of ${(warnThreshold / 1024 / 1024).toFixed(0)}MB`;
       }
 
       // Get workspace-relative path if possible
@@ -1414,40 +1316,27 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   /**
    * Read file content
    */
-  private async _readFileContent(data: {
-    path: string;
-    parameterName: string;
-  }) {
+  private async _readFileContent(data: { path: string; parameterName: string }) {
     try {
       const fileUri = vscode.Uri.file(data.path);
       const stat = await vscode.workspace.fs.stat(fileUri);
 
       // Check file size limits
       const config = vscode.workspace.getConfiguration('githubWorkflowRunner');
-      const maxSize = config.get<number>(
-        'filePathDetection.maxFileSize',
-        10485760
-      ); // 10MB
+      const maxSize = config.get<number>('filePathDetection.maxFileSize', 10485760); // 10MB
       if (stat.size > maxSize) {
         throw new Error(
-          `File size exceeds maximum limit of ${(maxSize / 1024 / 1024).toFixed(
-            0
-          )}MB`
+          `File size exceeds maximum limit of ${(maxSize / 1024 / 1024).toFixed(0)}MB`
         );
       }
 
       const content = await vscode.workspace.fs.readFile(fileUri);
       const text = Buffer.from(content).toString('utf8');
 
-      const warnThreshold = config.get<number>(
-        'filePathDetection.warnSizeThreshold',
-        1048576
-      );
+      const warnThreshold = config.get<number>('filePathDetection.warnSizeThreshold', 1048576);
       let warning: string | undefined;
       if (stat.size > warnThreshold) {
-        warning = `Large file (${(stat.size / 1024 / 1024).toFixed(
-          2
-        )}MB) may impact performance`;
+        warning = `Large file (${(stat.size / 1024 / 1024).toFixed(2)}MB) may impact performance`;
       }
 
       this._view?.webview.postMessage({
@@ -1473,10 +1362,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   /**
    * Validate a file path
    */
-  private async _validateFilePath(data: {
-    path: string;
-    parameterName: string;
-  }) {
+  private async _validateFilePath(data: { path: string; parameterName: string }) {
     try {
       const fileUri = vscode.Uri.file(data.path);
       const stat = await vscode.workspace.fs.stat(fileUri);
@@ -1504,10 +1390,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       this._view?.webview.postMessage({
         type: 'validateFilePathResponse',
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to validate file path',
+        error: error instanceof Error ? error.message : 'Failed to validate file path',
       });
     }
   }
@@ -1524,12 +1407,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
     );
     // Load VS Code Codicons CSS from packaged media directory
     const codiconsUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(
-        this._extensionUri,
-        'media',
-        'codicons',
-        'codicon.css'
-      )
+      vscode.Uri.joinPath(this._extensionUri, 'media', 'codicons', 'codicon.css')
     );
 
     return `<!DOCTYPE html>
@@ -1614,10 +1492,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   /**
    * Set workflow configuration
    */
-  private async _setWorkflowConfig(data: {
-    workflowFilename: string;
-    artifactPattern?: string;
-  }) {
+  private async _setWorkflowConfig(data: { workflowFilename: string; artifactPattern?: string }) {
     try {
       await Storage.setWorkflowConfig({
         workflowFilename: data.workflowFilename,
@@ -1671,14 +1546,9 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       }
 
       // Write file
-      await vscode.workspace.fs.writeFile(
-        uri,
-        Buffer.from(jsonContent, 'utf8')
-      );
+      await vscode.workspace.fs.writeFile(uri, Buffer.from(jsonContent, 'utf8'));
 
-      vscode.window.showInformationMessage(
-        `✅ Preset exported to: ${uri.fsPath}`
-      );
+      vscode.window.showInformationMessage(`✅ Preset exported to: ${uri.fsPath}`);
 
       this._view?.webview.postMessage({
         type: 'success',
@@ -1687,9 +1557,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       });
     } catch (error) {
       vscode.window.showErrorMessage(
-        `Failed to export preset: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
+        `Failed to export preset: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
       this._view?.webview.postMessage({
         type: 'error',
@@ -1725,9 +1593,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       // Import template
       const template = await Storage.importTemplate(jsonContent);
 
-      vscode.window.showInformationMessage(
-        `✅ Preset "${template.name}" imported successfully`
-      );
+      vscode.window.showInformationMessage(`✅ Preset "${template.name}" imported successfully`);
 
       this._view?.webview.postMessage({
         type: 'success',
@@ -1738,9 +1604,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       // Don't send all templates - let the frontend request templates for the selected workflow
     } catch (error) {
       vscode.window.showErrorMessage(
-        `Failed to import preset: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
+        `Failed to import preset: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
       this._view?.webview.postMessage({
         type: 'error',

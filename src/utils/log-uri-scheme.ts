@@ -65,4 +65,3 @@ export function parseLogURI(uri: vscode.Uri): {
     runId: parseInt(runId, 10),
   };
 }
-

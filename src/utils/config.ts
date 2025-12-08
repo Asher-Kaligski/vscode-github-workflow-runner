@@ -114,9 +114,7 @@ export function getWorkflowExcludePatterns(): string[] {
 /**
  * Watch for configuration changes
  */
-export function onConfigChange(
-  callback: (config: ExtensionConfig) => void
-): vscode.Disposable {
+export function onConfigChange(callback: (config: ExtensionConfig) => void): vscode.Disposable {
   return vscode.workspace.onDidChangeConfiguration((event) => {
     if (event.affectsConfiguration(CONFIG_SECTION)) {
       callback(getConfig());
