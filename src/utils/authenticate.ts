@@ -18,10 +18,7 @@ interface GitHubUser {
  */
 export async function authenticate(): Promise<boolean> {
   const config = vscode.workspace.getConfiguration('githubWorkflowRunner');
-  const pref = config.get<'auto' | 'oauth' | 'pat'>(
-    'authentication.method',
-    'auto'
-  );
+  const pref = config.get<'auto' | 'oauth' | 'pat'>('authentication.method', 'auto');
 
   // Helper to try OAuth provider
   const tryOAuth = async (): Promise<boolean> => {
@@ -31,10 +28,14 @@ export async function authenticate(): Promise<boolean> {
         ['read:user', 'repo', 'workflow'],
         { createIfNone: true }
       );
-      if (!session) return false;
+      if (!session) {
+        return false;
+      }
       // Validate quickly to surface scope issues
       const ok = await validateToken(session.accessToken);
-      if (!ok) return false;
+      if (!ok) {
+        return false;
+      }
       vscode.window.showInformationMessage('Signed in with GitHub');
       return true;
     } catch (err) {
@@ -109,9 +110,7 @@ export async function setGithubToken(): Promise<boolean> {
     });
 
     if (!githubToken) {
-      vscode.window.showErrorMessage(
-        'GitHub token is required to use this extension.'
-      );
+      vscode.window.showErrorMessage('GitHub token is required to use this extension.');
       return false;
     }
 
@@ -128,9 +127,7 @@ export async function setGithubToken(): Promise<boolean> {
     return true;
   } catch (error) {
     vscode.window.showErrorMessage(
-      `Failed to set GitHub token: ${
-        error instanceof Error ? error.message : 'Unknown error'
-      }`
+      `Failed to set GitHub token: ${error instanceof Error ? error.message : 'Unknown error'}`
     );
     return false;
   }
@@ -150,11 +147,7 @@ export async function validateToken(token: string): Promise<boolean> {
     });
 
     if (!userResponse.ok) {
-      console.error(
-        'Token validation failed:',
-        userResponse.status,
-        userResponse.statusText
-      );
+      console.error('Token validation failed:', userResponse.status, userResponse.statusText);
       return false;
     }
 
@@ -171,8 +164,7 @@ export async function validateToken(token: string): Promise<boolean> {
     await TokenManager.setGithubScopes(scopeList);
 
     // Verify required scopes
-    const hasRequiredScope =
-      scopeList.includes('workflow') || scopeList.includes('repo');
+    const hasRequiredScope = scopeList.includes('workflow') || scopeList.includes('repo');
 
     if (!hasRequiredScope) {
       vscode.window

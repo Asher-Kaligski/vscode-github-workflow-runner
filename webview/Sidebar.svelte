@@ -6,7 +6,6 @@
   import { fade, slide, fly } from 'svelte/transition';
   import type {
     WorkflowDefinition,
-    WorkflowInput,
     WorkflowFavorite,
     WorkflowTemplate,
   } from '../src/types/workflow-types';
@@ -47,10 +46,6 @@
   // Repository config state
   let repoOwner = '';
   let repoName = '';
-  let isRepoManual = false;
-  let autoDetectedOwner = '';
-  let autoDetectedName = '';
-  let showRepoConfig = false; // Toggle for showing/hiding repo config
   let isReloading = false; // Track reload state for UI feedback
 
   // Favorites state
@@ -67,7 +62,6 @@
   let showAdvancedConfig: boolean = false;
   let artifactPatternSaveTimeout: number | null = null;
   let artifactPatternSaving: boolean = false;
-  let artifactPatternFocused: boolean = false;
 
   // NOTE: The decision to add a run to the watch list is now made in the
   // extension host confirmation dialog (dispatch/rerun modal). We keep this
@@ -85,7 +79,7 @@
   let inputModalTitle: string = '';
   let inputModalValue: string = '';
   let inputModalPlaceholder: string = '';
-  let inputModalCallback: ((value: string | null) => void) | null = null;
+  let inputModalCallback: ((_value: string | null) => void) | null = null;
 
   // Confirmation modal state
   type ConfirmModalMode = 'generic' | 'dispatch';
@@ -97,7 +91,7 @@
     value: string;
     primary?: boolean;
   }> = [];
-  let confirmModalCallback: ((value: string | null) => void) | null = null;
+  let confirmModalCallback: ((_value: string | null) => void) | null = null;
   let confirmModalMode: ConfirmModalMode = 'generic';
   let dispatchConfirmBranch: string = '';
   let dispatchConfirmInputs: Record<string, unknown> = {};
@@ -120,11 +114,7 @@
   let reduceMotion = false;
   let reloadingInputs = false;
 
-  function showToast(
-    message: string,
-    type: ToastType = 'info',
-    duration = 4000
-  ) {
+  function showToast(message: string, type: ToastType = 'info', duration = 4000) {
     const id = toastIdCounter++;
     toasts = [...toasts, { id, message, type, duration }];
     const ms = Math.min(Math.max(duration, 2000), 8000);
@@ -157,7 +147,9 @@
   }
 
   function loadTemplate(t: WorkflowTemplate) {
-    if (!t) return;
+    if (!t) {
+      return;
+    }
     branch = t.branch || branch;
     // Note: artifactPattern is NOT loaded from presets - it's workflow-specific config
 
@@ -173,7 +165,9 @@
     const id = (event.target as HTMLSelectElement).value;
     selectedTemplateId = id;
     const t = templates.find((x) => x.id === id);
-    if (t) loadTemplate(t);
+    if (t) {
+      loadTemplate(t);
+    }
   }
 
   /**
@@ -190,16 +184,11 @@
     // 2) configured default branch
     // 3) current local branch
     // 4) empty string (let backend decide)
-    const effectiveBranch =
-      trimmedBranch || trimmedDefaultBranch || trimmedCurrentBranch || '';
+    const effectiveBranch = trimmedBranch || trimmedDefaultBranch || trimmedCurrentBranch || '';
 
     // If there is no explicit branch, or no known default branch, or the branch
     // already equals the default, don't prompt.
-    if (
-      !trimmedBranch ||
-      !trimmedDefaultBranch ||
-      trimmedBranch === trimmedDefaultBranch
-    ) {
+    if (!trimmedBranch || !trimmedDefaultBranch || trimmedBranch === trimmedDefaultBranch) {
       return effectiveBranch;
     }
 
@@ -231,66 +220,21 @@
   }
 
   /**
-   * Quick save preset with auto-generated name
+   * Generate a unique name for a preset
    */
-  async function quickSavePreset() {
-    if (!selectedWorkflow) return;
-
-    const branchToSave = await resolvePresetBranchForSave();
-    if (!branchToSave) return;
-
-    // Generate a unique name automatically
-    let name = generatePresetName(selectedWorkflow.name);
-    let counter = 1;
-
-    // Ensure unique name by adding counter if needed
-    while (presetNameExists(name)) {
-      counter++;
-      name = `${generatePresetName(selectedWorkflow.name)} (${counter})`;
-    }
-
-    // Save the preset without prompting
-    vscode.postMessage({
-      type: 'saveTemplate',
-      data: {
-        name,
-        workflowFilename: selectedWorkflow.filename,
-        inputs,
-        branch: branchToSave,
-      },
-    });
-
-    // Show success message
-    showInfoModal(
-      'Preset Saved',
-      `Preset "${name}" has been saved successfully!`
-    );
-
-    // Refresh list and auto-select the new preset
-    window.setTimeout(() => {
-      requestTemplates();
-      // Auto-select after templates are loaded
-      window.setTimeout(() => {
-        const savedPreset = templates.find((t) => t.name === name);
-        if (savedPreset) {
-          selectedTemplateId = savedPreset.id;
-        }
-      }, 100);
-    }, 100);
-  }
 
   async function saveCurrentAsTemplate() {
-    if (!selectedWorkflow) return;
+    if (!selectedWorkflow) {
+      return;
+    }
 
     // Generate a better default name
     const defaultName = generatePresetName(selectedWorkflow.name);
 
-    let name = await showInputPrompt(
-      'Save Preset',
-      defaultName,
-      'Enter preset name'
-    );
-    if (!name) return;
+    let name = await showInputPrompt('Save Preset', defaultName, 'Enter preset name');
+    if (!name) {
+      return;
+    }
 
     // Check for duplicate names
     while (presetNameExists(name)) {
@@ -323,18 +267,18 @@
         break;
       } else if (action === 'rename') {
         // Show input prompt again with the current name
-        const newName = await showInputPrompt(
-          'Rename Preset',
-          name,
-          'Enter a different name'
-        );
-        if (!newName) return;
+        const newName = await showInputPrompt('Rename Preset', name, 'Enter a different name');
+        if (!newName) {
+          return;
+        }
         name = newName;
       }
     }
 
     const branchToSave = await resolvePresetBranchForSave();
-    if (!branchToSave) return;
+    if (!branchToSave) {
+      return;
+    }
 
     // Save the preset
     vscode.postMessage({
@@ -362,13 +306,13 @@
 
   async function renameSelectedTemplate() {
     const t = templates.find((x) => x.id === selectedTemplateId);
-    if (!t) return;
-    const name = await showInputPrompt(
-      'Rename preset',
-      t.name,
-      'Enter new name'
-    );
-    if (!name) return;
+    if (!t) {
+      return;
+    }
+    const name = await showInputPrompt('Rename preset', t.name, 'Enter new name');
+    if (!name) {
+      return;
+    }
     vscode.postMessage({
       type: 'updateTemplate',
       data: { id: t.id, updates: { name } },
@@ -378,7 +322,9 @@
 
   async function deleteSelectedTemplate() {
     const t = templates.find((x) => x.id === selectedTemplateId);
-    if (!t) return;
+    if (!t) {
+      return;
+    }
 
     const confirmed = await showConfirmPrompt(
       'Delete Preset',
@@ -389,7 +335,9 @@
       ]
     );
 
-    if (confirmed !== 'delete') return;
+    if (confirmed !== 'delete') {
+      return;
+    }
 
     vscode.postMessage({ type: 'deleteTemplate', data: t.id });
     selectedTemplateId = '';
@@ -397,7 +345,9 @@
   }
 
   function exportSelectedPreset() {
-    if (!selectedTemplateId) return;
+    if (!selectedTemplateId) {
+      return;
+    }
     vscode.postMessage({ type: 'exportPreset', data: selectedTemplateId });
   }
 
@@ -525,9 +475,7 @@
    */
   function generatePresetName(workflowName: string): string {
     // Remove emoji and clean up workflow name
-    const cleanName = workflowName
-      .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')
-      .trim();
+    const cleanName = workflowName.replace(/[\u{1F300}-\u{1F9FF}]/gu, '').trim();
     const baseName = cleanName.toLowerCase().replace(/\s+/g, '-');
 
     // Find existing preset numbers
@@ -539,8 +487,7 @@
       })
       .filter((n) => !isNaN(n));
 
-    const nextNumber =
-      existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1;
+    const nextNumber = existingNumbers.length > 0 ? Math.max(...existingNumbers) + 1 : 1;
     return `${baseName}-preset-${nextNumber}`;
   }
 
@@ -690,7 +637,9 @@
    * Reload workflow inputs from file
    */
   function handleReloadWorkflowInputs() {
-    if (!selectedWorkflow) return;
+    if (!selectedWorkflow) {
+      return;
+    }
     reloadingInputs = true;
     vscode.postMessage({
       type: 'getWorkflowSchema',
@@ -711,7 +660,9 @@
    * Open workflow file in editor
    */
   function handleOpenWorkflowFile() {
-    if (!selectedWorkflow) return;
+    if (!selectedWorkflow) {
+      return;
+    }
     vscode.postMessage({
       type: 'openWorkflowFile',
       data: { filePath: selectedWorkflow.filepath },
@@ -723,7 +674,9 @@
    * Save artifact pattern manually
    */
   function saveArtifactPattern() {
-    if (!selectedWorkflow) return;
+    if (!selectedWorkflow) {
+      return;
+    }
 
     artifactPatternSaving = true;
 
@@ -754,10 +707,7 @@
 
       if (last) {
         const lastTime = Number(last);
-        if (
-          !Number.isNaN(lastTime) &&
-          now - lastTime < WAVE_ANIMATION_MIN_INTERVAL_MS
-        ) {
+        if (!Number.isNaN(lastTime) && now - lastTime < WAVE_ANIMATION_MIN_INTERVAL_MS) {
           return false;
         }
       }
@@ -814,8 +764,7 @@
 
     // Detect motion preference
     reduceMotion = !!(
-      window.matchMedia &&
-      window.matchMedia('(prefers-reduced-motion: reduce)').matches
+      window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
     );
 
     triggerSidebarWaveIfAllowed();
@@ -877,9 +826,7 @@
           authenticated = true;
           // If we have a pending prefill, try to select and load schema now
           if (prefillData) {
-            const wf = workflows.find(
-              (w) => w.filename === prefillData.workflowFilename
-            );
+            const wf = workflows.find((w) => w.filename === prefillData.workflowFilename);
             if (wf) {
               selectedWorkflow = wf;
               searchQuery = wf.name;
@@ -977,21 +924,12 @@
           const config = message.data;
           repoOwner = config.owner;
           repoName = config.name;
-          isRepoManual = config.isManual;
-          if (config.autoDetected) {
-            autoDetectedOwner = config.autoDetected.owner;
-            autoDetectedName = config.autoDetected.name;
-          }
 
           // Now that repository is known, recompute favorites for this repo
           if (repoOwner && repoName && favorites?.length) {
             favoriteWorkflowFilenames = new Set(
               favorites
-                .filter(
-                  (f) =>
-                    f.repository.owner === repoOwner &&
-                    f.repository.name === repoName
-                )
+                .filter((f) => f.repository.owner === repoOwner && f.repository.name === repoName)
                 .map((f) => f.workflowFilename)
             );
             // Re-sort to place favorites first
@@ -1031,9 +969,6 @@
           inputs = {};
           repoOwner = '';
           repoName = '';
-          isRepoManual = false;
-          autoDetectedOwner = '';
-          autoDetectedName = '';
           branch = '';
           error = '';
           loading = false;
@@ -1091,8 +1026,7 @@
       case 'gitContextMismatch':
         loading = false;
         setError(
-          message.error ||
-            'Repository or branch has changed. Please reload the extension data.'
+          message.error || 'Repository or branch has changed. Please reload the extension data.'
         );
         break;
 
@@ -1108,9 +1042,7 @@
           branch = data.branch || branch;
 
           // Ensure workflows are available and select the target workflow
-          const wf = workflows.find(
-            (w) => w.filename === data.workflowFilename
-          );
+          const wf = workflows.find((w) => w.filename === data.workflowFilename);
           if (wf) {
             // Workflows already loaded: select and request schema immediately
             selectedWorkflow = wf;
@@ -1201,11 +1133,7 @@
             // Update the set of favorite workflow filenames for current repo only
             favoriteWorkflowFilenames = new Set(
               favorites
-                .filter(
-                  (f) =>
-                    f.repository.owner === repoOwner &&
-                    f.repository.name === repoName
-                )
+                .filter((f) => f.repository.owner === repoOwner && f.repository.name === repoName)
                 .map((f) => f.workflowFilename)
             );
             // Re-sort dropdown with favorites first
@@ -1224,8 +1152,7 @@
 
       case 'saveRepositoryFavoritesResponse':
         if (message.success) {
-          repositoryFavorites =
-            message.data?.repositories || repositoryFavorites;
+          repositoryFavorites = message.data?.repositories || repositoryFavorites;
         } else {
           setError(message.error || 'Failed to save repository favorites');
         }
@@ -1242,48 +1169,49 @@
         break;
 
       case 'selectFileResponse':
-        const paramName = message.data?.parameterName;
-        if (paramName) {
-          // Check if this is a "load contents" request
-          if (paramName.startsWith('__loadContents_')) {
-            const actualParamName = paramName.replace('__loadContents_', '');
-            if (message.success) {
-              // Request file contents
-              vscode.postMessage({
-                type: 'readFileContent',
-                data: {
-                  path: message.data.path,
-                  parameterName: actualParamName,
-                },
-              });
+        {
+          const paramName = message.data?.parameterName;
+          if (paramName) {
+            // Check if this is a "load contents" request
+            if (paramName.startsWith('__loadContents_')) {
+              const actualParamName = paramName.replace('__loadContents_', '');
+              if (message.success) {
+                // Request file contents
+                vscode.postMessage({
+                  type: 'readFileContent',
+                  data: {
+                    path: message.data.path,
+                    parameterName: actualParamName,
+                  },
+                });
+              } else {
+                filePickerStates.set(actualParamName, {
+                  isLoading: false,
+                  error: message.error,
+                });
+                filePickerStates = filePickerStates;
+              }
             } else {
-              filePickerStates.set(actualParamName, {
-                isLoading: false,
-                error: message.error,
-              });
+              // Regular file path selection
+              const state = filePickerStates.get(paramName);
+              if (message.success) {
+                inputs[paramName] = message.data.relativePath || message.data.path;
+                filePickerStates.set(paramName, {
+                  ...state,
+                  selectedPath: message.data.path,
+                  fileSize: message.data.size,
+                  isLoading: false,
+                  warning: message.warning,
+                });
+              } else {
+                filePickerStates.set(paramName, {
+                  ...state,
+                  isLoading: false,
+                  error: message.error,
+                });
+              }
               filePickerStates = filePickerStates;
             }
-          } else {
-            // Regular file path selection
-            const state = filePickerStates.get(paramName);
-            if (message.success) {
-              inputs[paramName] =
-                message.data.relativePath || message.data.path;
-              filePickerStates.set(paramName, {
-                ...state,
-                selectedPath: message.data.path,
-                fileSize: message.data.size,
-                isLoading: false,
-                warning: message.warning,
-              });
-            } else {
-              filePickerStates.set(paramName, {
-                ...state,
-                isLoading: false,
-                error: message.error,
-              });
-            }
-            filePickerStates = filePickerStates;
           }
         }
         break;
@@ -1293,16 +1221,11 @@
           const paramName = message.data.parameterName;
           if (message.success) {
             // Find the input definition to get its description
-            const inputDef = selectedWorkflow?.inputs?.find(
-              (inp) => inp.name === paramName
-            );
+            const inputDef = selectedWorkflow?.inputs?.find((inp) => inp.name === paramName);
             const description = inputDef?.description || '';
 
             // Parse the file contents based on the input description
-            const parsedContent = parseFileContents(
-              message.data.content,
-              description
-            );
+            const parsedContent = parseFileContents(message.data.content, description);
 
             // Set the input value to the parsed file contents
             inputs[paramName] = parsedContent;
@@ -1326,7 +1249,9 @@
    * Initialize inputs with default values
    */
   function initializeInputs() {
-    if (!selectedWorkflow) return;
+    if (!selectedWorkflow) {
+      return;
+    }
 
     inputs = {};
     for (const input of selectedWorkflow.inputs) {
@@ -1343,32 +1268,13 @@
    * explicit "branch" workflow input so they stay in sync.
    */
   function applyBranchHelper(selectedBranch: string) {
-    if (!selectedBranch) return;
+    if (!selectedBranch) {
+      return;
+    }
 
     branch = selectedBranch;
     if (hasBranchInput) {
       inputs['branch'] = selectedBranch;
-    }
-  }
-
-  /**
-   * Handle workflow selection
-   */
-  function handleWorkflowSelect(event: Event) {
-    const select = event.target as HTMLSelectElement;
-    const filename = select.value;
-
-    if (filename) {
-      vscode.postMessage({ type: 'getWorkflowSchema', data: filename });
-      // Request current branch when workflow is selected
-      vscode.postMessage({ type: 'getCurrentBranch' });
-      // Clear artifact pattern to avoid showing stale value while loading config
-      artifactPattern = '';
-      vscode.postMessage({ type: 'getWorkflowConfig', data: filename });
-    } else {
-      selectedWorkflow = null;
-      inputs = {};
-      artifactPattern = '';
     }
   }
 
@@ -1412,37 +1318,14 @@
   }
 
   /**
-   * Handle repository config save
-   */
-  function handleSaveRepoConfig() {
-    if (!repoOwner.trim() || !repoName.trim()) {
-      setError('Please enter both repository owner and name');
-      return;
-    }
-
-    vscode.postMessage({
-      type: 'setRepositoryConfig',
-      data: {
-        owner: repoOwner.trim(),
-        name: repoName.trim(),
-      },
-    });
-  }
-
-  /**
-   * Handle repository config reset
-   */
-  function handleResetRepoConfig() {
-    vscode.postMessage({ type: 'resetRepositoryConfig' });
-  }
-
-  /**
    * Reload extension data after repository/branch change.
    * Re-detects the current repository and branch, refreshes Git context,
    * and reloads all sidebar data (workflows, repository config, branches, etc.)
    */
   function handleReloadExtensionData() {
-    if (isReloading) return;
+    if (isReloading) {
+      return;
+    }
     isReloading = true;
     vscode.postMessage({ type: 'reloadExtensionData' });
   }
@@ -1481,30 +1364,6 @@
   }
 
   /**
-   * Add current workflow to favorites
-   */
-  function addToFavorites() {
-    if (!selectedWorkflow) {
-      setError('Please select a workflow first');
-      return;
-    }
-
-    vscode.postMessage({
-      type: 'addFavorite',
-      data: {
-        workflowName: selectedWorkflow.name,
-        workflowFilename: selectedWorkflow.filename,
-        repository: {
-          owner: repoOwner,
-          name: repoName,
-        },
-        savedInputs: inputs,
-        branch: branch,
-      },
-    });
-  }
-
-  /**
    * Check if a workflow is favorited
    */
   function isWorkflowFavorited(workflowFilename: string): boolean {
@@ -1537,10 +1396,7 @@
           data: { id: favorite.id },
         });
       } else {
-        console.warn(
-          '[Sidebar] Could not find favorite to remove:',
-          workflow.filename
-        );
+        console.warn('[Sidebar] Could not find favorite to remove:', workflow.filename);
       }
     } else {
       // Add to favorites - update UI immediately
@@ -1564,83 +1420,6 @@
         },
       });
     }
-  }
-
-  /**
-   * Check if current repository is favorited
-   */
-  function isRepositoryFavorited(): boolean {
-    return repositoryFavorites.some(
-      (repo) => repo.owner === repoOwner && repo.name === repoName
-    );
-  }
-
-  /**
-   * Toggle favorite status for current repository
-   */
-  function toggleRepositoryFavorite() {
-    if (isRepositoryFavorited()) {
-      // Remove from favorites
-      repositoryFavorites = repositoryFavorites.filter(
-        (repo) => !(repo.owner === repoOwner && repo.name === repoName)
-      );
-    } else {
-      // Add to favorites
-      repositoryFavorites = [
-        ...repositoryFavorites,
-        { owner: repoOwner, name: repoName },
-      ];
-    }
-    // Save to storage
-    vscode.postMessage({
-      type: 'saveRepositoryFavorites',
-      data: { repositories: repositoryFavorites },
-    });
-  }
-
-  /**
-   * Load a favorite workflow
-   */
-  function loadFavorite(favorite: WorkflowFavorite) {
-    // Find the workflow
-    const workflow = workflows.find(
-      (w) => w.filename === favorite.workflowFilename
-    );
-    if (workflow) {
-      selectedWorkflow = workflow;
-      searchQuery = workflow.name; // Update search query to show workflow name in dropdown
-      branch = favorite.branch || '';
-      inputs = { ...favorite.savedInputs };
-    } else {
-      setError(`Workflow "${favorite.workflowFilename}" not found`);
-    }
-  }
-
-  /**
-   * Remove a favorite
-   */
-  function removeFavorite(id: string, event: Event) {
-    event.stopPropagation();
-    vscode.postMessage({
-      type: 'removeFavorite',
-      data: { id },
-    });
-  }
-
-  /**
-   * Dispatch a favorite workflow
-   */
-  function dispatchFavorite(favorite: WorkflowFavorite, event: Event) {
-    event.stopPropagation();
-
-    // First, load the favorite into the sidebar UI so user can see what's being dispatched
-    loadFavorite(favorite);
-
-    // Then dispatch the workflow
-    vscode.postMessage({
-      type: 'dispatchFavorite',
-      data: { id: favorite.id },
-    });
   }
 
   /**
@@ -1675,37 +1454,17 @@
   }
 
   /**
-   * Select a file for a parameter
-   */
-  function selectFile(parameterName: string) {
-    filePickerStates.set(parameterName, {
-      parameterName,
-      isLoading: true,
-    });
-    filePickerStates = filePickerStates;
-
-    vscode.postMessage({
-      type: 'selectFile',
-      data: {
-        parameterName,
-        currentPath: inputs[parameterName],
-      },
-    });
-  }
-
-  /**
    * Parse file contents based on input description
    */
   function parseFileContents(content: string, description: string): string {
-    if (!description) return content;
+    if (!description) {
+      return content;
+    }
 
     const lowerDesc = description.toLowerCase();
 
     // Check for comma-separated format
-    if (
-      lowerDesc.includes('comma-separated') ||
-      lowerDesc.includes('comma separated')
-    ) {
+    if (lowerDesc.includes('comma-separated') || lowerDesc.includes('comma separated')) {
       // Parse and clean up comma-separated values
       return content
         .split(/[,\n]/)
@@ -1729,10 +1488,7 @@
     }
 
     // Check for semicolon-separated format
-    if (
-      lowerDesc.includes('semicolon-separated') ||
-      lowerDesc.includes('semicolon separated')
-    ) {
+    if (lowerDesc.includes('semicolon-separated') || lowerDesc.includes('semicolon separated')) {
       return content
         .split(/[;\n]/)
         .map((item) => item.trim())
@@ -1741,10 +1497,7 @@
     }
 
     // Check for space-separated format
-    if (
-      lowerDesc.includes('space-separated') ||
-      lowerDesc.includes('space separated')
-    ) {
+    if (lowerDesc.includes('space-separated') || lowerDesc.includes('space separated')) {
       return content
         .split(/[\s\n]+/)
         .map((item) => item.trim())
@@ -1819,8 +1572,12 @@
       const aFav = isWorkflowFavorited(a.filename);
       const bFav = isWorkflowFavorited(b.filename);
 
-      if (aFav && !bFav) return -1;
-      if (!aFav && bFav) return 1;
+      if (aFav && !bFav) {
+        return -1;
+      }
+      if (!aFav && bFav) {
+        return 1;
+      }
       return a.name.localeCompare(b.name);
     });
   }
@@ -1924,7 +1681,9 @@
    * Clear all input fields and reset to default values
    */
   function clearFields() {
-    if (!selectedWorkflow) return;
+    if (!selectedWorkflow) {
+      return;
+    }
 
     // Reset all inputs to their default values
     inputs = {};
@@ -1972,9 +1731,7 @@
       'params',
     ];
 
-    const hasKeyword = keywords.some((keyword) =>
-      description.includes(keyword)
-    );
+    const hasKeyword = keywords.some((keyword) => description.includes(keyword));
 
     // Detect patterns like key=value, KEY=VALUE, foo=bar separated by comma/space/semicolon
     const keyValuePattern = /(?:^|[\s,;])[^\s,;=]+\s*=\s*[^\s,;=]+/i;
@@ -2032,11 +1789,7 @@
             <span class="welcome-greeting">Welcome!</span>
           </div>
         {/if}
-        <button
-          class="sign-out-button"
-          on:click={handleSignOut}
-          title="Sign out from GitHub"
-        >
+        <button class="sign-out-button" on:click={handleSignOut} title="Sign out from GitHub">
           <span class="codicon codicon-sign-out"></span>
           <span>Sign Out</span>
         </button>
@@ -2075,9 +1828,7 @@
           </span>
           <span
             class="repo-info-value"
-            title={repoOwner && repoName
-              ? `${repoOwner}/${repoName}`
-              : 'Repository not configured'}
+            title={repoOwner && repoName ? `${repoOwner}/${repoName}` : 'Repository not configured'}
           >
             {repoName || '(not configured)'}
           </span>
@@ -2102,9 +1853,7 @@
           </span>
           <span
             class="repo-info-value"
-            title={branch
-              ? `Workflow branch: ${branch}`
-              : 'No workflow branch selected'}
+            title={branch ? `Workflow branch: ${branch}` : 'No workflow branch selected'}
           >
             <span class="branch-type">Workflow</span>
             {branch || '(no branch selected)'}
@@ -2113,11 +1862,7 @@
       </div>
 
       <!-- View Run Button -->
-      <button
-        class="view-run-button"
-        on:click={openWorkflowRuns}
-        title="View workflow runs"
-      >
+      <button class="view-run-button" on:click={openWorkflowRuns} title="View workflow runs">
         <span class="codicon codicon-graph"></span>
         <span>View Workflow Runs</span>
       </button>
@@ -2173,26 +1918,21 @@
               {dropdownOpen ? '▲' : '▼'}
             </button>
             {#if searchQuery}
-              <button
-                class="clear-button"
-                on:click={clearSearch}
-                title="Clear search">✕</button
-              >
+              <button class="clear-button" on:click={clearSearch} title="Clear search">✕</button>
             {/if}
           </div>
 
           {#if dropdownOpen && workflows.length > 0}
             <div class="dropdown-list" transition:slide={{ duration: 200 }}>
               {#if filteredWorkflows.length > 0}
-                {#each filteredWorkflows as workflow}
+                {#each filteredWorkflows as workflow (workflow.filename)}
                   <div
                     class="dropdown-item"
                     on:click={() => selectWorkflowFromDropdown(workflow)}
                     role="option"
                     aria-selected="false"
                     tabindex="0"
-                    on:keypress={(e) =>
-                      e.key === 'Enter' && selectWorkflowFromDropdown(workflow)}
+                    on:keypress={(e) => e.key === 'Enter' && selectWorkflowFromDropdown(workflow)}
                   >
                     <div class="workflow-info">
                       <div class="workflow-name">{workflow.name}</div>
@@ -2223,9 +1963,7 @@
           {#if workflows.length > 0}
             <div class="search-results">
               {#if selectedWorkflow}
-                Showing 1 of {workflows.length} workflow{workflows.length !== 1
-                  ? 's'
-                  : ''}
+                Showing 1 of {workflows.length} workflow{workflows.length !== 1 ? 's' : ''}
               {:else if searchQuery}
                 Showing {filteredWorkflows.length} of {workflows.length} workflow{workflows.length !==
                 1
@@ -2292,7 +2030,7 @@
               <button
                 type="button"
                 class="icon-button secondary branch-helper"
-                on:click={() => applyBranchHelper(currentBranch)}
+                on:click={() => currentBranch && applyBranchHelper(currentBranch)}
                 disabled={loading}
                 title={`Use current local branch: ${currentBranch}`}
                 aria-label={`Use current local branch: ${currentBranch}`}
@@ -2305,7 +2043,7 @@
 
         {#if selectedWorkflow.inputs.length > 0}
           <h4>Inputs</h4>
-          {#each selectedWorkflow.inputs as input}
+          {#each selectedWorkflow.inputs as input (input.name)}
             <div class="form-group">
               <label for={input.name} class="input-label">
                 <span class="input-name">{input.name}</span>
@@ -2332,7 +2070,7 @@
                   on:change={clearError}
                   disabled={loading}
                 >
-                  {#each input.options as option}
+                  {#each input.options as option (option)}
                     <option value={option}>{option}</option>
                   {/each}
                 </select>
@@ -2358,14 +2096,12 @@
                   <button
                     type="button"
                     on:click={() => loadFileContents(input.name)}
-                    disabled={loading ||
-                      filePickerStates.get(input.name)?.isLoading}
+                    disabled={loading || filePickerStates.get(input.name)?.isLoading}
                     class="load-file-button"
                     title="Load contents from file"
                   >
                     {#if filePickerStates.get(input.name)?.isLoading}
-                      <span class="codicon codicon-loading spinning-icon"
-                      ></span>
+                      <span class="codicon codicon-loading spinning-icon"></span>
                     {:else}
                       <span class="codicon codicon-file-text"></span>
                     {/if}
@@ -2373,12 +2109,12 @@
                 </div>
                 {#if filePickerStates.get(input.name)?.warning}
                   <div class="file-warning" transition:fade>
-                    ⚠️ {filePickerStates.get(input.name).warning}
+                    ⚠️ {filePickerStates.get(input.name)?.warning}
                   </div>
                 {/if}
                 {#if filePickerStates.get(input.name)?.error}
                   <div class="file-error" transition:fade>
-                    ❌ {filePickerStates.get(input.name).error}
+                    ❌ {filePickerStates.get(input.name)?.error}
                   </div>
                 {/if}
               {:else if shouldShowFileLoader(input)}
@@ -2395,14 +2131,12 @@
                   <button
                     type="button"
                     on:click={() => loadFileContents(input.name)}
-                    disabled={loading ||
-                      filePickerStates.get(input.name)?.isLoading}
+                    disabled={loading || filePickerStates.get(input.name)?.isLoading}
                     class="load-file-button"
                     title="Load contents from file"
                   >
                     {#if filePickerStates.get(input.name)?.isLoading}
-                      <span class="codicon codicon-loading spinning-icon"
-                      ></span>
+                      <span class="codicon codicon-loading spinning-icon"></span>
                     {:else}
                       <span class="codicon codicon-file-text"></span>
                     {/if}
@@ -2410,12 +2144,12 @@
                 </div>
                 {#if filePickerStates.get(input.name)?.warning}
                   <div class="file-warning" transition:fade>
-                    ⚠️ {filePickerStates.get(input.name).warning}
+                    ⚠️ {filePickerStates.get(input.name)?.warning}
                   </div>
                 {/if}
                 {#if filePickerStates.get(input.name)?.error}
                   <div class="file-error" transition:fade>
-                    ❌ {filePickerStates.get(input.name).error}
+                    ❌ {filePickerStates.get(input.name)?.error}
                   </div>
                 {/if}
               {:else}
@@ -2445,9 +2179,7 @@
             >
               <span
                 class={`codicon ${
-                  showAdvancedConfig
-                    ? 'codicon-chevron-down'
-                    : 'codicon-chevron-right'
+                  showAdvancedConfig ? 'codicon-chevron-down' : 'codicon-chevron-right'
                 } config-toggle-icon`}
               ></span>
               <span>
@@ -2477,16 +2209,9 @@
                       bind:value={artifactPattern}
                       placeholder="build-parameters-*"
                       disabled={loading}
-                      on:focus={() => {
-                        artifactPatternFocused = true;
-                      }}
-                      on:blur={() => {
-                        artifactPatternFocused = false;
-                      }}
                       on:input={() => {
                         // mark dirty on change
-                        artifactPatternDirty =
-                          artifactPattern !== artifactPatternSavedValue;
+                        artifactPatternDirty = artifactPattern !== artifactPatternSavedValue;
                         if (artifactPatternSaveTimeout) {
                           clearTimeout(artifactPatternSaveTimeout);
                         }
@@ -2523,10 +2248,8 @@
                   </div>
                   <p class="hint">
                     Default: <code>build-parameters-*</code>. Use <code>*</code>
-                    as wildcard (e.g., <code>my-params-*</code>) or full regex
-                    (e.g.,
-                    <code>^workflow-inputs-.*$</code>). Pattern auto-saves after
-                    you stop typing.
+                    as wildcard (e.g., <code>my-params-*</code>) or full regex (e.g.,
+                    <code>^workflow-inputs-.*$</code>). Pattern auto-saves after you stop typing.
                   </p>
                 </div>
 
@@ -2540,7 +2263,7 @@
                       on:change={onSelectTemplate}
                     >
                       <option value="">Load preset...</option>
-                      {#each templates as t}
+                      {#each templates as t (t.id)}
                         <option value={t.id}>{t.name}</option>
                       {/each}
                     </select>
@@ -2624,11 +2347,7 @@
         <!-- Bottom Button Group -->
         {#if selectedWorkflow && branch}
           <div class="button-group">
-            <button
-              class="dispatch-button primary"
-              on:click={handleSubmit}
-              disabled={loading}
-            >
+            <button class="dispatch-button primary" on:click={handleSubmit} disabled={loading}>
               <span class="codicon codicon-rocket"></span>
               <span>{loading ? 'Dispatching...' : 'Dispatch Workflow'}</span>
             </button>
@@ -2666,18 +2385,18 @@
           bind:value={inputModalValue}
           placeholder={inputModalPlaceholder}
           on:keydown={(e) => {
-            if (e.key === 'Enter') handleInputModalConfirm();
-            if (e.key === 'Escape') handleInputModalCancel();
+            if (e.key === 'Enter') {
+              handleInputModalConfirm();
+            }
+            if (e.key === 'Escape') {
+              handleInputModalCancel();
+            }
           }}
           autofocus
         />
         <div class="modal-buttons">
           <button type="button" on:click={handleInputModalConfirm}>OK</button>
-          <button
-            type="button"
-            class="secondary"
-            on:click={handleInputModalCancel}>Cancel</button
-          >
+          <button type="button" class="secondary" on:click={handleInputModalCancel}>Cancel</button>
         </div>
       </div>
     </div>
@@ -2702,7 +2421,7 @@
             <p class="parameters-empty">This workflow has no inputs.</p>
           {:else}
             <div class="parameters-list">
-              {#each Object.entries(dispatchConfirmInputs) as [key, value]}
+              {#each Object.entries(dispatchConfirmInputs) as [key, value] (key)}
                 <div class="parameter-row">
                   <div class="parameter-key">{key}</div>
                   <div class="parameter-value">
@@ -2713,11 +2432,7 @@
             </div>
           {/if}
           <div class="modal-buttons">
-            <button
-              type="button"
-              class="secondary"
-              on:click={handleConfirmModalCancel}
-            >
+            <button type="button" class="secondary" on:click={handleConfirmModalCancel}>
               Cancel
             </button>
             <button
@@ -2762,7 +2477,7 @@
         {:else}
           <p class="confirm-message">{confirmModalMessage}</p>
           <div class="modal-buttons">
-            {#each confirmModalButtons as button}
+            {#each confirmModalButtons as button (button.value)}
               <button
                 type="button"
                 class={button.primary ? 'primary' : 'secondary'}
@@ -2786,9 +2501,7 @@
           {@html infoModalContent}
         </div>
         <div class="modal-buttons">
-          <button type="button" class="primary" on:click={closeInfoModal}>
-            Got it
-          </button>
+          <button type="button" class="primary" on:click={closeInfoModal}> Got it </button>
         </div>
       </div>
     </div>
@@ -2806,9 +2519,7 @@
           }}
           out:fade={{ duration: reduceMotion ? 0 : 150 }}
         >
-          <span
-            class={`toast-icon codicon ${getToastIcon(t.type)} toast-icon--${t.type}`}
-          ></span>
+          <span class={`toast-icon codicon ${getToastIcon(t.type)} toast-icon--${t.type}`}></span>
           <span class="toast-message">{t.message}</span>
         </div>
       {/each}

@@ -102,18 +102,14 @@ export class LogDocumentProvider implements vscode.TextDocumentContentProvider {
         if (debug) {
           this.outputChannel.appendLine(
             `[Job Logs] Error loading logs: ${
-              error instanceof Error
-                ? error.stack ?? error.message
-                : String(error)
+              error instanceof Error ? (error.stack ?? error.message) : String(error)
             }`
           );
         }
       } catch {
         // ignore secondary errors
       }
-      return `Error loading logs: ${
-        error instanceof Error ? error.message : 'Unknown error'
-      }`;
+      return `Error loading logs: ${error instanceof Error ? error.message : 'Unknown error'}`;
     }
   }
 

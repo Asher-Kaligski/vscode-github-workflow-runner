@@ -13,27 +13,29 @@ const MANUAL_NAME_KEY = 'githubWorkflowRunner.repository.manualName';
  */
 export async function getRepositoryConfig(): Promise<RepositoryConfig> {
   const config = vscode.workspace.getConfiguration();
-  
+
   // Check for manual overrides in workspace settings
   const manualOwner = config.get<string>(MANUAL_OWNER_KEY);
   const manualName = config.get<string>(MANUAL_NAME_KEY);
-  
+
   // Try to auto-detect repository info
   const autoDetected = await getRepositoryInfo();
-  
+
   // If manual values are set, use them
   if (manualOwner && manualName) {
     return {
       owner: manualOwner,
       name: manualName,
       isManual: true,
-      autoDetected: autoDetected ? {
-        owner: autoDetected.owner,
-        name: autoDetected.name
-      } : undefined
+      autoDetected: autoDetected
+        ? {
+            owner: autoDetected.owner,
+            name: autoDetected.name,
+          }
+        : undefined,
     };
   }
-  
+
   // Otherwise, use auto-detected values or fallback to config defaults
   if (autoDetected) {
     return {
@@ -42,20 +44,20 @@ export async function getRepositoryConfig(): Promise<RepositoryConfig> {
       isManual: false,
       autoDetected: {
         owner: autoDetected.owner,
-        name: autoDetected.name
-      }
+        name: autoDetected.name,
+      },
     };
   }
-  
+
   // Fallback to config defaults (which might be empty strings)
   const defaultOwner = config.get<string>('githubWorkflowRunner.repository.owner', '');
   const defaultName = config.get<string>('githubWorkflowRunner.repository.name', '');
-  
+
   return {
     owner: defaultOwner,
     name: defaultName,
     isManual: false,
-    autoDetected: undefined
+    autoDetected: undefined,
   };
 }
 
@@ -64,7 +66,7 @@ export async function getRepositoryConfig(): Promise<RepositoryConfig> {
  */
 export async function setRepositoryConfig(owner: string, name: string): Promise<void> {
   const config = vscode.workspace.getConfiguration();
-  
+
   // Store in workspace settings (not global)
   await config.update(MANUAL_OWNER_KEY, owner, vscode.ConfigurationTarget.Workspace);
   await config.update(MANUAL_NAME_KEY, name, vscode.ConfigurationTarget.Workspace);
@@ -75,7 +77,7 @@ export async function setRepositoryConfig(owner: string, name: string): Promise<
  */
 export async function resetRepositoryConfig(): Promise<void> {
   const config = vscode.workspace.getConfiguration();
-  
+
   // Remove manual overrides from workspace settings
   await config.update(MANUAL_OWNER_KEY, undefined, vscode.ConfigurationTarget.Workspace);
   await config.update(MANUAL_NAME_KEY, undefined, vscode.ConfigurationTarget.Workspace);
@@ -88,7 +90,6 @@ export function isRepositoryConfigManual(): boolean {
   const config = vscode.workspace.getConfiguration();
   const manualOwner = config.get<string>(MANUAL_OWNER_KEY);
   const manualName = config.get<string>(MANUAL_NAME_KEY);
-  
+
   return !!(manualOwner && manualName);
 }
-

@@ -5,12 +5,7 @@
 /**
  * Supported workflow input types
  */
-export type WorkflowInputType =
-  | 'string'
-  | 'choice'
-  | 'boolean'
-  | 'number'
-  | 'environment';
+export type WorkflowInputType = 'string' | 'choice' | 'boolean' | 'number' | 'environment';
 
 /**
  * Definition of a single workflow input
@@ -65,11 +60,7 @@ export interface WorkflowDispatchRequest {
 /**
  * GitHub workflow run status
  */
-export type WorkflowRunStatus =
-  | 'queued'
-  | 'in_progress'
-  | 'completed'
-  | 'waiting';
+export type WorkflowRunStatus = 'queued' | 'in_progress' | 'completed' | 'waiting';
 
 /**
  * GitHub workflow run conclusion

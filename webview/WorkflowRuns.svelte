@@ -4,11 +4,7 @@
    */
   import { onMount, onDestroy, tick } from 'svelte';
   import { fade, slide, fly } from 'svelte/transition';
-  import type {
-    WorkflowRun,
-    WorkflowJob,
-    CancellationState,
-  } from '../src/types/workflow-types';
+  import type { WorkflowRun, WorkflowJob, CancellationState } from '../src/types/workflow-types';
 
   // Debug: Log immediately when script runs
   console.log('[WorkflowRuns] Script block executing...');
@@ -28,9 +24,7 @@
       //
       // Solution: Parse the components and use the Date constructor with
       // individual arguments, which interprets them as local time.
-      const match = datetimeLocal.match(
-        /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
-      );
+      const match = datetimeLocal.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
       if (!match) {
         return null;
       }
@@ -47,20 +41,14 @@
 
       return date;
     } catch (error) {
-      console.error(
-        '[WorkflowRuns] Failed to parse datetime-local:',
-        datetimeLocal,
-        error
-      );
+      console.error('[WorkflowRuns] Failed to parse datetime-local:', datetimeLocal, error);
       return null;
     }
   }
 
   const MAX_TOTAL_RUNS_OPTIONS: number[] = [1000, 2000, 3000, 5000, 10000];
   const WORKFLOW_LOAD_LIMIT_OPTIONS: number[] = [10, 20, 30, 50, 100];
-  const AUTO_REFRESH_SECONDS_OPTIONS: number[] = [
-    0, 15, 30, 45, 60, 90, 120, 180,
-  ];
+  const AUTO_REFRESH_SECONDS_OPTIONS: number[] = [0, 15, 30, 45, 60, 90, 120, 180];
   const DEFAULT_MAX_TOTAL_RUNS = 2000;
   const DEFAULT_WORKFLOW_LOAD_LIMIT = 20;
   const DEFAULT_AUTO_REFRESH_SECONDS = 60;
@@ -76,10 +64,8 @@
 
   // Track status changes for background updates
   // Map<runId, { oldStatus: string, newStatus: string, timestamp: number }>
-  let statusChanges: Map<
-    number,
-    { oldStatus: string; newStatus: string; timestamp: number }
-  > = new Map();
+  let statusChanges: Map<number, { oldStatus: string; newStatus: string; timestamp: number }> =
+    new Map();
 
   let searchQuery = '';
   let statusFilter = 'all';
@@ -99,7 +85,6 @@
   // currentPage used for paginating over filteredRuns.
   let nextBackendPage: number | null = null;
   let smartSuggestions: string[] = [];
-  let lastSettingsToastTimestamp = 0;
   let progressiveFetching = false; // True while progressive fetching is in progress
   let totalRunsFetched = 0; // Total number of runs fetched so far (for progressive loading limits)
   let DATE_FILTER_MAX_TOTAL_RUNS = DEFAULT_MAX_TOTAL_RUNS; // Max runs to fetch when a date filter is active
@@ -107,12 +92,8 @@
 
   // Track slider positions for the configurable limits so the UI can render
   // tick marks and current values.
-  let nonDateMaxTotalRunsIndex = getMaxTotalRunsOptionIndex(
-    NON_DATE_MAX_TOTAL_RUNS
-  );
-  let dateFilterMaxTotalRunsIndex = getMaxTotalRunsOptionIndex(
-    DATE_FILTER_MAX_TOTAL_RUNS
-  );
+  let nonDateMaxTotalRunsIndex = getMaxTotalRunsOptionIndex(NON_DATE_MAX_TOTAL_RUNS);
+  let dateFilterMaxTotalRunsIndex = getMaxTotalRunsOptionIndex(DATE_FILTER_MAX_TOTAL_RUNS);
   let workflowLoadLimitIndex = getWorkflowLoadLimitIndex(workflowLoadLimit);
   let autoRefreshIndex = getAutoRefreshOptionIndex(autoRefreshSeconds);
 
@@ -144,9 +125,6 @@
     filepath: string;
   }> = []; // All workflow definitions from backend
   let repository: { owner: string; name: string } | null = null; // Repository info for building GitHub URLs
-  let currentBranch: string | null = null; // Current Git branch
-  let defaultBranch = 'main'; // Default branch (main/master)
-  let branchExistsOnRemote = false; // Whether current branch exists on remote
   let markedWorkflows: string[] = []; // List of marked/pinned workflow paths (for dropdown filter)
   let watchedRuns: Set<number> = new Set(); // Set of watched workflow run IDs
   let showWatchedOnly = false; // Toggle to show only watched workflow runs
@@ -180,16 +158,11 @@
 
   // Wave animation state
   const WAVE_ANIMATION_MIN_INTERVAL_MS = 60_000;
-  const WORKFLOW_RUNS_WAVE_STORAGE_KEY =
-    'githubWorkflowRunner:workflowRunsWaveLastTime';
+  const WORKFLOW_RUNS_WAVE_STORAGE_KEY = 'githubWorkflowRunner:workflowRunsWaveLastTime';
   let showWelcomeWave = false;
   let showGitHubIcon = false; // Track transition to GitHub icon
 
-  function showToast(
-    message: string,
-    type: ToastType = 'info',
-    duration = 4000
-  ) {
+  function showToast(message: string, type: ToastType = 'info', duration = 4000) {
     const id = toastIdCounter++;
     toasts = [...toasts, { id, message, type, duration }];
     const ms = Math.min(Math.max(duration, 2000), 8000);
@@ -216,25 +189,17 @@
    */
   function shouldPlayWorkflowRunsWave(): boolean {
     try {
-      const last = window.sessionStorage.getItem(
-        WORKFLOW_RUNS_WAVE_STORAGE_KEY
-      );
+      const last = window.sessionStorage.getItem(WORKFLOW_RUNS_WAVE_STORAGE_KEY);
       const now = Date.now();
 
       if (last) {
         const lastTime = Number(last);
-        if (
-          !Number.isNaN(lastTime) &&
-          now - lastTime < WAVE_ANIMATION_MIN_INTERVAL_MS
-        ) {
+        if (!Number.isNaN(lastTime) && now - lastTime < WAVE_ANIMATION_MIN_INTERVAL_MS) {
           return false;
         }
       }
 
-      window.sessionStorage.setItem(
-        WORKFLOW_RUNS_WAVE_STORAGE_KEY,
-        String(now)
-      );
+      window.sessionStorage.setItem(WORKFLOW_RUNS_WAVE_STORAGE_KEY, String(now));
       return true;
     } catch {
       // If storage is unavailable, fall back to animating once per mount.
@@ -361,11 +326,7 @@
 
   // Reactive: Current page number for display
   // Explicitly depend on filteredRuns to ensure updates
-  $: currentPageNumber = getCurrentPage(
-    filteredRuns,
-    workflowLoadLimit,
-    currentPage
-  );
+  $: currentPageNumber = getCurrentPage(filteredRuns, workflowLoadLimit, currentPage);
 
   // Reactive: Total pages for display
   // Explicitly depend on filteredRuns to ensure updates
@@ -373,8 +334,7 @@
 
   // Motion preference
   reduceMotion = !!(
-    window.matchMedia &&
-    window.matchMedia('(prefers-reduced-motion: reduce)').matches
+    window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
   );
 
   // Job expansion state
@@ -454,9 +414,7 @@
       buildAvailableWorkflows();
       filterRuns();
     } else {
-      console.log(
-        '[WorkflowRuns] onMount: Cache miss, requesting fresh data...'
-      );
+      console.log('[WorkflowRuns] onMount: Cache miss, requesting fresh data...');
     }
 
     // Request initial data (will update cache if expired or missing)
@@ -465,9 +423,7 @@
     console.log('[WorkflowRuns] onMount: Requesting initial data...');
     vscode.postMessage({
       type: 'getWorkflowRuns',
-      data: lastFetch
-        ? { since: new Date(lastFetch).toISOString() }
-        : undefined,
+      data: lastFetch ? { since: new Date(lastFetch).toISOString() } : undefined,
     });
     vscode.postMessage({ type: 'getUserInfo' });
     vscode.postMessage({ type: 'getCurrentPR' });
@@ -783,33 +739,6 @@
   }
 
   /**
-   * Load more workflow runs from the backend.
-   *
-   * This advances the backend page number used for GitHub API pagination
-   * without changing the current client-side page over filteredRuns.
-   */
-  function loadMoreRuns() {
-    // In "Watched Runs Only" mode we skip list-based pagination completely
-    // and rely on by-ID refresh for the watched set.
-    if (showWatchedOnly) {
-      return;
-    }
-
-    if (loadingMore || nextBackendPage === null) {
-      return;
-    }
-
-    loadingMore = true;
-
-    vscode.postMessage({
-      type: 'loadMoreRuns',
-      data: {
-        page: nextBackendPage,
-      },
-    });
-  }
-
-  /**
    * Check if there are more runs to load from GitHub.
    */
   function hasMoreRuns(): boolean {
@@ -826,9 +755,7 @@
   /**
    * Map a max-total-runs value onto the slider index used by the UI.
    */
-  function getMaxTotalRunsOptionIndex(
-    value: number | null | undefined
-  ): number {
+  function getMaxTotalRunsOptionIndex(value: number | null | undefined): number {
     const safeValue =
       typeof value === 'number' && Number.isFinite(value) && value > 0
         ? value
@@ -837,9 +764,7 @@
     if (foundIndex !== -1) {
       return foundIndex;
     }
-    const fallbackIndex = MAX_TOTAL_RUNS_OPTIONS.indexOf(
-      DEFAULT_MAX_TOTAL_RUNS
-    );
+    const fallbackIndex = MAX_TOTAL_RUNS_OPTIONS.indexOf(DEFAULT_MAX_TOTAL_RUNS);
     return fallbackIndex >= 0 ? fallbackIndex : 0;
   }
 
@@ -857,9 +782,7 @@
       return foundIndex;
     }
 
-    const fallbackIndex = AUTO_REFRESH_SECONDS_OPTIONS.indexOf(
-      DEFAULT_AUTO_REFRESH_SECONDS
-    );
+    const fallbackIndex = AUTO_REFRESH_SECONDS_OPTIONS.indexOf(DEFAULT_AUTO_REFRESH_SECONDS);
     return fallbackIndex >= 0 ? fallbackIndex : 0;
   }
 
@@ -875,9 +798,7 @@
     if (foundIndex !== -1) {
       return foundIndex;
     }
-    const fallbackIndex = WORKFLOW_LOAD_LIMIT_OPTIONS.indexOf(
-      DEFAULT_WORKFLOW_LOAD_LIMIT
-    );
+    const fallbackIndex = WORKFLOW_LOAD_LIMIT_OPTIONS.indexOf(DEFAULT_WORKFLOW_LOAD_LIMIT);
     return fallbackIndex >= 0 ? fallbackIndex : 0;
   }
 
@@ -885,11 +806,7 @@
    * Format the auto-refresh interval for human-readable display.
    */
   function formatAutoRefreshLabel(seconds: number | null | undefined): string {
-    if (
-      typeof seconds !== 'number' ||
-      !Number.isFinite(seconds) ||
-      seconds <= 0
-    ) {
+    if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
       return 'Off';
     }
 
@@ -921,9 +838,7 @@
    *   search further back in history before we ask them to apply a date range.
    */
   function getMaxTotalRuns(): number {
-    return hasActiveDateFilter()
-      ? DATE_FILTER_MAX_TOTAL_RUNS
-      : NON_DATE_MAX_TOTAL_RUNS;
+    return hasActiveDateFilter() ? DATE_FILTER_MAX_TOTAL_RUNS : NON_DATE_MAX_TOTAL_RUNS;
   }
 
   /**
@@ -1024,11 +939,7 @@
    * the workflowLoadLimit and there are more runs available to fetch.
    */
   async function progressiveFetch() {
-    if (
-      progressiveFetching ||
-      !nextBackendPage ||
-      totalRunsFetched >= getMaxTotalRuns()
-    ) {
+    if (progressiveFetching || !nextBackendPage || totalRunsFetched >= getMaxTotalRuns()) {
       return;
     }
 
@@ -1048,10 +959,7 @@
     // below the configured workflowLoadLimit.
     const hasDateFilter = hasActiveDateFilter();
     const pagesToFetch = hasDateFilter
-      ? Math.min(
-          10,
-          Math.ceil((DATE_FILTER_MAX_TOTAL_RUNS - totalRunsFetched) / 100)
-        )
+      ? Math.min(10, Math.ceil((DATE_FILTER_MAX_TOTAL_RUNS - totalRunsFetched) / 100))
       : 1;
 
     vscode.postMessage({
@@ -1251,7 +1159,9 @@
    * Format file size
    */
   function formatFileSize(bytes: number): string {
-    if (bytes === 0) return '0 B';
+    if (bytes === 0) {
+      return '0 B';
+    }
     const k = 1024;
     const sizes = ['B', 'KB', 'MB', 'GB'];
     const i = Math.floor(Math.log(bytes) / Math.log(k));
@@ -1471,8 +1381,7 @@
       const query = workflowSearchQuery.toLowerCase();
       workflows = workflows.filter(
         (workflow) =>
-          workflow.name.toLowerCase().includes(query) ||
-          workflow.path.toLowerCase().includes(query)
+          workflow.name.toLowerCase().includes(query) || workflow.path.toLowerCase().includes(query)
       );
     }
 
@@ -1482,8 +1391,12 @@
       const bMarked = isWorkflowMarked(b.path);
 
       // If one is marked and the other isn't, marked comes first
-      if (aMarked && !bMarked) return -1;
-      if (!aMarked && bMarked) return 1;
+      if (aMarked && !bMarked) {
+        return -1;
+      }
+      if (!aMarked && bMarked) {
+        return 1;
+      }
 
       // Otherwise, sort alphabetically by name
       return a.name.localeCompare(b.name);
@@ -1513,11 +1426,7 @@
    * Request runs for a specific workflow, ensuring we scope by workflow_id so the
    * backend can persist it for subsequent operations (for example, date filters).
    */
-  function requestRunsForWorkflow(workflow: {
-    path: string;
-    name: string;
-    filename: string;
-  }) {
+  function requestRunsForWorkflow(workflow: { path: string; name: string; filename: string }) {
     // Try to find workflow_id from existing runs for this workflow
     const matchingRun = runs.find((run) => {
       const runPath = run.path.split('@')[0];
@@ -1558,11 +1467,7 @@
   /**
    * Select workflow from dropdown
    */
-  function selectWorkflowFromDropdown(workflow: {
-    path: string;
-    name: string;
-    filename: string;
-  }) {
+  function selectWorkflowFromDropdown(workflow: { path: string; name: string; filename: string }) {
     workflowFilter = workflow.path;
     workflowSearchQuery = workflow.name;
     isWorkflowSearchActive = false;
@@ -1610,16 +1515,11 @@
       // User just checked "Show Bot Runs" → switch to "All Users" if not already
       if (actorFilter !== 'all') {
         actorFilter = 'all';
-        console.log(
-          '[WorkflowRuns] Show Bot Runs enabled: switching to All Users'
-        );
+        console.log('[WorkflowRuns] Show Bot Runs enabled: switching to All Users');
       }
     } else {
       // User unchecked "Show Bot Runs" → do NOT change Actor Filter
-      console.log(
-        '[WorkflowRuns] Show Bot Runs disabled: keeping Actor Filter as',
-        actorFilter
-      );
+      console.log('[WorkflowRuns] Show Bot Runs disabled: keeping Actor Filter as', actorFilter);
     }
     filterRuns();
   }
@@ -1652,9 +1552,7 @@
       // User selected "My Runs" → uncheck bot runs if checked
       if (showBotRuns) {
         showBotRuns = false;
-        console.log(
-          '[WorkflowRuns] Actor filter changed to My Runs: disabling bot runs'
-        );
+        console.log('[WorkflowRuns] Actor filter changed to My Runs: disabling bot runs');
       }
     } else if (actorFilter === 'all') {
       // User selected "All Users" → do NOT change bot runs checkbox
@@ -1771,9 +1669,7 @@
     const skippedCount = jobs.filter(
       (j) => j.status === 'completed' && j.conclusion === 'skipped'
     ).length;
-    const inProgressCount = jobs.filter(
-      (j) => j.status === 'in_progress'
-    ).length;
+    const inProgressCount = jobs.filter((j) => j.status === 'in_progress').length;
     const queuedCount = jobs.filter((j) => j.status === 'queued').length;
 
     return {
@@ -1815,10 +1711,7 @@
 
     // Build workflow path -> name mapping from definitions
     workflowPathToName = new Map();
-    const workflowsMap = new Map<
-      string,
-      { path: string; name: string; filename: string }
-    >();
+    const workflowsMap = new Map<string, { path: string; name: string; filename: string }>();
 
     // First, add workflows from local definitions
     for (const workflow of allWorkflowDefinitions) {
@@ -1848,7 +1741,6 @@
           name: run.name,
           filename: filename,
         });
-      } else {
       }
     }
 
@@ -1945,10 +1837,7 @@
   /**
    * Merge new runs with cached runs, removing duplicates
    */
-  function mergeRuns(
-    cachedRuns: WorkflowRun[],
-    newRuns: WorkflowRun[]
-  ): WorkflowRun[] {
+  function mergeRuns(cachedRuns: WorkflowRun[], newRuns: WorkflowRun[]): WorkflowRun[] {
     const runMap = new Map<number, WorkflowRun>();
 
     // Add cached runs first
@@ -1963,8 +1852,7 @@
 
     // Convert back to array and sort by created_at (newest first)
     return Array.from(runMap.values()).sort(
-      (a, b) =>
-        new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
     );
   }
 
@@ -2040,10 +1928,7 @@
       );
       buildAvailableWorkflows();
     } else if (message.type === 'getWorkflows' && !message.success) {
-      console.error(
-        '[WorkflowRuns] handleMessage: getWorkflows failed:',
-        message.error
-      );
+      console.error('[WorkflowRuns] handleMessage: getWorkflows failed:', message.error);
     } else if (message.type === 'initialSettings') {
       if (message.success && message.data) {
         const settings = message.data as {
@@ -2064,11 +1949,7 @@
           dateFilterMaxTotalRuns: savedDateFilterMaxTotalRuns,
         } = settings;
 
-        if (
-          typeof savedLimit === 'number' &&
-          Number.isFinite(savedLimit) &&
-          savedLimit > 0
-        ) {
+        if (typeof savedLimit === 'number' && Number.isFinite(savedLimit) && savedLimit > 0) {
           workflowLoadLimit = savedLimit;
         } else {
           workflowLoadLimit = DEFAULT_WORKFLOW_LOAD_LIMIT;
@@ -2084,9 +1965,7 @@
         } else {
           NON_DATE_MAX_TOTAL_RUNS = DEFAULT_MAX_TOTAL_RUNS;
         }
-        nonDateMaxTotalRunsIndex = getMaxTotalRunsOptionIndex(
-          NON_DATE_MAX_TOTAL_RUNS
-        );
+        nonDateMaxTotalRunsIndex = getMaxTotalRunsOptionIndex(NON_DATE_MAX_TOTAL_RUNS);
 
         if (
           typeof savedDateFilterMaxTotalRuns === 'number' &&
@@ -2097,9 +1976,7 @@
         } else {
           DATE_FILTER_MAX_TOTAL_RUNS = DEFAULT_MAX_TOTAL_RUNS;
         }
-        dateFilterMaxTotalRunsIndex = getMaxTotalRunsOptionIndex(
-          DATE_FILTER_MAX_TOTAL_RUNS
-        );
+        dateFilterMaxTotalRunsIndex = getMaxTotalRunsOptionIndex(DATE_FILTER_MAX_TOTAL_RUNS);
 
         if (
           typeof savedAutoRefreshSeconds === 'number' &&
@@ -2120,10 +1997,7 @@
           filterRuns();
         }
       } else if (!message.success && message.error) {
-        console.error(
-          '[WorkflowRuns] handleMessage: initialSettings failed:',
-          message.error
-        );
+        console.error('[WorkflowRuns] handleMessage: initialSettings failed:', message.error);
       }
     } else if (message.type === 'getWorkflowRuns' && message.success) {
       const newRuns = message.data?.runs || [];
@@ -2133,8 +2007,7 @@
       // Update date filter truncation state based on the backend flag.
       // We only show the warning when a date filter is currently active.
       const backendTruncated = Boolean(message.data?.truncated);
-      dateFilterTruncated =
-        backendTruncated && (!!dateFilterFrom || !!dateFilterTo);
+      dateFilterTruncated = backendTruncated && (!!dateFilterFrom || !!dateFilterTo);
 
       // Reset backend pagination cursor when a fresh runs payload arrives.
       // The backend always serves GitHub page 1 for getWorkflowRuns, so the
@@ -2200,9 +2073,7 @@
         // Set a timeout to finalize the load even if filter messages don't arrive
         // This prevents indefinite waiting if no filter messages are sent
         initialFilterTimeout = window.setTimeout(() => {
-          console.log(
-            '[WorkflowRuns] Filter message timeout - finalizing initial load'
-          );
+          console.log('[WorkflowRuns] Filter message timeout - finalizing initial load');
           finalizeInitialLoad();
         }, 500); // 500ms should be enough for filter messages to arrive
 
@@ -2228,13 +2099,10 @@
       if (typeof wfPath === 'string') {
         resolvedWorkflowPath = wfPath;
         resolvedWorkflowName =
-          workflowPathToName.get(wfPath) ||
-          (typeof wfName === 'string' ? wfName : null);
+          workflowPathToName.get(wfPath) || (typeof wfName === 'string' ? wfName : null);
       } else if (typeof wfName === 'string') {
         // Map name to path using current mapping (first match)
-        const match = Array.from(workflowPathToName.entries()).find(
-          ([, name]) => name === wfName
-        );
+        const match = Array.from(workflowPathToName.entries()).find(([, name]) => name === wfName);
         resolvedWorkflowPath = match ? match[0] : null;
         resolvedWorkflowName = wfName;
       }
@@ -2280,9 +2148,7 @@
       if (!requestedRunsForWorkflow) {
         // If we're waiting for initial filters, finalize the load now
         if (waitingForInitialFilters) {
-          console.log(
-            '[WorkflowRuns] setWorkflowFilter received during initial load - finalizing'
-          );
+          console.log('[WorkflowRuns] setWorkflowFilter received during initial load - finalizing');
           finalizeInitialLoad();
         } else {
           filterRuns();
@@ -2301,9 +2167,7 @@
       // One-way coupling: "My Runs" forces unchecking bot runs
       if (actorFilter === 'me' && showBotRuns) {
         showBotRuns = false;
-        console.log(
-          '[WorkflowRuns] Backend set Actor Filter to My Runs: disabling bot runs'
-        );
+        console.log('[WorkflowRuns] Backend set Actor Filter to My Runs: disabling bot runs');
       }
       // "All Users" does NOT change bot runs checkbox
 
@@ -2320,9 +2184,7 @@
 
       // If we're waiting for initial filters, finalize the load now
       if (waitingForInitialFilters) {
-        console.log(
-          '[WorkflowRuns] setActorFilter received during initial load - finalizing'
-        );
+        console.log('[WorkflowRuns] setActorFilter received during initial load - finalizing');
         finalizeInitialLoad();
       } else {
         filterRuns();
@@ -2334,9 +2196,7 @@
       // One-way coupling: checking bot runs forces "All Users"
       if (showBotRuns && actorFilter !== 'all') {
         actorFilter = 'all';
-        console.log(
-          '[WorkflowRuns] Backend enabled Show Bot Runs: switching to All Users'
-        );
+        console.log('[WorkflowRuns] Backend enabled Show Bot Runs: switching to All Users');
       }
       // Unchecking bot runs does NOT change actor filter
 
@@ -2353,9 +2213,7 @@
 
       // If we're waiting for initial filters, finalize the load now
       if (waitingForInitialFilters) {
-        console.log(
-          '[WorkflowRuns] setShowBotRuns received during initial load - finalizing'
-        );
+        console.log('[WorkflowRuns] setShowBotRuns received during initial load - finalizing');
         finalizeInitialLoad();
       } else {
         filterRuns();
@@ -2363,9 +2221,7 @@
     } else if (message.type === 'finalizeInitialLoad' && message.success) {
       // Backend is telling us to finalize the initial load immediately
       // This happens when the panel is opened without explicit filters
-      console.log(
-        '[WorkflowRuns] Received finalizeInitialLoad message from backend'
-      );
+      console.log('[WorkflowRuns] Received finalizeInitialLoad message from backend');
       if (waitingForInitialFilters) {
         finalizeInitialLoad();
       }
@@ -2449,8 +2305,7 @@
 
       // Advance backend pagination cursor if there are still more runs
       // available according to the server-side totalCount.
-      nextBackendPage =
-        hasMoreRuns() && nextBackendPage !== null ? nextBackendPage + 1 : null;
+      nextBackendPage = hasMoreRuns() && nextBackendPage !== null ? nextBackendPage + 1 : null;
 
       // Rebuild available workflows with new runs
       buildAvailableWorkflows();
@@ -2527,8 +2382,7 @@
         return;
       }
 
-      const responseRunId =
-        typeof message.data?.runId === 'number' ? message.data.runId : null;
+      const responseRunId = typeof message.data?.runId === 'number' ? message.data.runId : null;
 
       // Ignore responses that don't match the currently open parameters modal.
       if (
@@ -2540,11 +2394,7 @@
       }
 
       if (!message.success) {
-        showToast(
-          message.error || 'Failed to load run parameters.',
-          'error',
-          4000
-        );
+        showToast(message.error || 'Failed to load run parameters.', 'error', 4000);
         return;
       }
 
@@ -2555,21 +2405,14 @@
       }
 
       const { workflowFilename, branch, inputs } = message.data;
-      parametersModalTitle =
-        workflowFilename || parametersModalTitle || 'Run parameters';
+      parametersModalTitle = workflowFilename || parametersModalTitle || 'Run parameters';
       parametersModalBranch = branch ?? parametersModalBranch;
       parametersModalInputs = inputs || {};
       parametersModalNotFound = false;
-    } else if (
-      message.type === 'getMarkedWorkflowsResponse' &&
-      message.success
-    ) {
+    } else if (message.type === 'getMarkedWorkflowsResponse' && message.success) {
       markedWorkflows = message.data || [];
       filterRuns();
-    } else if (
-      message.type === 'toggleWorkflowMarkedResponse' &&
-      message.success
-    ) {
+    } else if (message.type === 'toggleWorkflowMarkedResponse' && message.success) {
       const { workflowPath, isMarked } = message.data || {};
       if (workflowPath) {
         if (isMarked) {
@@ -2597,17 +2440,10 @@
       if (message.success && message.data) {
         const { watchedRunIds } = message.data as { watchedRunIds: number[] };
         watchedRuns = new Set(watchedRunIds);
-        console.log(
-          '[WorkflowRuns] Loaded',
-          watchedRuns.size,
-          'watched runs from storage'
-        );
+        console.log('[WorkflowRuns] Loaded', watchedRuns.size, 'watched runs from storage');
         filterRuns();
       } else if (message.error) {
-        console.error(
-          '[WorkflowRuns] Failed to load watched runs:',
-          message.error
-        );
+        console.error('[WorkflowRuns] Failed to load watched runs:', message.error);
       }
     } else if (message.type === 'toggleRunWatchResponse') {
       const { runId, isWatched } = (message.data || {}) as {
@@ -2676,9 +2512,7 @@
         // runs that are not yet present in the dataset. This ensures that
         // "Watched Runs Only" can be populated using only the specific
         // watched IDs without requiring full pagination over all runs.
-        const updatedRunsMap = new Map(
-          updatedRuns.map((run: WorkflowRun) => [run.id, run])
-        );
+        const updatedRunsMap = new Map(updatedRuns.map((run: WorkflowRun) => [run.id, run]));
         const existingIds = new Set(runs.map((run) => run.id));
 
         let hasChanges = false;
@@ -2688,8 +2522,7 @@
             // Only update if status or conclusion has changed
             if (
               updatedRun &&
-              (run.status !== updatedRun.status ||
-                run.conclusion !== updatedRun.conclusion)
+              (run.status !== updatedRun.status || run.conclusion !== updatedRun.conclusion)
             ) {
               hasChanges = true;
               console.log(
@@ -2750,16 +2583,10 @@
     } else if (message.type === 'backgroundRefreshAllRunsResponse') {
       if (message.success && message.data) {
         const newRuns = message.data.runs || [];
-        console.log(
-          '[WorkflowRuns] Background refresh all: received',
-          newRuns.length,
-          'runs'
-        );
+        console.log('[WorkflowRuns] Background refresh all: received', newRuns.length, 'runs');
 
         // Create a map of new runs by ID for quick lookup
-        const newRunsMap = new Map(
-          newRuns.map((run: WorkflowRun) => [run.id, run])
-        );
+        const newRunsMap = new Map(newRuns.map((run: WorkflowRun) => [run.id, run]));
 
         // Track changes for notification
         let updatedCount = 0;
@@ -2771,11 +2598,7 @@
           if (newRunsMap.has(run.id)) {
             const newRun = newRunsMap.get(run.id);
             // Check if status or conclusion has changed
-            if (
-              newRun &&
-              (run.status !== newRun.status ||
-                run.conclusion !== newRun.conclusion)
-            ) {
+            if (newRun && (run.status !== newRun.status || run.conclusion !== newRun.conclusion)) {
               updatedCount++;
               console.log(
                 '[WorkflowRuns] Background refresh all: run',
@@ -2835,21 +2658,14 @@
     } else if (message.type === 'getWorkflowIdResponse') {
       if (message.success && message.data) {
         const { workflowId } = message.data;
-        console.log(
-          '[WorkflowRuns] Received workflow ID:',
-          workflowId,
-          'requesting runs...'
-        );
+        console.log('[WorkflowRuns] Received workflow ID:', workflowId, 'requesting runs...');
         // Now request runs for this workflow
         vscode.postMessage({
           type: 'getWorkflowRuns',
           data: { workflowId },
         });
       } else {
-        console.error(
-          '[WorkflowRuns] Failed to get workflow ID:',
-          message.error
-        );
+        console.error('[WorkflowRuns] Failed to get workflow ID:', message.error);
         // Fall back to local filtering
         filterRuns();
       }
@@ -2901,9 +2717,7 @@
    * Apply all filters to the in-memory runs and return the filtered list.
    * Accepts options to temporarily skip specific filters (used for smart suggestions).
    */
-  function applyFiltersToRuns(
-    options: FilterComputationOptions = {}
-  ): WorkflowRun[] {
+  function applyFiltersToRuns(options: FilterComputationOptions = {}): WorkflowRun[] {
     let filtered = runs;
 
     const {
@@ -2940,9 +2754,7 @@
     // Apply actor filter
     if (!skipActor) {
       if (actorFilter === 'me' && currentUsername) {
-        filtered = filtered.filter(
-          (run) => run.actor.login === currentUsername
-        );
+        filtered = filtered.filter((run) => run.actor.login === currentUsername);
       } else if (actorFilter !== 'all' && actorFilter !== 'me') {
         filtered = filtered.filter((run) => run.actor.login === actorFilter);
       }
@@ -2982,9 +2794,7 @@
     if (!skipDate && (dateFilterFrom || dateFilterTo)) {
       // CRITICAL FIX: Use parseDateTimeLocal() to parse datetime-local strings
       // as local time, not UTC. This fixes the timezone mismatch issue.
-      const fromDate = dateFilterFrom
-        ? parseDateTimeLocal(dateFilterFrom)
-        : null;
+      const fromDate = dateFilterFrom ? parseDateTimeLocal(dateFilterFrom) : null;
       const toDate = dateFilterTo ? parseDateTimeLocal(dateFilterTo) : null;
 
       const hasValidFrom = fromDate && !Number.isNaN(fromDate.getTime());
@@ -3002,7 +2812,6 @@
 
       if (hasValidFrom || hasValidTo) {
         let filteredOutCount = 0;
-        let sampleFilteredRun: WorkflowRun | null = null;
 
         filtered = filtered.filter((run) => {
           const timestamp = run.run_started_at ?? run.created_at;
@@ -3017,17 +2826,13 @@
           if (hasValidFrom && fromDate && runDate < fromDate) {
             shouldInclude = false;
             if (filteredOutCount === 0) {
-              sampleFilteredRun = run;
-              console.log(
-                '[WorkflowRuns] Sample run filtered out (before fromDate):',
-                {
-                  runId: run.id,
-                  timestamp,
-                  runDate: runDate.toISOString(),
-                  fromDate: fromDate.toISOString(),
-                  comparison: `${runDate.toISOString()} < ${fromDate.toISOString()}`,
-                }
-              );
+              console.log('[WorkflowRuns] Sample run filtered out (before fromDate):', {
+                runId: run.id,
+                timestamp,
+                runDate: runDate.toISOString(),
+                fromDate: fromDate.toISOString(),
+                comparison: `${runDate.toISOString()} < ${fromDate.toISOString()}`,
+              });
             }
             filteredOutCount++;
           }
@@ -3035,17 +2840,13 @@
           if (hasValidTo && toDate && runDate > toDate) {
             shouldInclude = false;
             if (filteredOutCount === 0) {
-              sampleFilteredRun = run;
-              console.log(
-                '[WorkflowRuns] Sample run filtered out (after toDate):',
-                {
-                  runId: run.id,
-                  timestamp,
-                  runDate: runDate.toISOString(),
-                  toDate: toDate.toISOString(),
-                  comparison: `${runDate.toISOString()} > ${toDate.toISOString()}`,
-                }
-              );
+              console.log('[WorkflowRuns] Sample run filtered out (after toDate):', {
+                runId: run.id,
+                timestamp,
+                runDate: runDate.toISOString(),
+                toDate: toDate.toISOString(),
+                comparison: `${runDate.toISOString()} > ${toDate.toISOString()}`,
+              });
             }
             filteredOutCount++;
           }
@@ -3060,8 +2861,7 @@
             filtered.length > 0
               ? {
                   id: filtered[0].id,
-                  timestamp:
-                    filtered[0].run_started_at ?? filtered[0].created_at,
+                  timestamp: filtered[0].run_started_at ?? filtered[0].created_at,
                   runDate: new Date(
                     filtered[0].run_started_at ?? filtered[0].created_at
                   ).toISOString(),
@@ -3122,10 +2922,7 @@
     );
     const baseOptions = getBaseFilterOptionsForCurrentContext();
     filteredRuns = applyFiltersToRuns(baseOptions);
-    console.log(
-      '[WorkflowRuns] filterRuns result: filteredRuns.length=',
-      filteredRuns.length
-    );
+    console.log('[WorkflowRuns] filterRuns result: filteredRuns.length=', filteredRuns.length);
 
     // Keep client-side pagination slice in sync with the latest filters.
     const limit = workflowLoadLimit > 0 ? workflowLoadLimit : 20;
@@ -3135,9 +2932,7 @@
     visibleRuns = filteredRuns.slice(start, end);
 
     smartSuggestions =
-      filteredRuns.length === 0 && runs.length > 0
-        ? computeSmartSuggestions(baseOptions)
-        : [];
+      filteredRuns.length === 0 && runs.length > 0 ? computeSmartSuggestions(baseOptions) : [];
 
     // After (re)computing the filtered and visible runs, decide whether we
     // should continue progressive fetching for the current page / view.
@@ -3202,9 +2997,7 @@
   /**
    * Compute smart suggestions for the empty state when filters hide all runs.
    */
-  function computeSmartSuggestions(
-    baseOptions: FilterComputationOptions = {}
-  ): string[] {
+  function computeSmartSuggestions(baseOptions: FilterComputationOptions = {}): string[] {
     const suggestions: string[] = [];
 
     if (!runs.length) {
@@ -3220,11 +3013,7 @@
       });
       if (relaxed.length > 0) {
         const count = relaxed.length;
-        suggestions.push(
-          `Turn off "Watched only" to see ${count} run${
-            count === 1 ? '' : 's'
-          }.`
-        );
+        suggestions.push(`Turn off "Watched only" to see ${count} run${count === 1 ? '' : 's'}.`);
       }
       return suggestions;
     }
@@ -3235,9 +3024,7 @@
       if (relaxed.length > 0) {
         const count = relaxed.length;
         suggestions.push(
-          `Change the Status filter to "All" to see ${count} run${
-            count === 1 ? '' : 's'
-          }.`
+          `Change the Status filter to "All" to see ${count} run${count === 1 ? '' : 's'}.`
         );
       }
     }
@@ -3250,11 +3037,7 @@
       });
       if (relaxed.length > 0) {
         const count = relaxed.length;
-        suggestions.push(
-          `Turn off "Favorites only" to see ${count} run${
-            count === 1 ? '' : 's'
-          }.`
-        );
+        suggestions.push(`Turn off "Favorites only" to see ${count} run${count === 1 ? '' : 's'}.`);
       }
     }
 
@@ -3263,9 +3046,7 @@
       const relaxed = applyFiltersToRuns({ ...baseOptions, skipSearch: true });
       if (relaxed.length > 0) {
         const count = relaxed.length;
-        suggestions.push(
-          `Clear the search box to see ${count} run${count === 1 ? '' : 's'}.`
-        );
+        suggestions.push(`Clear the search box to see ${count} run${count === 1 ? '' : 's'}.`);
       }
     }
 
@@ -3274,9 +3055,7 @@
       const relaxed = applyFiltersToRuns({ ...baseOptions, skipDate: true });
       if (relaxed.length > 0) {
         const count = relaxed.length;
-        suggestions.push(
-          `Clear the date filter to see ${count} run${count === 1 ? '' : 's'}.`
-        );
+        suggestions.push(`Clear the date filter to see ${count} run${count === 1 ? '' : 's'}.`);
       }
     }
 
@@ -3286,9 +3065,7 @@
       if (relaxed.length > 0) {
         const count = relaxed.length;
         suggestions.push(
-          `Enable "Show bot runs" to see ${count} additional run${
-            count === 1 ? '' : 's'
-          }.`
+          `Enable "Show bot runs" to see ${count} additional run${count === 1 ? '' : 's'}.`
         );
       }
     }
@@ -3371,10 +3148,7 @@
    * Compute the total number of pages based on filteredRuns length and the current per-page limit.
    * Parameters are passed explicitly to ensure Svelte reactivity triggers correctly.
    */
-  function getTotalPages(
-    _filteredRuns: WorkflowRun[],
-    _workflowLoadLimit: number
-  ): number | null {
+  function getTotalPages(_filteredRuns: WorkflowRun[], _workflowLoadLimit: number): number | null {
     if (!_filteredRuns.length || _workflowLoadLimit <= 0) {
       return null;
     }
@@ -3403,17 +3177,6 @@
   }
 
   /**
-   * Navigate to a specific page
-   */
-  function goToPage(page: number) {
-    const totalPages = getTotalPages(filteredRuns, workflowLoadLimit);
-    if (totalPages && page >= 1 && page <= totalPages) {
-      currentPage = page;
-      filterRuns(); // Re-apply filters to update visibleRuns
-    }
-  }
-
-  /**
    * Build a human-readable list of labels for the currently active filters.
    * Used in the summary banner so users can quickly see which filters are
    * narrowing the result set without reading each control.
@@ -3437,8 +3200,7 @@
     const labels: string[] = [];
 
     // Don't return early if runs.length is 0 - we still want to show active filters
-    const baseOptions =
-      _runs.length > 0 ? getBaseFilterOptionsForCurrentContext() : null;
+    const baseOptions = _runs.length > 0 ? getBaseFilterOptionsForCurrentContext() : null;
 
     // When "Watched Runs Only" is enabled it overrides all other filters,
     // so surface it as the only active filter in the summary.
@@ -3458,9 +3220,7 @@
         const relaxed = applyFiltersToRuns({ ...baseOptions, skipBot: true });
         const additional = relaxed.length - _filteredRuns.length;
         if (additional > 0) {
-          labels.push(
-            `Bot runs hidden [${formatRunCount(additional)} filtered]`
-          );
+          labels.push(`Bot runs hidden [${formatRunCount(additional)} filtered]`);
         } else {
           labels.push('Bot runs hidden');
         }
@@ -3477,9 +3237,7 @@
       }
     } else if (_actorFilter !== 'all') {
       if (_filteredRuns.length > 0) {
-        labels.push(
-          `Actor: ${_actorFilter} [${formatRunCount(_filteredRuns.length)}]`
-        );
+        labels.push(`Actor: ${_actorFilter} [${formatRunCount(_filteredRuns.length)}]`);
       } else {
         labels.push(`Actor: ${_actorFilter}`);
       }
@@ -3490,8 +3248,7 @@
     }
 
     if (_workflowFilter !== 'all') {
-      const workflowName =
-        workflowPathToName.get(_workflowFilter) ?? _workflowFilter;
+      const workflowName = workflowPathToName.get(_workflowFilter) ?? _workflowFilter;
       labels.push(`Workflow: ${workflowName}`);
     }
 
@@ -3522,11 +3279,7 @@
       labels.push(`Status: ${statusLabel}`);
     }
 
-    const current = getCurrentPage(
-      _filteredRuns,
-      workflowLoadLimit,
-      currentPage
-    );
+    const current = getCurrentPage(_filteredRuns, workflowLoadLimit, currentPage);
     const totalPages = getTotalPages(_filteredRuns, workflowLoadLimit);
     if (current && totalPages && totalPages > 1) {
       labels.push(`Page ${current} of ${totalPages}`);
@@ -3563,10 +3316,7 @@
    * - failedJobsOnly: directly reruns failed jobs via backend
    * - otherwise: prompt user in backend to either rerun now or open dispatch dialog to modify inputs
    */
-  function handleRerunWorkflow(
-    run: WorkflowRun,
-    failedJobsOnly: boolean = false
-  ) {
+  function handleRerunWorkflow(run: WorkflowRun, failedJobsOnly: boolean = false) {
     // Set loading state
     rerunLoadingRunIds.add(run.id);
     rerunLoadingRunIds = rerunLoadingRunIds; // Trigger reactivity
@@ -3735,9 +3485,15 @@
     const hours = Math.floor(minutes / 60);
     const days = Math.floor(hours / 24);
 
-    if (days > 0) return `${days}d ago`;
-    if (hours > 0) return `${hours}h ago`;
-    if (minutes > 0) return `${minutes}m ago`;
+    if (days > 0) {
+      return `${days}d ago`;
+    }
+    if (hours > 0) {
+      return `${hours}h ago`;
+    }
+    if (minutes > 0) {
+      return `${minutes}m ago`;
+    }
     return `${seconds}s ago`;
   }
 
@@ -3767,8 +3523,12 @@
     const minutes = Math.floor(seconds / 60);
     const hours = Math.floor(minutes / 60);
 
-    if (hours > 0) return `${hours}h ${minutes % 60}m`;
-    if (minutes > 0) return `${minutes}m ${seconds % 60}s`;
+    if (hours > 0) {
+      return `${hours}h ${minutes % 60}m`;
+    }
+    if (minutes > 0) {
+      return `${minutes}m ${seconds % 60}s`;
+    }
     return `${seconds}s`;
   }
 </script>
@@ -3805,8 +3565,7 @@
           class="refresh-button"
           title="Refresh workflow runs"
         >
-          <span
-            class={`codicon codicon-refresh refresh-icon ${refreshing ? 'spinning-icon' : ''}`}
+          <span class={`codicon codicon-refresh refresh-icon ${refreshing ? 'spinning-icon' : ''}`}
           ></span>
           <span>{refreshing ? 'Refreshing...' : 'Refresh'}</span>
         </button>
@@ -3884,16 +3643,13 @@
                 </span>
               </div>
               <div class="settings-help-text">
-                Caps how many runs are progressively loaded when no date filter
-                is active.
+                Caps how many runs are progressively loaded when no date filter is active.
               </div>
 
               <div class="settings-divider"></div>
 
               <div class="refresh-settings-header">
-                <span
-                  title="Maximum workflow runs to scan when a Date Filter is active"
-                >
+                <span title="Maximum workflow runs to scan when a Date Filter is active">
                   Maximum Workflow Runs Limit (Date Range)
                 </span>
                 <button
@@ -3920,16 +3676,14 @@
                 </span>
               </div>
               <div class="settings-help-text">
-                Limits how many runs are scanned for an active Date Filter
-                before marking results as truncated.
+                Limits how many runs are scanned for an active Date Filter before marking results as
+                truncated.
               </div>
 
               <div class="settings-divider"></div>
 
               <div class="refresh-settings-header">
-                <span
-                  title="Number of workflow runs shown per page in this panel"
-                >
+                <span title="Number of workflow runs shown per page in this panel">
                   Workflow Runs Per Page
                 </span>
                 <button
@@ -3960,9 +3714,7 @@
 
               <div class="refresh-settings-header">Date Filter</div>
               <div class="settings-input-group">
-                <label for="date-filter-from" class="settings-date-label"
-                  >From:</label
-                >
+                <label for="date-filter-from" class="settings-date-label">From:</label>
                 <input
                   id="date-filter-from"
                   type="datetime-local"
@@ -3990,9 +3742,7 @@
                 {/if}
               </div>
               <div class="settings-input-group">
-                <label for="date-filter-to" class="settings-date-label"
-                  >To:</label
-                >
+                <label for="date-filter-to" class="settings-date-label">To:</label>
                 <input
                   id="date-filter-to"
                   type="datetime-local"
@@ -4026,8 +3776,7 @@
                 <div class="settings-help-text settings-help-text--info">
                   <span class="codicon codicon-info"></span>
                   <span>
-                    Auto-refresh is active, but new runs won't appear in this
-                    historical date range.
+                    Auto-refresh is active, but new runs won't appear in this historical date range.
                   </span>
                 </div>
               {/if}
@@ -4042,19 +3791,19 @@
                   <div class="settings-help-text settings-help-text--warning">
                     <span class="codicon codicon-alert"></span>
                     <span>
-                      Fetched the {DATE_FILTER_MAX_TOTAL_RUNS} most recent runs for
-                      this date range. Filters are applied to these
-                      {DATE_FILTER_MAX_TOTAL_RUNS} runs. If you're not seeing expected
-                      results, there may be more matching runs beyond this limit.
-                      Try narrowing the date range to fetch different runs.
+                      Fetched the {DATE_FILTER_MAX_TOTAL_RUNS} most recent runs for this date range. Filters
+                      are applied to these
+                      {DATE_FILTER_MAX_TOTAL_RUNS} runs. If you're not seeing expected results, there
+                      may be more matching runs beyond this limit. Try narrowing the date range to fetch
+                      different runs.
                     </span>
                   </div>
                 {:else if !hasActiveDateFilter() && totalRunsFetched >= NON_DATE_MAX_TOTAL_RUNS}
                   <div class="settings-help-text settings-help-text--warning">
                     <span class="codicon codicon-alert"></span>
                     <span>
-                      Loaded {NON_DATE_MAX_TOTAL_RUNS} most recent runs. Please apply
-                      date filters to search further back in history.
+                      Loaded {NON_DATE_MAX_TOTAL_RUNS} most recent runs. Please apply date filters to
+                      search further back in history.
                     </span>
                   </div>
                 {/if}
@@ -4068,8 +3817,7 @@
     <div class="header">
       <div class="header-title-wrapper">
         <h3>Workflow Runs</h3>
-        <span class="codicon codicon-mark-github header-icon" aria-hidden="true"
-        ></span>
+        <span class="codicon codicon-mark-github header-icon" aria-hidden="true"></span>
       </div>
       <div class="refresh-controls">
         <button
@@ -4078,8 +3826,7 @@
           class="refresh-button"
           title="Refresh workflow runs"
         >
-          <span
-            class={`codicon codicon-refresh refresh-icon ${refreshing ? 'spinning-icon' : ''}`}
+          <span class={`codicon codicon-refresh refresh-icon ${refreshing ? 'spinning-icon' : ''}`}
           ></span>
           <span>{refreshing ? 'Refreshing...' : 'Refresh'}</span>
         </button>
@@ -4157,16 +3904,13 @@
                 </span>
               </div>
               <div class="settings-help-text">
-                Caps how many runs are progressively loaded when no date filter
-                is active.
+                Caps how many runs are progressively loaded when no date filter is active.
               </div>
 
               <div class="settings-divider"></div>
 
               <div class="refresh-settings-header">
-                <span
-                  title="Maximum workflow runs to scan when a Date Filter is active"
-                >
+                <span title="Maximum workflow runs to scan when a Date Filter is active">
                   Maximum Workflow Runs Limit (Date Range)
                 </span>
                 <button
@@ -4193,16 +3937,14 @@
                 </span>
               </div>
               <div class="settings-help-text">
-                Limits how many runs are scanned for an active Date Filter
-                before marking results as truncated.
+                Limits how many runs are scanned for an active Date Filter before marking results as
+                truncated.
               </div>
 
               <div class="settings-divider"></div>
 
               <div class="refresh-settings-header">
-                <span
-                  title="Number of workflow runs shown per page in this panel"
-                >
+                <span title="Number of workflow runs shown per page in this panel">
                   Workflow Runs Per Page
                 </span>
                 <button
@@ -4233,9 +3975,7 @@
 
               <div class="refresh-settings-header">Date Filter</div>
               <div class="settings-input-group">
-                <label for="date-filter-from-2" class="settings-date-label"
-                  >From:</label
-                >
+                <label for="date-filter-from-2" class="settings-date-label">From:</label>
                 <input
                   id="date-filter-from-2"
                   type="datetime-local"
@@ -4256,9 +3996,7 @@
                 {/if}
               </div>
               <div class="settings-input-group">
-                <label for="date-filter-to-2" class="settings-date-label"
-                  >To:</label
-                >
+                <label for="date-filter-to-2" class="settings-date-label">To:</label>
                 <input
                   id="date-filter-to-2"
                   type="datetime-local"
@@ -4285,8 +4023,7 @@
                 <div class="settings-help-text settings-help-text--info">
                   <span class="codicon codicon-info"></span>
                   <span>
-                    Auto-refresh is active, but new runs won't appear in this
-                    historical date range.
+                    Auto-refresh is active, but new runs won't appear in this historical date range.
                   </span>
                 </div>
               {/if}
@@ -4310,18 +4047,18 @@
         <div class="settings-help-text settings-help-text--warning">
           <span class="codicon codicon-alert"></span>
           <span>
-            Fetched the {DATE_FILTER_MAX_TOTAL_RUNS} most recent runs for this date
-            range. Filters are applied to these {DATE_FILTER_MAX_TOTAL_RUNS} runs.
-            If you're not seeing expected results, there may be more matching runs
-            beyond this limit. Try narrowing the date range to fetch different runs.
+            Fetched the {DATE_FILTER_MAX_TOTAL_RUNS} most recent runs for this date range. Filters are
+            applied to these {DATE_FILTER_MAX_TOTAL_RUNS} runs. If you're not seeing expected results,
+            there may be more matching runs beyond this limit. Try narrowing the date range to fetch different
+            runs.
           </span>
         </div>
       {:else if !hasActiveDateFilter() && totalRunsFetched >= NON_DATE_MAX_TOTAL_RUNS}
         <div class="settings-help-text settings-help-text--warning">
           <span class="codicon codicon-alert"></span>
           <span>
-            Loaded {NON_DATE_MAX_TOTAL_RUNS} most recent runs. Please apply date
-            filters to search further back in history.
+            Loaded {NON_DATE_MAX_TOTAL_RUNS} most recent runs. Please apply date filters to search further
+            back in history.
           </span>
         </div>
       {/if}
@@ -4456,15 +4193,14 @@
                 </div>
               </div>
               {#if filteredAvailableWorkflows.length > 0}
-                {#each filteredAvailableWorkflows as workflow}
+                {#each filteredAvailableWorkflows as workflow (workflow.path)}
                   <div
                     class="dropdown-item"
                     on:click={() => selectWorkflowFromDropdown(workflow)}
                     role="option"
                     aria-selected={workflowFilter === workflow.path}
                     tabindex="0"
-                    on:keypress={(e) =>
-                      e.key === 'Enter' && selectWorkflowFromDropdown(workflow)}
+                    on:keypress={(e) => e.key === 'Enter' && selectWorkflowFromDropdown(workflow)}
                   >
                     <div class="workflow-info">
                       <div class="workflow-name">{workflow.name}</div>
@@ -4527,9 +4263,7 @@
             type="checkbox"
             bind:checked={showFavoritesOnly}
             on:change={filterRuns}
-            disabled={loading ||
-              availableMarkedWorkflowsCount === 0 ||
-              showWatchedOnly}
+            disabled={loading || availableMarkedWorkflowsCount === 0 || showWatchedOnly}
             title={showWatchedOnly
               ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
               : 'Show only runs from workflows you have marked as favorite'}
@@ -4550,8 +4284,7 @@
             title="Clear all filters and reset to default view"
             type="button"
           >
-            <span class="codicon codicon-clear-all" aria-hidden="true"></span> Clear
-            Filters
+            <span class="codicon codicon-clear-all" aria-hidden="true"></span> Clear Filters
           </button>
         </div>
       {:else if watchedRuns.size > 0}
@@ -4590,12 +4323,12 @@
         {#if !showWatchedOnly && hasMoreRuns() && totalRunsFetched < getMaxTotalRuns()}
           Showing page {currentPageNumber || 1} of {totalPagesNumber || 1} ({filteredRuns.length}
           run{filteredRuns.length === 1 ? '' : 's'} total). Filters apply to the
-          {runs.length} run{runs.length !== 1 ? 's' : ''} currently loaded; more
-          runs will be fetched automatically as needed.
+          {runs.length} run{runs.length !== 1 ? 's' : ''} currently loaded; more runs will be fetched
+          automatically as needed.
         {:else}
           Showing page {currentPageNumber || 1} of {totalPagesNumber || 1} ({filteredRuns.length}
-          run{filteredRuns.length === 1 ? '' : 's'} total). All runs matching the
-          current filters are loaded.
+          run{filteredRuns.length === 1 ? '' : 's'} total). All runs matching the current filters are
+          loaded.
         {/if}
       {:else}
         Showing {filteredRuns.length} run{filteredRuns.length !== 1 ? '' : 's'}
@@ -4629,17 +4362,11 @@
         ></span>
       </button>
       {#if filtersExpanded}
-        <div
-          class="filter-results-filters"
-          aria-label="Applied workflow run filters"
-        >
+        <div class="filter-results-filters" aria-label="Applied workflow run filters">
           {#if activeFilterLabels.length > 0}
             {#each activeFilterLabels as label (label)}
               <div class="filter-pill">
-                <span
-                  class="codicon codicon-check filter-pill-icon"
-                  aria-hidden="true"
-                ></span>
+                <span class="codicon codicon-check filter-pill-icon" aria-hidden="true"></span>
                 <span class="filter-pill-text">{label}</span>
               </div>
             {/each}
@@ -4690,8 +4417,7 @@
           class="pagination-button"
           type="button"
           on:click={goToNextPage}
-          disabled={filteredRuns.length === 0 ||
-            (totalPagesNumber || 1) <= currentPage}
+          disabled={filteredRuns.length === 0 || (totalPagesNumber || 1) <= currentPage}
         >
           Next
           <span class="codicon codicon-chevron-right" aria-hidden="true"></span>
@@ -4703,16 +4429,14 @@
       {#if !showWatchedOnly && progressiveFetching && hasMoreRuns() && totalRunsFetched < getMaxTotalRuns()}
         <div class="empty-subtitle empty-subtitle--progressive">
           <span class="codicon codicon-sync spinning-icon"></span>
-          <span
-            >No matching runs yet. Searching through workflow history...</span
-          >
+          <span>No matching runs yet. Searching through workflow history...</span>
         </div>
       {/if}
       <div class="empty-suggestions">
         {#if smartSuggestions.length > 0}
           <p>These filters are currently hiding available runs:</p>
           <ul>
-            {#each smartSuggestions as suggestion}
+            {#each smartSuggestions as suggestion (suggestion)}
               <li>{suggestion}</li>
             {/each}
           </ul>
@@ -4721,8 +4445,7 @@
           <ul>
             <li>
               Click the <strong
-                ><span class="codicon codicon-clear-all" aria-hidden="true"
-                ></span> Clear Filters</strong
+                ><span class="codicon codicon-clear-all" aria-hidden="true"></span> Clear Filters</strong
               > button to reset all filters
             </li>
             <li>
@@ -4742,40 +4465,26 @@
           <p>
             <strong>No runs found in the selected date range.</strong>
           </p>
-          <p>
-            The GitHub API returned 0 runs for this date/time range. This could
-            mean:
-          </p>
+          <p>The GitHub API returned 0 runs for this date/time range. This could mean:</p>
           <ul style="text-align: left; margin: 10px auto; max-width: 400px;">
             <li>No workflow runs exist in this time period</li>
             <li>The date/time range is too narrow</li>
-            <li>
-              The runs you're looking for are outside this range (check the
-              timezone)
-            </li>
+            <li>The runs you're looking for are outside this range (check the timezone)</li>
           </ul>
-          <p>
-            Try widening the date range or clearing the date filter to see all
-            runs.
-          </p>
+          <p>Try widening the date range or clearing the date filter to see all runs.</p>
         {:else if workflowFilter === 'all'}
           <p>This repository doesn't have any workflow runs yet.</p>
         {:else}
           <p>
-            No runs found for this workflow. Try selecting a different workflow
-            or clearing filters.
+            No runs found for this workflow. Try selecting a different workflow or clearing filters.
           </p>
         {/if}
       </div>
     </div>
   {:else}
     <div class="runs-list">
-      {#each visibleRuns as run}
-        <div
-          class="run-item {getStatusClass(run)} {isHighlighted(run)
-            ? 'highlighted'
-            : ''}"
-        >
+      {#each visibleRuns as run (run.id)}
+        <div class="run-item {getStatusClass(run)} {isHighlighted(run) ? 'highlighted' : ''}">
           {#if isHighlighted(run)}
             <div class="new-badge">🆕 Just Dispatched</div>
           {/if}
@@ -4783,9 +4492,8 @@
             <div class="status-change-message" transition:slide>
               <span class="codicon codicon-info"></span>
               <span>
-                Status updated: {statusChanges.get(run.id)?.oldStatus} → {statusChanges.get(
-                  run.id
-                )?.newStatus}
+                Status updated: {statusChanges.get(run.id)?.oldStatus} → {statusChanges.get(run.id)
+                  ?.newStatus}
               </span>
             </div>
           {/if}
@@ -4841,26 +4549,18 @@
                     >
                     {#if run.pull_requests && run.pull_requests.length > 0}
                       <span class="separator">•</span>
-                      <span class="pr-number"
-                        >PR #{run.pull_requests[0].number}</span
-                      >
+                      <span class="pr-number">PR #{run.pull_requests[0].number}</span>
                     {/if}
                   </div>
                   <div class="run-meta-line">
                     <span class="status-text"
-                      >{run.status === 'completed'
-                        ? run.conclusion
-                        : run.status}</span
+                      >{run.status === 'completed' ? run.conclusion : run.status}</span
                     >
                     <span class="separator">•</span>
                     {#if run.status === 'in_progress' || run.status === 'queued'}
-                      <span class="duration"
-                        >{formatDuration(run.created_at)}</span
-                      >
+                      <span class="duration">{formatDuration(run.created_at)}</span>
                     {:else if run.updated_at}
-                      <span class="duration"
-                        >{formatDuration(run.created_at, run.updated_at)}</span
-                      >
+                      <span class="duration">{formatDuration(run.created_at, run.updated_at)}</span>
                     {/if}
                     <span class="separator">•</span>
                     <span class="time">
@@ -4893,9 +4593,7 @@
             <button
               class="action-button artifacts-button"
               on:click|stopPropagation={() => toggleArtifacts(run.id)}
-              title={showArtifacts.has(run.id)
-                ? 'Hide artifacts'
-                : 'Show artifacts'}
+              title={showArtifacts.has(run.id) ? 'Hide artifacts' : 'Show artifacts'}
             >
               <span
                 class="codicon"
@@ -4930,9 +4628,7 @@
             <button
               class="action-button watch-button"
               on:click|stopPropagation={(e) => toggleRunWatch(run.id, e)}
-              title={isRunWatched(run.id)
-                ? 'Remove from watch list'
-                : 'Add to watch list'}
+              title={isRunWatched(run.id) ? 'Remove from watch list' : 'Add to watch list'}
             >
               <span
                 class={`codicon codicon-watch watch-icon ${isRunWatched(run.id) ? 'watch-icon--active' : ''}`}
@@ -4968,8 +4664,7 @@
                 disabled={rerunLoadingRunIds.has(run.id)}
               >
                 {#if rerunLoadingRunIds.has(run.id)}
-                  <span class="codicon codicon-loading codicon-modifier-spin"
-                  ></span>
+                  <span class="codicon codicon-loading codicon-modifier-spin"></span>
                 {:else}
                   <span class="codicon codicon-debug-restart"></span>
                 {/if}
@@ -4978,14 +4673,12 @@
               {#if run.conclusion === 'failure'}
                 <button
                   class="action-button rerun-failed-button"
-                  on:click|stopPropagation={() =>
-                    handleRerunWorkflow(run, true)}
+                  on:click|stopPropagation={() => handleRerunWorkflow(run, true)}
                   title="Rerun only failed jobs"
                   disabled={rerunLoadingRunIds.has(run.id)}
                 >
                   {#if rerunLoadingRunIds.has(run.id)}
-                    <span class="codicon codicon-loading codicon-modifier-spin"
-                    ></span>
+                    <span class="codicon codicon-loading codicon-modifier-spin"></span>
                   {:else}
                     <span class="codicon codicon-debug-restart"></span>
                   {/if}
@@ -5021,15 +4714,10 @@
 
           {#if cancellationState.failedCancellations.has(run.id)}
             <div class="cancel-error" transition:fade>
-              <span
-                class="codicon codicon-error status-icon status-icon--failure"
-              ></span>
+              <span class="codicon codicon-error status-icon status-icon--failure"></span>
               <span>{cancellationState.failedCancellations.get(run.id)}</span>
               {#if run.run_attempt && run.run_attempt > 1}
-                <span
-                  class="attempt-badge"
-                  title={`Attempt ${run.run_attempt}`}
-                >
+                <span class="attempt-badge" title={`Attempt ${run.run_attempt}`}>
                   Attempt {run.run_attempt}
                 </span>
               {/if}
@@ -5045,7 +4733,7 @@
                   <span>Loading jobs...</span>
                 </div>
               {:else if runJobs.has(run.id)}
-                {#each runJobs.get(run.id) || [] as job}
+                {#each runJobs.get(run.id) || [] as job (job.id)}
                   <div class="job-item {getJobStatusClass(job)}">
                     <div class="job-header">
                       <span
@@ -5055,9 +4743,7 @@
                     </div>
                     <div class="job-details">
                       <span class="job-status"
-                        >{job.status === 'completed'
-                          ? job.conclusion
-                          : job.status}</span
+                        >{job.status === 'completed' ? job.conclusion : job.status}</span
                       >
                       {#if job.started_at}
                         <span class="job-time">
@@ -5068,8 +4754,7 @@
                     </div>
                     <button
                       class="job-logs-button"
-                      on:click|stopPropagation={() =>
-                        viewJobLogs(job.id, job.name, run.id)}
+                      on:click|stopPropagation={() => viewJobLogs(job.id, job.name, run.id)}
                       title="View logs for this job"
                     >
                       <span class="codicon codicon-file-text"></span>
@@ -5095,11 +4780,10 @@
                 {#if (runArtifacts.get(run.id) || []).length === 0}
                   <div class="artifacts-empty">No artifacts available</div>
                 {:else}
-                  {#each runArtifacts.get(run.id) || [] as artifact}
+                  {#each runArtifacts.get(run.id) || [] as artifact (artifact.id)}
                     <div class="artifact-item">
                       <div class="artifact-header">
-                        <span class="artifact-icon codicon codicon-package"
-                        ></span>
+                        <span class="artifact-icon codicon codicon-package"></span>
                         <span class="artifact-name">{artifact.name}</span>
                       </div>
                       <div class="artifact-details">
@@ -5171,15 +4855,12 @@
                       <div class="summary-stats">
                         <div class="summary-stat">
                           <span class="summary-stat-label">Total Jobs:</span>
-                          <span class="summary-stat-value"
-                            >{summary.totalJobs}</span
-                          >
+                          <span class="summary-stat-value">{summary.totalJobs}</span>
                         </div>
                         {#if summary.successCount > 0}
                           <div class="summary-stat success">
                             <span class="summary-stat-label">
-                              <span
-                                class="codicon codicon-pass status-icon status-icon--success"
+                              <span class="codicon codicon-pass status-icon status-icon--success"
                               ></span>
                               <span>Success:</span>
                             </span>
@@ -5191,8 +4872,7 @@
                         {#if summary.failureCount > 0}
                           <div class="summary-stat failure">
                             <span class="summary-stat-label">
-                              <span
-                                class="codicon codicon-error status-icon status-icon--failure"
+                              <span class="codicon codicon-error status-icon status-icon--failure"
                               ></span>
                               <span>Failed:</span>
                             </span>
@@ -5217,8 +4897,7 @@
                         {#if summary.skippedCount > 0}
                           <div class="summary-stat skipped">
                             <span class="summary-stat-label">
-                              <span
-                                class="codicon codicon-skip status-icon status-icon--skipped"
+                              <span class="codicon codicon-skip status-icon status-icon--skipped"
                               ></span>
                               <span>Skipped:</span>
                             </span>
@@ -5243,8 +4922,7 @@
                         {#if summary.queuedCount > 0}
                           <div class="summary-stat queued">
                             <span class="summary-stat-label">
-                              <span
-                                class="codicon codicon-clock status-icon status-icon--queued"
+                              <span class="codicon codicon-clock status-icon status-icon--queued"
                               ></span>
                               <span>Queued:</span>
                             </span>
@@ -5275,24 +4953,18 @@
                         </div>
                         <div class="summary-stat">
                           <span class="summary-stat-label">Triggered by:</span>
-                          <span class="summary-stat-value"
-                            >{run.actor.login}</span
-                          >
+                          <span class="summary-stat-value">{run.actor.login}</span>
                         </div>
                         <div class="summary-stat">
                           <span class="summary-stat-label">Run Number:</span>
-                          <span class="summary-stat-value"
-                            >#{run.run_number}</span
-                          >
+                          <span class="summary-stat-value">#{run.run_number}</span>
                         </div>
                       </div>
                     </div>
                   </div>
                 </div>
               {:else}
-                <div class="summary-empty">
-                  Click "▶ Jobs" to load summary data
-                </div>
+                <div class="summary-empty">Click "▶ Jobs" to load summary data</div>
               {/if}
             </div>
           {/if}
@@ -5332,19 +5004,16 @@
             <span class="codicon codicon-sync spinning-icon"></span>
             {#if filteredRuns.length < (workflowLoadLimit > 0 ? workflowLoadLimit : 20)}
               <span>
-                Showing {filteredRuns.length} run{filteredRuns.length === 1
-                  ? ''
-                  : 's'}. Loading more in background to fill the page...
+                Showing {filteredRuns.length} run{filteredRuns.length === 1 ? '' : 's'}. Loading
+                more in background to fill the page...
               </span>
             {:else}
               <span>Fetching more runs...</span>
             {/if}
           {:else if !showWatchedOnly && hasMoreRuns() && totalRunsFetched < getMaxTotalRuns()}
             <span>
-              Showing {filteredRuns.length} filtered run{filteredRuns.length ===
-              1
-                ? ''
-                : 's'} from {runs.length} loaded
+              Showing {filteredRuns.length} filtered run{filteredRuns.length === 1 ? '' : 's'} from {runs.length}
+              loaded
               {#if runs.length < totalCount}
                 (of {totalCount} total).
               {:else}
@@ -5356,19 +5025,16 @@
               <span class="codicon codicon-warning"></span>
               {#if hasActiveDateFilter()}
                 Fetched {DATE_FILTER_MAX_TOTAL_RUNS} most recent runs. Showing
-                {filteredRuns.length} matching your filters. More matching runs may
-                exist beyond this limit—try narrowing the date range.
+                {filteredRuns.length} matching your filters. More matching runs may exist beyond this
+                limit—try narrowing the date range.
               {:else}
-                Loaded {NON_DATE_MAX_TOTAL_RUNS} most recent runs. Please apply date
-                filters to search further back in history.
+                Loaded {NON_DATE_MAX_TOTAL_RUNS} most recent runs. Please apply date filters to search
+                further back in history.
               {/if}
             </span>
           {:else}
             <span>
-              Showing all {filteredRuns.length} filtered run{filteredRuns.length ===
-              1
-                ? ''
-                : 's'}.
+              Showing all {filteredRuns.length} filtered run{filteredRuns.length === 1 ? '' : 's'}.
             </span>
           {/if}
         </div>
@@ -5412,7 +5078,7 @@
           <p class="parameters-empty">This workflow has no inputs.</p>
         {:else}
           <div class="parameters-list">
-            {#each Object.entries(dispatchConfirmInputs) as [key, value]}
+            {#each Object.entries(dispatchConfirmInputs) as [key, value] (key)}
               <div class="parameter-row">
                 <div class="parameter-key">{key}</div>
                 <div class="parameter-value">
@@ -5499,7 +5165,7 @@
 
         {#if parametersModalInputs}
           <div class="parameters-list">
-            {#each Object.entries(parametersModalInputs) as [key, value]}
+            {#each Object.entries(parametersModalInputs) as [key, value] (key)}
               <div class="parameter-row">
                 <div class="parameter-key">{key}</div>
                 <div class="parameter-value">
@@ -5509,9 +5175,7 @@
             {/each}
           </div>
         {:else if parametersModalNotFound}
-          <p class="parameters-empty">
-            Parameters are not available for this run.
-          </p>
+          <p class="parameters-empty">Parameters are not available for this run.</p>
         {:else}
           <p class="parameters-loading">
             <span class="codicon codicon-loading spinning-icon"></span>
@@ -5520,11 +5184,7 @@
         {/if}
       </div>
       <div class="modal-footer">
-        <button
-          class="primary-button"
-          on:click={closeParametersModal}
-          type="button"
-        >
+        <button class="primary-button" on:click={closeParametersModal} type="button">
           Close
         </button>
       </div>
@@ -5538,17 +5198,13 @@
     <div class="modal-content" on:click|stopPropagation transition:fade>
       <div class="modal-header">
         <h3>{helpModalTitle}</h3>
-        <button class="close-button" on:click={closeHelpModal} type="button">
-          ✕
-        </button>
+        <button class="close-button" on:click={closeHelpModal} type="button"> ✕ </button>
       </div>
       <div class="modal-body">
         {@html helpModalContent}
       </div>
       <div class="modal-footer">
-        <button class="primary-button" on:click={closeHelpModal} type="button">
-          Got it!
-        </button>
+        <button class="primary-button" on:click={closeHelpModal} type="button"> Got it! </button>
       </div>
     </div>
   </div>
@@ -5557,26 +5213,15 @@
 <!-- Watched Runs Management Modal -->
 {#if showWatchedRunsModal}
   <div class="modal-overlay" on:click={closeWatchedRunsModal} transition:fade>
-    <div
-      class="modal-content watched-runs-modal"
-      on:click|stopPropagation
-      transition:fade
-    >
+    <div class="modal-content watched-runs-modal" on:click|stopPropagation transition:fade>
       <div class="modal-header">
         <h3>Manage Watched Runs</h3>
-        <button
-          class="close-button"
-          on:click={closeWatchedRunsModal}
-          type="button"
-        >
-          ✕
-        </button>
+        <button class="close-button" on:click={closeWatchedRunsModal} type="button"> ✕ </button>
       </div>
       <div class="modal-body">
         <div class="watched-runs-info">
           <p>
-            You have <strong>{watchedRuns.size}</strong> watched run{watchedRuns.size ===
-            1
+            You have <strong>{watchedRuns.size}</strong> watched run{watchedRuns.size === 1
               ? ''
               : 's'} (maximum: {MAX_WATCHED_RUNS_PER_REPO} per repository).
           </p>
@@ -5635,11 +5280,7 @@
         {/if}
       </div>
       <div class="modal-footer">
-        <button
-          class="secondary-button"
-          on:click={closeWatchedRunsModal}
-          type="button"
-        >
+        <button class="secondary-button" on:click={closeWatchedRunsModal} type="button">
           Close
         </button>
       </div>
@@ -5659,9 +5300,7 @@
         }}
         out:fade={{ duration: reduceMotion ? 0 : 150 }}
       >
-        <span
-          class={`toast-icon codicon ${getToastIcon(t.type)} toast-icon--${t.type}`}
-        ></span>
+        <span class={`toast-icon codicon ${getToastIcon(t.type)} toast-icon--${t.type}`}></span>
         <span class="toast-message">{t.message}</span>
       </div>
     {/each}

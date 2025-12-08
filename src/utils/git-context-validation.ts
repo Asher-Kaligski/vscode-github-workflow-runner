@@ -84,10 +84,7 @@ export async function validateGitContextForGitHubOperation(): Promise<GitContext
   }
 
   // Compare repository (owner/repo)
-  if (
-    current.owner !== lastValidated.owner ||
-    current.repo !== lastValidated.repo
-  ) {
+  if (current.owner !== lastValidated.owner || current.repo !== lastValidated.repo) {
     return {
       ok: false,
       reason: 'repository-mismatch',
@@ -139,9 +136,7 @@ export async function getCurrentGitContext(): Promise<GitContextSnapshot | null>
  * Validate Git context and, when invalid, show a standard warning message.
  * Returns true when it is safe to proceed with GitHub API operations.
  */
-export async function ensureGitContextValidOrWarn(
-  source?: string
-): Promise<boolean> {
+export async function ensureGitContextValidOrWarn(source?: string): Promise<boolean> {
   const result = await validateGitContextForGitHubOperation();
 
   if (result.ok) {

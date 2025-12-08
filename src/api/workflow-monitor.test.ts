@@ -51,9 +51,7 @@ describe('getWorkflowRuns', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = fetchMock.mock.calls[0][0] as string;
 
-    expect(url).toContain(
-      'https://api.github.com/repos/owner/repo/actions/workflows/123/runs'
-    );
+    expect(url).toContain('https://api.github.com/repos/owner/repo/actions/workflows/123/runs');
     expect(url).toContain('per_page=50');
     expect(url).toContain('page=2');
     expect(url).not.toContain('branch=');
@@ -81,14 +79,10 @@ describe('getWorkflowRuns', () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const url = fetchMock.mock.calls[0][0] as string;
 
-    expect(url).toContain(
-      'https://api.github.com/repos/owner/repo/actions/workflows/123/runs'
-    );
+    expect(url).toContain('https://api.github.com/repos/owner/repo/actions/workflows/123/runs');
     expect(url).toContain('per_page=100');
     expect(url).toContain('page=1');
-    expect(url).toContain(
-      'created=2025-11-20T06%3A59%3A00.000Z..2025-11-20T09%3A59%3A00.000Z'
-    );
+    expect(url).toContain('created=2025-11-20T06%3A59%3A00.000Z..2025-11-20T09%3A59%3A00.000Z');
   });
 
   it('supports open-ended date ranges with wildcard', async () => {

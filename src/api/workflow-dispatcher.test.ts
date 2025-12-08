@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import {
-  dispatchWorkflowWithRunId,
-  fetchLatestRunId,
-} from './workflow-dispatcher';
+import { dispatchWorkflowWithRunId, fetchLatestRunId } from './workflow-dispatcher';
 import { TokenManager } from '../utils/token-manager';
 
 // Minimal VS Code mock so modules depending on `vscode` can be imported in tests.
@@ -50,12 +47,7 @@ describe('fetchLatestRunId', () => {
       }),
     } as Response);
 
-    const promise = fetchLatestRunId(
-      'owner',
-      'repo',
-      'workflow.yml',
-      'feature-branch'
-    );
+    const promise = fetchLatestRunId('owner', 'repo', 'workflow.yml', 'feature-branch');
 
     await vi.runAllTimersAsync();
     const runId = await promise;
@@ -80,12 +72,7 @@ describe('fetchLatestRunId', () => {
       }),
     } as Response);
 
-    const promise = fetchLatestRunId(
-      'owner',
-      'repo',
-      'workflow.yml',
-      'feature-branch'
-    );
+    const promise = fetchLatestRunId('owner', 'repo', 'workflow.yml', 'feature-branch');
 
     await vi.runAllTimersAsync();
     const runId = await promise;
@@ -99,12 +86,7 @@ describe('fetchLatestRunId', () => {
       status: 500,
     } as Response);
 
-    const promise = fetchLatestRunId(
-      'owner',
-      'repo',
-      'workflow.yml',
-      'feature-branch'
-    );
+    const promise = fetchLatestRunId('owner', 'repo', 'workflow.yml', 'feature-branch');
 
     await vi.runAllTimersAsync();
     const runId = await promise;
@@ -152,12 +134,7 @@ describe('dispatchWorkflowWithRunId', () => {
       inputs: { foo: 'bar' },
     };
 
-    const promise = dispatchWorkflowWithRunId(
-      'owner',
-      'repo',
-      definition,
-      request
-    );
+    const promise = dispatchWorkflowWithRunId('owner', 'repo', definition, request);
 
     await vi.runAllTimersAsync();
     const result = await promise;
@@ -186,12 +163,7 @@ describe('dispatchWorkflowWithRunId', () => {
       inputs: {},
     };
 
-    const promise = dispatchWorkflowWithRunId(
-      'owner',
-      'repo',
-      definition,
-      request
-    );
+    const promise = dispatchWorkflowWithRunId('owner', 'repo', definition, request);
 
     await vi.runAllTimersAsync();
     const result = await promise;

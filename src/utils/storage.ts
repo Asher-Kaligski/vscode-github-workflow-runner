@@ -90,9 +90,7 @@ export class Storage {
   /**
    * Get templates for a specific workflow
    */
-  static async getTemplatesForWorkflow(
-    workflowFilename: string
-  ): Promise<WorkflowTemplate[]> {
+  static async getTemplatesForWorkflow(workflowFilename: string): Promise<WorkflowTemplate[]> {
     const templates = await this.getTemplates();
     return templates.filter((t) => t.workflowFilename === workflowFilename);
   }
@@ -100,10 +98,7 @@ export class Storage {
   /**
    * Update a workflow template
    */
-  static async updateTemplate(
-    id: string,
-    updates: Partial<WorkflowTemplate>
-  ): Promise<boolean> {
+  static async updateTemplate(id: string, updates: Partial<WorkflowTemplate>): Promise<boolean> {
     const templates = await this.getTemplates();
     const index = templates.findIndex((t) => t.id === id);
 
@@ -170,10 +165,7 @@ export class Storage {
    * Get workflow execution history
    */
   static async getHistory(limit?: number): Promise<WorkflowHistoryEntry[]> {
-    const history = this.context.globalState.get<WorkflowHistoryEntry[]>(
-      HISTORY_KEY,
-      []
-    );
+    const history = this.context.globalState.get<WorkflowHistoryEntry[]>(HISTORY_KEY, []);
     return limit ? history.slice(0, limit) : history;
   }
 
@@ -185,9 +177,7 @@ export class Storage {
     limit?: number
   ): Promise<WorkflowHistoryEntry[]> {
     const history = await this.getHistory();
-    const filtered = history.filter(
-      (h) => h.workflowFilename === workflowFilename
-    );
+    const filtered = history.filter((h) => h.workflowFilename === workflowFilename);
     return limit ? filtered.slice(0, limit) : filtered;
   }
 
@@ -264,10 +254,7 @@ export class Storage {
       await this.context.globalState.update(HISTORY_KEY, data.history);
     }
     if (data.lastWorkflow) {
-      await this.context.globalState.update(
-        LAST_WORKFLOW_KEY,
-        data.lastWorkflow
-      );
+      await this.context.globalState.update(LAST_WORKFLOW_KEY, data.lastWorkflow);
     }
   }
 
@@ -302,13 +289,8 @@ export class Storage {
   /**
    * Get workflow-specific configuration
    */
-  static async getWorkflowConfig(
-    workflowFilename: string
-  ): Promise<WorkflowConfig | null> {
-    const configs = this.context.globalState.get<WorkflowConfig[]>(
-      WORKFLOW_CONFIGS_KEY,
-      []
-    );
+  static async getWorkflowConfig(workflowFilename: string): Promise<WorkflowConfig | null> {
+    const configs = this.context.globalState.get<WorkflowConfig[]>(WORKFLOW_CONFIGS_KEY, []);
     return configs.find((c) => c.workflowFilename === workflowFilename) || null;
   }
 
@@ -316,13 +298,8 @@ export class Storage {
    * Set workflow-specific configuration
    */
   static async setWorkflowConfig(config: WorkflowConfig): Promise<void> {
-    const configs = this.context.globalState.get<WorkflowConfig[]>(
-      WORKFLOW_CONFIGS_KEY,
-      []
-    );
-    const index = configs.findIndex(
-      (c) => c.workflowFilename === config.workflowFilename
-    );
+    const configs = this.context.globalState.get<WorkflowConfig[]>(WORKFLOW_CONFIGS_KEY, []);
+    const index = configs.findIndex((c) => c.workflowFilename === config.workflowFilename);
 
     if (index !== -1) {
       configs[index] = config;
@@ -337,10 +314,7 @@ export class Storage {
    * Get all workflow configurations
    */
   static async getAllWorkflowConfigs(): Promise<WorkflowConfig[]> {
-    return this.context.globalState.get<WorkflowConfig[]>(
-      WORKFLOW_CONFIGS_KEY,
-      []
-    );
+    return this.context.globalState.get<WorkflowConfig[]>(WORKFLOW_CONFIGS_KEY, []);
   }
 
   /**
@@ -479,10 +453,7 @@ export class Storage {
       ...existing,
       ...updates,
     };
-    await this.context.globalState.update(
-      WORKFLOW_RUNS_PANEL_SETTINGS_KEY,
-      next
-    );
+    await this.context.globalState.update(WORKFLOW_RUNS_PANEL_SETTINGS_KEY, next);
   }
 
   /**
@@ -530,10 +501,7 @@ export class Storage {
   /**
    * Get watched workflow runs for a specific repository
    */
-  static async getWatchedRunsForRepo(
-    owner: string,
-    repo: string
-  ): Promise<number[]> {
+  static async getWatchedRunsForRepo(owner: string, repo: string): Promise<number[]> {
     const map = await this.getWatchedRunsMap();
     const key = this.getRepoKey(owner, repo);
     const runs = map[key] || [];
@@ -545,18 +513,12 @@ export class Storage {
    * Watch a workflow run by its ID for a specific repository
    * Returns an error message if the limit is reached, null otherwise
    */
-  static async watchRun(
-    runId: number,
-    owner: string,
-    repo: string
-  ): Promise<string | null> {
+  static async watchRun(runId: number, owner: string, repo: string): Promise<string | null> {
     const map = await this.getWatchedRunsMap();
     const key = this.getRepoKey(owner, repo);
     const watched = map[key] || [];
 
-    console.log(
-      `[Storage] watchRun(${key}, ${runId}): Current count: ${watched.length}`
-    );
+    console.log(`[Storage] watchRun(${key}, ${runId}): Current count: ${watched.length}`);
 
     if (watched.includes(runId)) {
       console.log(`[Storage] watchRun(${key}, ${runId}): Already watched`);
@@ -582,11 +544,7 @@ export class Storage {
   /**
    * Unwatch a workflow run by its ID for a specific repository
    */
-  static async unwatchRun(
-    runId: number,
-    owner: string,
-    repo: string
-  ): Promise<void> {
+  static async unwatchRun(runId: number, owner: string, repo: string): Promise<void> {
     const map = await this.getWatchedRunsMap();
     const key = this.getRepoKey(owner, repo);
     const watched = map[key] || [];
@@ -611,11 +569,7 @@ export class Storage {
   /**
    * Check if a workflow run is watched for a specific repository
    */
-  static async isRunWatched(
-    runId: number,
-    owner: string,
-    repo: string
-  ): Promise<boolean> {
+  static async isRunWatched(runId: number, owner: string, repo: string): Promise<boolean> {
     const watched = await this.getWatchedRunsForRepo(owner, repo);
     return watched.includes(runId);
   }
@@ -645,10 +599,7 @@ export class Storage {
   /**
    * Unwatch all workflow runs for a specific repository
    */
-  static async clearWatchedRunsForRepo(
-    owner: string,
-    repo: string
-  ): Promise<void> {
+  static async clearWatchedRunsForRepo(owner: string, repo: string): Promise<void> {
     const map = await this.getWatchedRunsMap();
     const key = this.getRepoKey(owner, repo);
     delete map[key];
@@ -665,10 +616,7 @@ export class Storage {
   /**
    * Get the count of watched runs for a specific repository
    */
-  static async getWatchedRunsCount(
-    owner: string,
-    repo: string
-  ): Promise<number> {
+  static async getWatchedRunsCount(owner: string, repo: string): Promise<number> {
     const watched = await this.getWatchedRunsForRepo(owner, repo);
     return watched.length;
   }
@@ -689,19 +637,14 @@ export class Storage {
    * Returns null if no context has been validated yet.
    */
   static async getLastValidatedGitContext(): Promise<GitContextSnapshot | null> {
-    return this.context.globalState.get<GitContextSnapshot | null>(
-      GIT_CONTEXT_KEY,
-      null
-    );
+    return this.context.globalState.get<GitContextSnapshot | null>(GIT_CONTEXT_KEY, null);
   }
 
   /**
    * Set the last validated Git context (repository/branch).
    * Call this when the user reloads extension data.
    */
-  static async setLastValidatedGitContext(
-    snapshot: GitContextSnapshot
-  ): Promise<void> {
+  static async setLastValidatedGitContext(snapshot: GitContextSnapshot): Promise<void> {
     await this.context.globalState.update(GIT_CONTEXT_KEY, snapshot);
   }
 

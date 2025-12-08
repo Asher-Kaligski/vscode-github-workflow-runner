@@ -29,28 +29,19 @@ export async function activate(context: vscode.ExtensionContext) {
   // Register log document provider for workflow job logs
   const logDocumentProvider = new LogDocumentProvider();
   context.subscriptions.push(
-    vscode.workspace.registerTextDocumentContentProvider(
-      LOG_SCHEME,
-      logDocumentProvider
-    )
+    vscode.workspace.registerTextDocumentContentProvider(LOG_SCHEME, logDocumentProvider)
   );
 
   // Register sidebar webview provider
   const sidebarProvider = new SidebarProvider(context.extensionUri);
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(
-      'github-workflow-runner-sidebar',
-      sidebarProvider
-    )
+    vscode.window.registerWebviewViewProvider('github-workflow-runner-sidebar', sidebarProvider)
   );
 
   // Register workflow runs webview provider
   const workflowRunsProvider = new WorkflowRunsProvider(context.extensionUri);
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider(
-      'github-workflow-runner-runs',
-      workflowRunsProvider
-    )
+    vscode.window.registerWebviewViewProvider('github-workflow-runner-runs', workflowRunsProvider)
   );
 
   // Connect providers for cross-communication
@@ -95,143 +86,102 @@ function registerCommands(
 ) {
   // Authenticate command
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.authenticate',
-      async () => {
-        const success = await authenticate();
-        if (success) {
-          vscode.window.showInformationMessage(
-            '✅ Successfully authenticated with GitHub'
-          );
-          sidebarProvider.refresh();
-          workflowRunsProvider.refresh();
-        }
+    vscode.commands.registerCommand('github-workflow-runner.authenticate', async () => {
+      const success = await authenticate();
+      if (success) {
+        vscode.window.showInformationMessage('✅ Successfully authenticated with GitHub');
+        sidebarProvider.refresh();
+        workflowRunsProvider.refresh();
       }
-    )
+    })
   );
 
   // Sign out command
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.signOut',
-      async () => {
-        await signOut();
-        // Don't call refresh() - it causes remount and auto-login
-        // Instead, let the webview handle the signOut message
-      }
-    )
+    vscode.commands.registerCommand('github-workflow-runner.signOut', async () => {
+      await signOut();
+      // Don't call refresh() - it causes remount and auto-login
+      // Instead, let the webview handle the signOut message
+    })
   );
 
   // Show workflow runs command - opens main panel
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.show-workflow-runs',
-      () => {
-        // Check if panel is already open
-        if (WorkflowRunsPanel.isOpen()) {
-          // Panel is already open - just show info message and focus it
-          vscode.window.showInformationMessage(
-            'Workflow Runs panel is already open'
-          );
-          // Just reveal/focus without reloading
-          WorkflowRunsPanel.reveal();
-        } else {
-          // Panel is closed - open it
-          WorkflowRunsPanel.createOrShow(context.extensionUri);
-        }
+    vscode.commands.registerCommand('github-workflow-runner.show-workflow-runs', () => {
+      // Check if panel is already open
+      if (WorkflowRunsPanel.isOpen()) {
+        // Panel is already open - just show info message and focus it
+        vscode.window.showInformationMessage('Workflow Runs panel is already open');
+        // Just reveal/focus without reloading
+        WorkflowRunsPanel.reveal();
+      } else {
+        // Panel is closed - open it
+        WorkflowRunsPanel.createOrShow(context.extensionUri);
       }
-    )
+    })
   );
 
   // Show workflow runs command (alternative name for consistency)
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.showWorkflowRuns',
-      () => {
-        // Check if panel is already open
-        if (WorkflowRunsPanel.isOpen()) {
-          // Panel is already open - just show info message and focus it
-          vscode.window.showInformationMessage(
-            'Workflow Runs panel is already open'
-          );
-          // Just reveal/focus without reloading
-          WorkflowRunsPanel.reveal();
-        } else {
-          // Panel is closed - open it with 'all' actor filter
-          WorkflowRunsPanel.createOrShow(context.extensionUri, {
-            actorFilter: 'all',
-          });
-        }
+    vscode.commands.registerCommand('github-workflow-runner.showWorkflowRuns', () => {
+      // Check if panel is already open
+      if (WorkflowRunsPanel.isOpen()) {
+        // Panel is already open - just show info message and focus it
+        vscode.window.showInformationMessage('Workflow Runs panel is already open');
+        // Just reveal/focus without reloading
+        WorkflowRunsPanel.reveal();
+      } else {
+        // Panel is closed - open it with 'all' actor filter
+        WorkflowRunsPanel.createOrShow(context.extensionUri, {
+          actorFilter: 'all',
+        });
       }
-    )
+    })
   );
 
   // Hide workflow runs command
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.hide-workflow-runs',
-      () => {
-        WorkflowRunsPanel.kill();
-      }
-    )
+    vscode.commands.registerCommand('github-workflow-runner.hide-workflow-runs', () => {
+      WorkflowRunsPanel.kill();
+    })
   );
 
   // Refresh workflows command
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.refresh-workflows',
-      async () => {
-        sidebarProvider.refresh();
-        vscode.window.showInformationMessage('Workflows refreshed');
-      }
-    )
+    vscode.commands.registerCommand('github-workflow-runner.refresh-workflows', async () => {
+      sidebarProvider.refresh();
+      vscode.window.showInformationMessage('Workflows refreshed');
+    })
   );
 
   // Run last workflow command
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.run-last-workflow',
-      async () => {
-        const lastWorkflow = await Storage.getLastWorkflow();
-        if (!lastWorkflow) {
-          vscode.window.showInformationMessage(
-            'No previous workflow execution found'
-          );
-          return;
-        }
-
-        const config = getConfig();
-        const workflows = await getAllWorkflowDefinitions(
-          config.workflows.excludePatterns
-        );
-        const workflow = workflows.find(
-          (w) => w.filename === lastWorkflow.workflowFilename
-        );
-
-        if (!workflow) {
-          vscode.window.showErrorMessage(
-            `Workflow "${lastWorkflow.workflowFilename}" not found`
-          );
-          return;
-        }
-
-        // Dispatch through sidebar provider
-        sidebarProvider.dispatchLastWorkflow(workflow, lastWorkflow);
+    vscode.commands.registerCommand('github-workflow-runner.run-last-workflow', async () => {
+      const lastWorkflow = await Storage.getLastWorkflow();
+      if (!lastWorkflow) {
+        vscode.window.showInformationMessage('No previous workflow execution found');
+        return;
       }
-    )
+
+      const config = getConfig();
+      const workflows = await getAllWorkflowDefinitions(config.workflows.excludePatterns);
+      const workflow = workflows.find((w) => w.filename === lastWorkflow.workflowFilename);
+
+      if (!workflow) {
+        vscode.window.showErrorMessage(`Workflow "${lastWorkflow.workflowFilename}" not found`);
+        return;
+      }
+
+      // Dispatch through sidebar provider
+      sidebarProvider.dispatchLastWorkflow(workflow, lastWorkflow);
+    })
   );
 
   // Open settings command
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.open-settings',
-      () => {
-        vscode.commands.executeCommand(
-          'workbench.action.openSettings',
-          'githubWorkflowRunner'
-        );
-      }
-    )
+    vscode.commands.registerCommand('github-workflow-runner.open-settings', () => {
+      vscode.commands.executeCommand('workbench.action.openSettings', 'githubWorkflowRunner');
+    })
   );
 
   // Prefill dispatch command (used by WorkflowRuns panel to open sidebar with inputs)
@@ -258,9 +208,7 @@ function registerCommands(
 
           // If not ready, reset state to ensure we wait for the new webview
           if (!wasReady) {
-            console.log(
-              '[Extension] Resetting ready state (sidebar not ready)'
-            );
+            console.log('[Extension] Resetting ready state (sidebar not ready)');
             sidebarProvider.resetReadyState();
           }
 
@@ -301,93 +249,79 @@ function registerCommands(
 
   // Export data command
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.export-data',
-      async () => {
-        const data = await Storage.exportData();
-        const json = JSON.stringify(data, null, 2);
+    vscode.commands.registerCommand('github-workflow-runner.export-data', async () => {
+      const data = await Storage.exportData();
+      const json = JSON.stringify(data, null, 2);
 
-        const uri = await vscode.window.showSaveDialog({
-          defaultUri: vscode.Uri.file('workflow-runner-data.json'),
-          filters: {
-            JSON: ['json'],
-          },
-        });
+      const uri = await vscode.window.showSaveDialog({
+        defaultUri: vscode.Uri.file('workflow-runner-data.json'),
+        filters: {
+          JSON: ['json'],
+        },
+      });
 
-        if (uri) {
-          await vscode.workspace.fs.writeFile(uri, Buffer.from(json, 'utf8'));
-          vscode.window.showInformationMessage('Data exported successfully');
-        }
+      if (uri) {
+        await vscode.workspace.fs.writeFile(uri, Buffer.from(json, 'utf8'));
+        vscode.window.showInformationMessage('Data exported successfully');
       }
-    )
+    })
   );
 
   // Import data command
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.import-data',
-      async () => {
-        const uris = await vscode.window.showOpenDialog({
-          canSelectMany: false,
-          filters: {
-            JSON: ['json'],
-          },
-        });
+    vscode.commands.registerCommand('github-workflow-runner.import-data', async () => {
+      const uris = await vscode.window.showOpenDialog({
+        canSelectMany: false,
+        filters: {
+          JSON: ['json'],
+        },
+      });
 
-        if (uris && uris.length > 0) {
-          try {
-            const content = await vscode.workspace.fs.readFile(uris[0]);
-            const data = JSON.parse(content.toString());
-            await Storage.importData(data);
-            vscode.window.showInformationMessage('Data imported successfully');
-            sidebarProvider.refresh();
-          } catch (error) {
-            vscode.window.showErrorMessage(
-              `Failed to import data: ${
-                error instanceof Error ? error.message : 'Unknown error'
-              }`
-            );
-          }
+      if (uris && uris.length > 0) {
+        try {
+          const content = await vscode.workspace.fs.readFile(uris[0]);
+          const data = JSON.parse(content.toString());
+          await Storage.importData(data);
+          vscode.window.showInformationMessage('Data imported successfully');
+          sidebarProvider.refresh();
+        } catch (error) {
+          vscode.window.showErrorMessage(
+            `Failed to import data: ${error instanceof Error ? error.message : 'Unknown error'}`
+          );
         }
       }
-    )
+    })
   );
 
   // Clear all data command
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.clear-all-data',
-      async () => {
-        const choice = await vscode.window.showWarningMessage(
-          'Are you sure you want to clear all templates and history? This cannot be undone.',
-          { modal: true },
-          'Clear All',
-          'Cancel'
-        );
+    vscode.commands.registerCommand('github-workflow-runner.clear-all-data', async () => {
+      const choice = await vscode.window.showWarningMessage(
+        'Are you sure you want to clear all templates and history? This cannot be undone.',
+        { modal: true },
+        'Clear All',
+        'Cancel'
+      );
 
-        if (choice === 'Clear All') {
-          await Storage.clearAll();
-          vscode.window.showInformationMessage('All data cleared');
-          sidebarProvider.refresh();
-        }
+      if (choice === 'Clear All') {
+        await Storage.clearAll();
+        vscode.window.showInformationMessage('All data cleared');
+        sidebarProvider.refresh();
       }
-    )
+    })
   );
 
   // Show storage stats command
   context.subscriptions.push(
-    vscode.commands.registerCommand(
-      'github-workflow-runner.show-stats',
-      async () => {
-        const stats = await Storage.getStats();
-        vscode.window.showInformationMessage(
-          `Storage Stats:\n` +
-            `Templates: ${stats.templatesCount}\n` +
-            `History: ${stats.historyCount}\n` +
-            `Last Workflow: ${stats.hasLastWorkflow ? 'Yes' : 'No'}`
-        );
-      }
-    )
+    vscode.commands.registerCommand('github-workflow-runner.show-stats', async () => {
+      const stats = await Storage.getStats();
+      vscode.window.showInformationMessage(
+        `Storage Stats:\n` +
+          `Templates: ${stats.templatesCount}\n` +
+          `History: ${stats.historyCount}\n` +
+          `Last Workflow: ${stats.hasLastWorkflow ? 'Yes' : 'No'}`
+      );
+    })
   );
 }
 

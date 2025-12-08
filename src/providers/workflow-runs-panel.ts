@@ -1,44 +1,37 @@
 /**
  * Workflow Runs Panel - Main editor webview panel for displaying workflow runs
  */
-import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
-import { getNonce } from '../utils/get-nonce';
-import { TokenManager } from '../utils/token-manager';
-import { getConfig, updateConfig } from '../utils/config';
-import {
-  getRepositoryInfo,
-  getCurrentBranch,
-  branchExistsOnRemote,
-} from '../utils/git-operations';
-import { getRepositoryConfig } from '../utils/repository-config';
-import { fetchGitHubUserInfo } from '../utils/github-user';
-import { getAllWorkflowDefinitionsIncludingNonDispatch } from '../utils/workflow-parser';
-import {
-  getWorkflowRuns,
-  cancelWorkflowRun,
-  getWorkflowRunJobs,
-  downloadWorkflowRunLogs,
-  downloadWorkflowArtifacts,
-  getWorkflowRunArtifacts,
-  downloadArtifact,
-  rerunWorkflow,
-  getCurrentPullRequest,
-  getWorkflowRun,
-  getWorkflowById,
-} from '../api/workflow-monitor';
+import * as vscode from 'vscode';
 import { dispatchWorkflowWithRunId } from '../api/workflow-dispatcher';
+import {
+  cancelWorkflowRun,
+  downloadArtifact,
+  downloadWorkflowArtifacts,
+  getCurrentPullRequest,
+  getWorkflowById,
+  getWorkflowRun,
+  getWorkflowRunArtifacts,
+  getWorkflowRunJobs,
+  getWorkflowRuns,
+  rerunWorkflow
+} from '../api/workflow-monitor';
+import { getConfig } from '../utils/config';
+import { getNonce } from '../utils/get-nonce';
 import { ensureGitContextValidOrWarn } from '../utils/git-context-validation';
+import { branchExistsOnRemote, getCurrentBranch, getRepositoryInfo } from '../utils/git-operations';
+import { fetchGitHubUserInfo } from '../utils/github-user';
+import { getRepositoryConfig } from '../utils/repository-config';
+import { TokenManager } from '../utils/token-manager';
+import { getAllWorkflowDefinitionsIncludingNonDispatch } from '../utils/workflow-parser';
 
-import { Storage } from '../utils/storage';
 import AdmZip from 'adm-zip';
-import { buildLogURI } from '../utils/log-uri-scheme';
 import type { WebviewMessage, WorkflowRun } from '../types/workflow-types';
+import { buildLogURI } from '../utils/log-uri-scheme';
+import { Storage } from '../utils/storage';
 
-const AUTO_REFRESH_SECONDS_OPTIONS: number[] = [
-  0, 15, 30, 45, 60, 90, 120, 180,
-];
+const AUTO_REFRESH_SECONDS_OPTIONS: number[] = [0, 15, 30, 45, 60, 90, 120, 180];
 const DEFAULT_AUTO_REFRESH_SECONDS = 60;
 
 export class WorkflowRunsPanel {
@@ -93,9 +86,7 @@ export class WorkflowRunsPanel {
     // If no target workflow specified, just refresh
     if (!targetWorkflowName) {
       vscode.window.showInformationMessage(
-        `Loading ${
-          action === 'dispatch' ? 'workflow' : 'run'
-        } in the background...`
+        `Loading ${action === 'dispatch' ? 'workflow' : 'run'} in the background...`
       );
       await WorkflowRunsPanel.backgroundRefresh();
       return;
@@ -103,9 +94,7 @@ export class WorkflowRunsPanel {
 
     // Convert target workflow name to full path format for comparison
     // (currentWorkflowFilter uses full path like ".github/workflows/file.yml")
-    const targetWorkflowPath = targetWorkflowName.startsWith(
-      '.github/workflows/'
-    )
+    const targetWorkflowPath = targetWorkflowName.startsWith('.github/workflows/')
       ? targetWorkflowName
       : `.github/workflows/${targetWorkflowName}`;
 
@@ -121,10 +110,7 @@ export class WorkflowRunsPanel {
       await WorkflowRunsPanel.backgroundRefresh();
 
       // Check if filters might hide the run
-      const mightBeHidden = await WorkflowRunsPanel._checkIfRunMightBeHidden(
-        filterState,
-        action
-      );
+      const mightBeHidden = await WorkflowRunsPanel._checkIfRunMightBeHidden(filterState, action);
 
       if (mightBeHidden) {
         // Show filter suggestion toast
@@ -143,9 +129,7 @@ export class WorkflowRunsPanel {
         }
       } else {
         // Just show a simple message
-        vscode.window.showInformationMessage(
-          `Loading ${targetWorkflowName} in the background...`
-        );
+        vscode.window.showInformationMessage(`Loading ${targetWorkflowName} in the background...`);
       }
 
       // When actions like dispatch / rerun / view last run explicitly request an
@@ -194,12 +178,9 @@ export class WorkflowRunsPanel {
 
       if (choice === `Switch to ${workflowLabel}`) {
         // Switch to the target workflow
-        WorkflowRunsPanel.currentPanel._initialWorkflowFilter =
-          targetWorkflowName;
-        WorkflowRunsPanel.currentPanel._initialActorFilter =
-          options.actorFilter || null;
-        WorkflowRunsPanel.currentPanel._initialShowBotRuns =
-          options.showBotRuns ?? null;
+        WorkflowRunsPanel.currentPanel._initialWorkflowFilter = targetWorkflowName;
+        WorkflowRunsPanel.currentPanel._initialActorFilter = options.actorFilter || null;
+        WorkflowRunsPanel.currentPanel._initialShowBotRuns = options.showBotRuns ?? null;
         WorkflowRunsPanel.currentPanel._update();
       }
       // If cancelled (undefined choice), do nothing
@@ -223,16 +204,13 @@ export class WorkflowRunsPanel {
       WorkflowRunsPanel.currentPanel._panel.reveal(column);
       // Set the filters if provided
       if (options?.workflowName) {
-        WorkflowRunsPanel.currentPanel._initialWorkflowFilter =
-          options.workflowName;
+        WorkflowRunsPanel.currentPanel._initialWorkflowFilter = options.workflowName;
       }
       if (options?.actorFilter) {
-        WorkflowRunsPanel.currentPanel._initialActorFilter =
-          options.actorFilter;
+        WorkflowRunsPanel.currentPanel._initialActorFilter = options.actorFilter;
       }
       if (options?.showBotRuns !== undefined) {
-        WorkflowRunsPanel.currentPanel._initialShowBotRuns =
-          options.showBotRuns;
+        WorkflowRunsPanel.currentPanel._initialShowBotRuns = options.showBotRuns;
       }
       WorkflowRunsPanel.currentPanel._update();
       return;
@@ -250,11 +228,7 @@ export class WorkflowRunsPanel {
       }
     );
 
-    WorkflowRunsPanel.currentPanel = new WorkflowRunsPanel(
-      panel,
-      extensionUri,
-      options
-    );
+    WorkflowRunsPanel.currentPanel = new WorkflowRunsPanel(panel, extensionUri, options);
   }
 
   /**
@@ -323,8 +297,7 @@ export class WorkflowRunsPanel {
    */
   public static isVisible(): boolean {
     return (
-      WorkflowRunsPanel.currentPanel !== undefined &&
-      WorkflowRunsPanel.currentPanel._panel.visible
+      WorkflowRunsPanel.currentPanel !== undefined && WorkflowRunsPanel.currentPanel._panel.visible
     );
   }
 
@@ -355,16 +328,15 @@ export class WorkflowRunsPanel {
         resolve(null);
       }, 1000);
 
-      const listener =
-        WorkflowRunsPanel.currentPanel!._panel.webview.onDidReceiveMessage(
-          (message: WebviewMessage) => {
-            if (message.type === 'filterStateResponse') {
-              clearTimeout(timeout);
-              listener.dispose();
-              resolve(message.data as any);
-            }
+      const listener = WorkflowRunsPanel.currentPanel!._panel.webview.onDidReceiveMessage(
+        (message: WebviewMessage) => {
+          if (message.type === 'filterStateResponse') {
+            clearTimeout(timeout);
+            listener.dispose();
+            resolve(message.data as any);
           }
-        );
+        }
+      );
 
       WorkflowRunsPanel.currentPanel!._panel.webview.postMessage({
         type: 'getFilterState',
@@ -450,11 +422,7 @@ export class WorkflowRunsPanel {
       return;
     }
 
-    const error = await Storage.watchRun(
-      runId,
-      repoConfig.owner,
-      repoConfig.name
-    );
+    const error = await Storage.watchRun(runId, repoConfig.owner, repoConfig.name);
 
     if (error) {
       vscode.window.showErrorMessage(error);
@@ -527,11 +495,9 @@ export class WorkflowRunsPanel {
     if (this._webviewMessageListener) {
       this._webviewMessageListener.dispose();
     }
-    this._webviewMessageListener = webview.onDidReceiveMessage(
-      async (message: WebviewMessage) => {
-        await this._handleMessage(message);
-      }
-    );
+    this._webviewMessageListener = webview.onDidReceiveMessage(async (message: WebviewMessage) => {
+      await this._handleMessage(message);
+    });
   }
 
   /**
@@ -564,9 +530,7 @@ export class WorkflowRunsPanel {
         // Send initial filters if set
         if (this._initialWorkflowFilter) {
           // Convert filename to full path format (.github/workflows/filename.yml)
-          const workflowPath = this._initialWorkflowFilter.startsWith(
-            '.github/workflows/'
-          )
+          const workflowPath = this._initialWorkflowFilter.startsWith('.github/workflows/')
             ? this._initialWorkflowFilter
             : `.github/workflows/${this._initialWorkflowFilter}`;
 
@@ -637,8 +601,7 @@ export class WorkflowRunsPanel {
       }
 
       case 'updateWorkflowRunsTotalLimits': {
-        const { nonDateMaxTotalRuns, dateFilterMaxTotalRuns } = (message.data ||
-          {}) as {
+        const { nonDateMaxTotalRuns, dateFilterMaxTotalRuns } = (message.data || {}) as {
           nonDateMaxTotalRuns?: number;
           dateFilterMaxTotalRuns?: number;
         };
@@ -668,10 +631,7 @@ export class WorkflowRunsPanel {
           try {
             await Storage.updateWorkflowRunsPanelSettings(updates);
           } catch (error) {
-            console.error(
-              'Failed to persist workflow runs total limits:',
-              error
-            );
+            console.error('Failed to persist workflow runs total limits:', error);
           }
         }
         break;
@@ -703,10 +663,7 @@ export class WorkflowRunsPanel {
             autoRefreshSeconds,
           });
         } catch (error) {
-          console.error(
-            'Failed to persist Workflow Runs auto-refresh value:',
-            error
-          );
+          console.error('Failed to persist Workflow Runs auto-refresh value:', error);
         }
         break;
       }
@@ -716,10 +673,8 @@ export class WorkflowRunsPanel {
           from?: string;
           to?: string;
         };
-        const normalizedFrom =
-          typeof from === 'string' && from.trim() ? from.trim() : null;
-        const normalizedTo =
-          typeof to === 'string' && to.trim() ? to.trim() : null;
+        const normalizedFrom = typeof from === 'string' && from.trim() ? from.trim() : null;
+        const normalizedTo = typeof to === 'string' && to.trim() ? to.trim() : null;
         this._currentDateFilterFrom = normalizedFrom;
         this._currentDateFilterTo = normalizedTo;
         try {
@@ -758,15 +713,11 @@ export class WorkflowRunsPanel {
         break;
 
       case 'downloadWorkflowArtifacts':
-        await this._downloadWorkflowArtifacts(
-          message.data as { runId: number }
-        );
+        await this._downloadWorkflowArtifacts(message.data as { runId: number });
         break;
 
       case 'rerunWorkflow':
-        await this._rerunWorkflow(
-          message.data as { runId: number; failedJobsOnly?: boolean }
-        );
+        await this._rerunWorkflow(message.data as { runId: number; failedJobsOnly?: boolean });
         break;
 
       case 'promptRerunWorkflow': {
@@ -775,11 +726,7 @@ export class WorkflowRunsPanel {
           workflowName?: string;
           branch?: string;
         };
-        await this._promptRerunWorkflowWithInputCheck(
-          runId,
-          workflowName,
-          branch
-        );
+        await this._promptRerunWorkflowWithInputCheck(runId, workflowName, branch);
         break;
       }
 
@@ -812,15 +759,11 @@ export class WorkflowRunsPanel {
         break;
 
       case 'progressiveFetchRuns':
-        await this._progressiveFetchRuns(
-          message.data as { startPage: number; maxPages: number }
-        );
+        await this._progressiveFetchRuns(message.data as { startPage: number; maxPages: number });
         break;
 
       case 'viewJobLogs':
-        await this._viewJobLogs(
-          message.data as { jobId: number; jobName: string; runId: number }
-        );
+        await this._viewJobLogs(message.data as { jobId: number; jobName: string; runId: number });
         break;
 
       case 'getWorkflowRunArtifacts':
@@ -828,9 +771,7 @@ export class WorkflowRunsPanel {
         break;
 
       case 'downloadArtifact':
-        await this._downloadArtifact(
-          message.data as { artifactId: number; artifactName: string }
-        );
+        await this._downloadArtifact(message.data as { artifactId: number; artifactName: string });
         break;
 
       case 'getCurrentPR': {
@@ -853,11 +794,7 @@ export class WorkflowRunsPanel {
             });
             break;
           }
-          const prNumber = await getCurrentPullRequest(
-            repoInfo.owner,
-            repoInfo.name,
-            branch
-          );
+          const prNumber = await getCurrentPullRequest(repoInfo.owner, repoInfo.name, branch);
           this._panel.webview.postMessage({
             type: 'getCurrentPRResponse',
             success: true,
@@ -867,10 +804,7 @@ export class WorkflowRunsPanel {
           this._panel.webview.postMessage({
             type: 'getCurrentPRResponse',
             success: false,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Failed to get current PR',
+            error: error instanceof Error ? error.message : 'Failed to get current PR',
           });
         }
         break;
@@ -888,10 +822,7 @@ export class WorkflowRunsPanel {
           this._panel.webview.postMessage({
             type: 'getCurrentBranch',
             success: false,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Failed to get current branch',
+            error: error instanceof Error ? error.message : 'Failed to get current branch',
           });
         }
         break;
@@ -910,10 +841,7 @@ export class WorkflowRunsPanel {
           this._panel.webview.postMessage({
             type: 'getDefaultBranch',
             success: false,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Failed to get default branch',
+            error: error instanceof Error ? error.message : 'Failed to get default branch',
           });
         }
         break;
@@ -940,10 +868,7 @@ export class WorkflowRunsPanel {
           this._panel.webview.postMessage({
             type: 'checkBranchOnRemote',
             success: false,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Failed to check branch on remote',
+            error: error instanceof Error ? error.message : 'Failed to check branch on remote',
           });
         }
         break;
@@ -985,9 +910,7 @@ export class WorkflowRunsPanel {
       case 'getWatchedRuns': {
         const repoConfig = await getRepositoryConfig();
         if (!repoConfig) {
-          console.log(
-            '[WorkflowRunsPanel] getWatchedRuns: Repository not configured'
-          );
+          console.log('[WorkflowRunsPanel] getWatchedRuns: Repository not configured');
           this._panel.webview.postMessage({
             type: 'getWatchedRunsResponse',
             success: false,
@@ -998,10 +921,7 @@ export class WorkflowRunsPanel {
         console.log(
           `[WorkflowRunsPanel] getWatchedRuns: Fetching for ${repoConfig.owner}/${repoConfig.name}`
         );
-        const watchedRuns = await Storage.getWatchedRunsForRepo(
-          repoConfig.owner,
-          repoConfig.name
-        );
+        const watchedRuns = await Storage.getWatchedRunsForRepo(repoConfig.owner, repoConfig.name);
         console.log(
           `[WorkflowRunsPanel] getWatchedRuns: Sending ${watchedRuns.length} watched runs to webview`
         );
@@ -1032,11 +952,7 @@ export class WorkflowRunsPanel {
           break;
         }
 
-        const result = await Storage.toggleRunWatch(
-          runId,
-          repoConfig.owner,
-          repoConfig.name
-        );
+        const result = await Storage.toggleRunWatch(runId, repoConfig.owner, repoConfig.name);
 
         this._panel.webview.postMessage({
           type: 'toggleRunWatchResponse',
@@ -1059,10 +975,7 @@ export class WorkflowRunsPanel {
             break;
           }
 
-          const existing = await Storage.getWatchedRunsForRepo(
-            repoConfig.owner,
-            repoConfig.name
-          );
+          const existing = await Storage.getWatchedRunsForRepo(repoConfig.owner, repoConfig.name);
           const total = existing.length;
 
           if (total === 0) {
@@ -1088,10 +1001,7 @@ export class WorkflowRunsPanel {
             break;
           }
 
-          await Storage.clearWatchedRunsForRepo(
-            repoConfig.owner,
-            repoConfig.name
-          );
+          await Storage.clearWatchedRunsForRepo(repoConfig.owner, repoConfig.name);
 
           this._panel.webview.postMessage({
             type: 'unwatchAllRunsResponse',
@@ -1102,19 +1012,14 @@ export class WorkflowRunsPanel {
           this._panel.webview.postMessage({
             type: 'unwatchAllRunsResponse',
             success: false,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Failed to unwatch all runs',
+            error: error instanceof Error ? error.message : 'Failed to unwatch all runs',
           });
         }
         break;
       }
 
       case 'backgroundRefreshWatchedRuns': {
-        await this._backgroundRefreshWatchedRuns(
-          message.data as { watchedRunIds: number[] }
-        );
+        await this._backgroundRefreshWatchedRuns(message.data as { watchedRunIds: number[] });
         break;
       }
 
@@ -1131,9 +1036,7 @@ export class WorkflowRunsPanel {
           showBotRuns: boolean;
         };
         this._currentWorkflowFilter =
-          filterState.workflowFilter === 'all'
-            ? null
-            : filterState.workflowFilter;
+          filterState.workflowFilter === 'all' ? null : filterState.workflowFilter;
         this._currentActorFilter = filterState.actorFilter;
         this._currentShowBotRuns = filterState.showBotRuns;
         console.log('[WorkflowRunsPanel] Updated filter state:', {
@@ -1181,10 +1084,7 @@ export class WorkflowRunsPanel {
           this._panel.webview.postMessage({
             type: 'getRunParametersResponse',
             success: false,
-            error:
-              error instanceof Error
-                ? error.message
-                : 'Failed to recover run parameters',
+            error: error instanceof Error ? error.message : 'Failed to recover run parameters',
             data: { runId },
           });
         }
@@ -1232,8 +1132,7 @@ export class WorkflowRunsPanel {
       this._panel.webview.postMessage({
         type: 'getUserInfo',
         success: false,
-        error:
-          error instanceof Error ? error.message : 'Failed to get user info',
+        error: error instanceof Error ? error.message : 'Failed to get user info',
       });
     }
   }
@@ -1253,13 +1152,11 @@ export class WorkflowRunsPanel {
           : undefined;
 
       const dateFilterFrom =
-        typeof panelSettings.dateFilterFrom === 'string' &&
-        panelSettings.dateFilterFrom.trim()
+        typeof panelSettings.dateFilterFrom === 'string' && panelSettings.dateFilterFrom.trim()
           ? panelSettings.dateFilterFrom.trim()
           : null;
       const dateFilterTo =
-        typeof panelSettings.dateFilterTo === 'string' &&
-        panelSettings.dateFilterTo.trim()
+        typeof panelSettings.dateFilterTo === 'string' && panelSettings.dateFilterTo.trim()
           ? panelSettings.dateFilterTo.trim()
           : null;
 
@@ -1331,9 +1228,7 @@ export class WorkflowRunsPanel {
         type: 'initialSettings',
         success: false,
         error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to load Workflow Runs panel settings',
+          error instanceof Error ? error.message : 'Failed to load Workflow Runs panel settings',
       });
     }
   }
@@ -1345,16 +1240,11 @@ export class WorkflowRunsPanel {
     try {
       const repoConfig = await getRepositoryConfig();
       if (!repoConfig.owner || !repoConfig.name) {
-        console.log(
-          '[WorkflowRunsPanel] _sendWatchedRuns: No repository config, skipping'
-        );
+        console.log('[WorkflowRunsPanel] _sendWatchedRuns: No repository config, skipping');
         return;
       }
 
-      const watchedRunIds = await Storage.getWatchedRunsForRepo(
-        repoConfig.owner,
-        repoConfig.name
-      );
+      const watchedRunIds = await Storage.getWatchedRunsForRepo(repoConfig.owner, repoConfig.name);
 
       console.log(
         '[WorkflowRunsPanel] _sendWatchedRuns: Loaded',
@@ -1372,10 +1262,7 @@ export class WorkflowRunsPanel {
       this._panel.webview.postMessage({
         type: 'loadWatchedRuns',
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to load watched runs',
+        error: error instanceof Error ? error.message : 'Failed to load watched runs',
       });
     }
   }
@@ -1403,16 +1290,13 @@ export class WorkflowRunsPanel {
         success: true,
         data: workflows,
       });
-      console.log(
-        '[WorkflowRunsPanel] _sendWorkflows: Sent workflows to webview'
-      );
+      console.log('[WorkflowRunsPanel] _sendWorkflows: Sent workflows to webview');
     } catch (error) {
       console.error('[WorkflowRunsPanel] _sendWorkflows: Error:', error);
       this._panel.webview.postMessage({
         type: 'getWorkflows',
         success: false,
-        error:
-          error instanceof Error ? error.message : 'Failed to get workflows',
+        error: error instanceof Error ? error.message : 'Failed to get workflows',
       });
     }
   }
@@ -1424,15 +1308,12 @@ export class WorkflowRunsPanel {
     const runId = data.runId;
     try {
       // Validate Git context before any GitHub API operation
-      const isValidContext = await ensureGitContextValidOrWarn(
-        'cancelWorkflowRun'
-      );
+      const isValidContext = await ensureGitContextValidOrWarn('cancelWorkflowRun');
       if (!isValidContext) {
         this._panel.webview.postMessage({
           type: 'gitContextMismatch',
           success: false,
-          error:
-            'Repository or branch has changed. Please reload the extension data.',
+          error: 'Repository or branch has changed. Please reload the extension data.',
         });
         return;
       }
@@ -1448,11 +1329,7 @@ export class WorkflowRunsPanel {
         return;
       }
 
-      const result = await cancelWorkflowRun(
-        repoInfo.owner,
-        repoInfo.name,
-        runId
-      );
+      const result = await cancelWorkflowRun(repoInfo.owner, repoInfo.name, runId);
 
       if (result.success) {
         this._panel.webview.postMessage({
@@ -1460,9 +1337,7 @@ export class WorkflowRunsPanel {
           success: true,
           data: { runId, status: 'cancelled' },
         });
-        vscode.window.showInformationMessage(
-          '✅ Workflow run cancelled successfully'
-        );
+        vscode.window.showInformationMessage('✅ Workflow run cancelled successfully');
         // Don't do a full reload - the webview will update the run status
         // based on the cancelWorkflowRunResponse message above
       } else {
@@ -1472,22 +1347,17 @@ export class WorkflowRunsPanel {
           data: { runId },
           error: result.error || 'Failed to cancel workflow run',
         });
-        vscode.window.showErrorMessage(
-          `❌ Failed to cancel workflow run: ${result.error}`
-        );
+        vscode.window.showErrorMessage(`❌ Failed to cancel workflow run: ${result.error}`);
       }
     } catch (error) {
-      const errorMessage =
-        error instanceof Error ? error.message : 'Unknown error';
+      const errorMessage = error instanceof Error ? error.message : 'Unknown error';
       this._panel.webview.postMessage({
         type: 'cancelWorkflowRunResponse',
         success: false,
         data: { runId },
         error: errorMessage,
       });
-      vscode.window.showErrorMessage(
-        `❌ Error cancelling workflow run: ${errorMessage}`
-      );
+      vscode.window.showErrorMessage(`❌ Error cancelling workflow run: ${errorMessage}`);
     }
   }
 
@@ -1514,11 +1384,7 @@ export class WorkflowRunsPanel {
       );
 
       const { getWorkflowId } = await import('../api/workflow-dispatcher');
-      const workflowId = await getWorkflowId(
-        repoConfig.owner,
-        repoConfig.name,
-        workflowFilename
-      );
+      const workflowId = await getWorkflowId(repoConfig.owner, repoConfig.name, workflowFilename);
 
       if (workflowId) {
         this._panel.webview.postMessage({
@@ -1597,10 +1463,7 @@ export class WorkflowRunsPanel {
       }
 
       const workflowId = this._currentWorkflowId;
-      console.log(
-        '[WorkflowRunsPanel] _sendWorkflowRuns: using workflowId for fetch:',
-        workflowId
-      );
+      console.log('[WorkflowRunsPanel] _sendWorkflowRuns: using workflowId for fetch:', workflowId);
 
       const pageSize = Math.min(config.monitoring.maxRuns, 100);
 
@@ -1637,10 +1500,7 @@ export class WorkflowRunsPanel {
             localString: fromDate.toString(),
           });
         } else {
-          console.warn(
-            '[WorkflowRunsPanel] Ignoring invalid from-date filter value:',
-            rawFrom
-          );
+          console.warn('[WorkflowRunsPanel] Ignoring invalid from-date filter value:', rawFrom);
         }
       }
 
@@ -1654,10 +1514,7 @@ export class WorkflowRunsPanel {
             localString: toDate.toString(),
           });
         } else {
-          console.warn(
-            '[WorkflowRunsPanel] Ignoring invalid to-date filter value:',
-            rawTo
-          );
+          console.warn('[WorkflowRunsPanel] Ignoring invalid to-date filter value:', rawTo);
         }
       }
 
@@ -1694,15 +1551,12 @@ export class WorkflowRunsPanel {
         'runs (dateFilter active:',
         hasDateFilter,
         ', truncated:',
-        hasDateFilter &&
-          !!(result && (result as { truncated?: boolean }).truncated === true),
+        hasDateFilter && !!(result && (result as { truncated?: boolean }).truncated === true),
         ')'
       );
 
       if (result) {
-        const truncated =
-          hasDateFilter &&
-          (result as { truncated?: boolean }).truncated === true;
+        const truncated = hasDateFilter && (result as { truncated?: boolean }).truncated === true;
 
         this._panel.webview.postMessage({
           type: 'getWorkflowRuns',
@@ -1737,31 +1591,23 @@ export class WorkflowRunsPanel {
    * Fetches only the specified watched runs without showing loading indicators.
    * This is used during auto-refresh when "Watched Runs Only" filter is active.
    */
-  private async _backgroundRefreshWatchedRuns(data: {
-    watchedRunIds: number[];
-  }) {
+  private async _backgroundRefreshWatchedRuns(data: { watchedRunIds: number[] }) {
     try {
       const authenticated = await TokenManager.getGithubToken();
       if (!authenticated) {
-        console.log(
-          '[WorkflowRunsPanel] Background refresh skipped: not authenticated'
-        );
+        console.log('[WorkflowRunsPanel] Background refresh skipped: not authenticated');
         return;
       }
 
       const repoConfig = await getRepositoryConfig();
       if (!repoConfig.owner || !repoConfig.name) {
-        console.log(
-          '[WorkflowRunsPanel] Background refresh skipped: no repository config'
-        );
+        console.log('[WorkflowRunsPanel] Background refresh skipped: no repository config');
         return;
       }
 
       const { watchedRunIds } = data;
       if (!watchedRunIds || watchedRunIds.length === 0) {
-        console.log(
-          '[WorkflowRunsPanel] Background refresh skipped: no watched runs'
-        );
+        console.log('[WorkflowRunsPanel] Background refresh skipped: no watched runs');
         return;
       }
 
@@ -1778,11 +1624,7 @@ export class WorkflowRunsPanel {
 
       for (const runId of watchedRunIds) {
         try {
-          const run = await getWorkflowRun(
-            repoConfig.owner,
-            repoConfig.name,
-            runId
-          );
+          const run = await getWorkflowRun(repoConfig.owner, repoConfig.name, runId);
           if (run) {
             updatedRuns.push(run);
           }
@@ -1796,11 +1638,7 @@ export class WorkflowRunsPanel {
         }
       }
 
-      console.log(
-        '[WorkflowRunsPanel] Background refresh: fetched',
-        updatedRuns.length,
-        'runs'
-      );
+      console.log('[WorkflowRunsPanel] Background refresh: fetched', updatedRuns.length, 'runs');
 
       this._panel.webview.postMessage({
         type: 'backgroundRefreshWatchedRunsResponse',
@@ -1825,23 +1663,17 @@ export class WorkflowRunsPanel {
     try {
       const authenticated = await TokenManager.getGithubToken();
       if (!authenticated) {
-        console.log(
-          '[WorkflowRunsPanel] Background refresh all skipped: not authenticated'
-        );
+        console.log('[WorkflowRunsPanel] Background refresh all skipped: not authenticated');
         return;
       }
 
       const repoConfig = await getRepositoryConfig();
       if (!repoConfig.owner || !repoConfig.name) {
-        console.log(
-          '[WorkflowRunsPanel] Background refresh all skipped: no repository config'
-        );
+        console.log('[WorkflowRunsPanel] Background refresh all skipped: no repository config');
         return;
       }
 
-      console.log(
-        '[WorkflowRunsPanel] Background refresh all: fetching latest runs'
-      );
+      console.log('[WorkflowRunsPanel] Background refresh all: fetching latest runs');
 
       const config = getConfig();
       const workflowId = this._currentWorkflowId;
@@ -1890,9 +1722,7 @@ export class WorkflowRunsPanel {
       );
 
       if (result) {
-        const truncated =
-          hasDateFilter &&
-          (result as { truncated?: boolean }).truncated === true;
+        const truncated = hasDateFilter && (result as { truncated?: boolean }).truncated === true;
 
         this._panel.webview.postMessage({
           type: 'backgroundRefreshAllRunsResponse',
@@ -1930,9 +1760,7 @@ export class WorkflowRunsPanel {
       //
       // Solution: Parse the components and use the Date constructor with
       // individual arguments, which interprets them as local time.
-      const match = datetimeLocal.match(
-        /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/
-      );
+      const match = datetimeLocal.match(/^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})(?::(\d{2}))?$/);
       if (!match) {
         return null;
       }
@@ -1949,11 +1777,7 @@ export class WorkflowRunsPanel {
 
       return date;
     } catch (error) {
-      console.error(
-        '[WorkflowRunsPanel] Failed to parse datetime-local:',
-        datetimeLocal,
-        error
-      );
+      console.error('[WorkflowRunsPanel] Failed to parse datetime-local:', datetimeLocal, error);
       return null;
     }
   }
@@ -2024,10 +1848,7 @@ export class WorkflowRunsPanel {
     }
 
     // Hard clamp the limit to a sensible range.
-    const MAX_DATE_WINDOW_RUNS = Math.max(
-      1000,
-      Math.min(maxDateWindowRuns, 10000)
-    );
+    const MAX_DATE_WINDOW_RUNS = Math.max(1000, Math.min(maxDateWindowRuns, 10000));
     let page = 1;
     let truncated = false;
     let totalRunsScanned = 0;
@@ -2035,9 +1856,7 @@ export class WorkflowRunsPanel {
     let runsSkippedTooOld = 0;
 
     while (page <= maxPages && allRuns.length < MAX_DATE_WINDOW_RUNS) {
-      console.log(
-        `[WorkflowRunsPanel] _fetchRunsSinceDate: Fetching page ${page}...`
-      );
+      console.log(`[WorkflowRunsPanel] _fetchRunsSinceDate: Fetching page ${page}...`);
 
       // CRITICAL FIX: Pass date range to GitHub API to handle workflows with 1000+ runs/day
       // This ensures we fetch runs within the specified date range instead of just
@@ -2051,9 +1870,7 @@ export class WorkflowRunsPanel {
       });
 
       if (!pageResult) {
-        console.error(
-          '[WorkflowRunsPanel] _fetchRunsSinceDate: API returned null'
-        );
+        console.error('[WorkflowRunsPanel] _fetchRunsSinceDate: API returned null');
         return null;
       }
 
@@ -2065,9 +1882,7 @@ export class WorkflowRunsPanel {
       );
 
       if (!runs.length) {
-        console.log(
-          '[WorkflowRunsPanel] _fetchRunsSinceDate: No more runs, stopping pagination'
-        );
+        console.log('[WorkflowRunsPanel] _fetchRunsSinceDate: No more runs, stopping pagination');
         break;
       }
 
@@ -2100,15 +1915,12 @@ export class WorkflowRunsPanel {
         if (toDate && runDate > toDate) {
           runsSkippedTooNew++;
           if (runsSkippedTooNew <= 2) {
-            console.log(
-              '[WorkflowRunsPanel] _fetchRunsSinceDate: Skipping run (too new)',
-              {
-                runId: run.id,
-                runDate: runDate.toISOString(),
-                toDate: toDate.toISOString(),
-                comparison: `${runDate.toISOString()} > ${toDate.toISOString()}`,
-              }
-            );
+            console.log('[WorkflowRunsPanel] _fetchRunsSinceDate: Skipping run (too new)', {
+              runId: run.id,
+              runDate: runDate.toISOString(),
+              toDate: toDate.toISOString(),
+              comparison: `${runDate.toISOString()} > ${toDate.toISOString()}`,
+            });
           }
           continue;
         }
@@ -2118,15 +1930,12 @@ export class WorkflowRunsPanel {
         if (fromDate && runDate < fromDate) {
           runsSkippedTooOld++;
           if (runsSkippedTooOld <= 2) {
-            console.log(
-              '[WorkflowRunsPanel] _fetchRunsSinceDate: Skipping run (too old)',
-              {
-                runId: run.id,
-                runDate: runDate.toISOString(),
-                fromDate: fromDate.toISOString(),
-                comparison: `${runDate.toISOString()} < ${fromDate.toISOString()}`,
-              }
-            );
+            console.log('[WorkflowRunsPanel] _fetchRunsSinceDate: Skipping run (too old)', {
+              runId: run.id,
+              runDate: runDate.toISOString(),
+              fromDate: fromDate.toISOString(),
+              comparison: `${runDate.toISOString()} < ${fromDate.toISOString()}`,
+            });
           }
           reachedOlderThanFrom = true;
           break;
@@ -2137,35 +1946,26 @@ export class WorkflowRunsPanel {
         runsIncludedThisPage++;
 
         if (allRuns.length <= 3) {
-          console.log(
-            '[WorkflowRunsPanel] _fetchRunsSinceDate: Including run (within range)',
-            {
-              runId: run.id,
-              runDate: runDate.toISOString(),
-              fromDate: fromDate?.toISOString(),
-              toDate: toDate?.toISOString(),
-            }
-          );
+          console.log('[WorkflowRunsPanel] _fetchRunsSinceDate: Including run (within range)', {
+            runId: run.id,
+            runDate: runDate.toISOString(),
+            fromDate: fromDate?.toISOString(),
+            toDate: toDate?.toISOString(),
+          });
         }
       }
 
-      console.log(
-        `[WorkflowRunsPanel] _fetchRunsSinceDate: Page ${page} summary:`,
-        {
-          runsIncludedThisPage,
-          totalIncluded: allRuns.length,
-          reachedOlderThanFrom,
-        }
-      );
+      console.log(`[WorkflowRunsPanel] _fetchRunsSinceDate: Page ${page} summary:`, {
+        runsIncludedThisPage,
+        totalIncluded: allRuns.length,
+        reachedOlderThanFrom,
+      });
 
       if (reachedOlderThanFrom || runs.length < pageSize) {
-        console.log(
-          '[WorkflowRunsPanel] _fetchRunsSinceDate: Stopping pagination',
-          {
-            reachedOlderThanFrom,
-            lastPageWasPartial: runs.length < pageSize,
-          }
-        );
+        console.log('[WorkflowRunsPanel] _fetchRunsSinceDate: Stopping pagination', {
+          reachedOlderThanFrom,
+          lastPageWasPartial: runs.length < pageSize,
+        });
         break;
       }
 
@@ -2296,10 +2096,7 @@ export class WorkflowRunsPanel {
    * Fetches multiple pages in sequence to help client-side filtering reach
    * the desired number of matching results.
    */
-  private async _progressiveFetchRuns(data: {
-    startPage: number;
-    maxPages: number;
-  }) {
+  private async _progressiveFetchRuns(data: { startPage: number; maxPages: number }) {
     try {
       const authenticated = await TokenManager.getGithubToken();
       if (!authenticated) {
@@ -2413,11 +2210,7 @@ export class WorkflowRunsPanel {
         return;
       }
 
-      const jobs = await getWorkflowRunJobs(
-        repoInfo.owner,
-        repoInfo.name,
-        data.runId
-      );
+      const jobs = await getWorkflowRunJobs(repoInfo.owner, repoInfo.name, data.runId);
 
       this._panel.webview.postMessage({
         type: 'getWorkflowRunJobs',
@@ -2448,11 +2241,7 @@ export class WorkflowRunsPanel {
         return;
       }
 
-      const jobs = await getWorkflowRunJobs(
-        repoInfo.owner,
-        repoInfo.name,
-        data.runId
-      );
+      const jobs = await getWorkflowRunJobs(repoInfo.owner, repoInfo.name, data.runId);
 
       this._panel.webview.postMessage({
         type: 'getWorkflowRunJobs',
@@ -2473,11 +2262,7 @@ export class WorkflowRunsPanel {
    * View job logs using TextDocumentContentProvider
    * Opens logs in VSCode's native text editor
    */
-  private async _viewJobLogs(data: {
-    jobId: number;
-    jobName: string;
-    runId: number;
-  }) {
+  private async _viewJobLogs(data: { jobId: number; jobName: string; runId: number }) {
     try {
       const repoInfo = await getRepositoryInfo();
       if (!repoInfo) {
@@ -2509,9 +2294,7 @@ export class WorkflowRunsPanel {
       });
     } catch (error) {
       vscode.window.showErrorMessage(
-        `Failed to view job logs: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
+        `Failed to view job logs: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
       this._panel.webview.postMessage({
         type: 'viewJobLogsResponse',
@@ -2534,16 +2317,10 @@ export class WorkflowRunsPanel {
       }
 
       // Fetch jobs for the run
-      const jobs = await getWorkflowRunJobs(
-        repoInfo.owner,
-        repoInfo.name,
-        data.runId
-      );
+      const jobs = await getWorkflowRunJobs(repoInfo.owner, repoInfo.name, data.runId);
 
       if (jobs.length === 0) {
-        vscode.window.showInformationMessage(
-          'No jobs found for this workflow run.'
-        );
+        vscode.window.showInformationMessage('No jobs found for this workflow run.');
         return;
       }
 
@@ -2575,9 +2352,7 @@ export class WorkflowRunsPanel {
       }
     } catch (error) {
       vscode.window.showErrorMessage(
-        `Failed to view logs: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
+        `Failed to view logs: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
@@ -2597,11 +2372,7 @@ export class WorkflowRunsPanel {
         return;
       }
 
-      const artifacts = await getWorkflowRunArtifacts(
-        repoInfo.owner,
-        repoInfo.name,
-        data.runId
-      );
+      const artifacts = await getWorkflowRunArtifacts(repoInfo.owner, repoInfo.name, data.runId);
 
       this._panel.webview.postMessage({
         type: 'getWorkflowRunArtifacts',
@@ -2613,8 +2384,7 @@ export class WorkflowRunsPanel {
       this._panel.webview.postMessage({
         type: 'getWorkflowRunArtifacts',
         success: false,
-        error:
-          error instanceof Error ? error.message : 'Failed to fetch artifacts',
+        error: error instanceof Error ? error.message : 'Failed to fetch artifacts',
       });
     }
   }
@@ -2622,10 +2392,7 @@ export class WorkflowRunsPanel {
   /**
    * Download a specific artifact
    */
-  private async _downloadArtifact(data: {
-    artifactId: number;
-    artifactName: string;
-  }) {
+  private async _downloadArtifact(data: { artifactId: number; artifactName: string }) {
     try {
       const repoInfo = await getRepositoryInfo();
       if (!repoInfo) {
@@ -2648,9 +2415,7 @@ export class WorkflowRunsPanel {
           );
 
           if (!artifactData) {
-            vscode.window.showErrorMessage(
-              `Failed to download artifact "${data.artifactName}"`
-            );
+            vscode.window.showErrorMessage(`Failed to download artifact "${data.artifactName}"`);
             return;
           }
 
@@ -2664,7 +2429,6 @@ export class WorkflowRunsPanel {
           });
 
           if (saveUri) {
-            const fs = require('fs');
             fs.writeFileSync(saveUri.fsPath, Buffer.from(artifactData));
             vscode.window.showInformationMessage(
               `✅ Artifact "${data.artifactName}" downloaded successfully!`
@@ -2674,9 +2438,7 @@ export class WorkflowRunsPanel {
       );
     } catch (error) {
       vscode.window.showErrorMessage(
-        `Failed to download artifact: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
+        `Failed to download artifact: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
@@ -2692,16 +2454,10 @@ export class WorkflowRunsPanel {
         return;
       }
 
-      const artifacts = await downloadWorkflowArtifacts(
-        repoInfo.owner,
-        repoInfo.name,
-        data.runId
-      );
+      const artifacts = await downloadWorkflowArtifacts(repoInfo.owner, repoInfo.name, data.runId);
 
       if (!artifacts) {
-        vscode.window.showErrorMessage(
-          'No artifacts found or failed to download'
-        );
+        vscode.window.showErrorMessage('No artifacts found or failed to download');
         return;
       }
 
@@ -2713,9 +2469,7 @@ export class WorkflowRunsPanel {
 
       if (saveUri) {
         await vscode.workspace.fs.writeFile(saveUri, new Uint8Array(artifacts));
-        vscode.window.showInformationMessage(
-          `Artifacts saved to ${saveUri.fsPath}`
-        );
+        vscode.window.showInformationMessage(`Artifacts saved to ${saveUri.fsPath}`);
 
         this._panel.webview.postMessage({
           type: 'downloadWorkflowArtifactsResponse',
@@ -2729,17 +2483,12 @@ export class WorkflowRunsPanel {
       }
     } catch (error) {
       vscode.window.showErrorMessage(
-        `Failed to download artifacts: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
+        `Failed to download artifacts: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
       this._panel.webview.postMessage({
         type: 'downloadWorkflowArtifactsResponse',
         success: false,
-        error:
-          error instanceof Error
-            ? error.message
-            : 'Failed to download artifacts',
+        error: error instanceof Error ? error.message : 'Failed to download artifacts',
       });
     }
   }
@@ -2747,10 +2496,7 @@ export class WorkflowRunsPanel {
   /**
    * Rerun a workflow
    */
-  private async _rerunWorkflow(data: {
-    runId: number;
-    failedJobsOnly?: boolean;
-  }) {
+  private async _rerunWorkflow(data: { runId: number; failedJobsOnly?: boolean }) {
     try {
       // Validate Git context before any GitHub API operation
       const isValidContext = await ensureGitContextValidOrWarn('rerunWorkflow');
@@ -2758,8 +2504,7 @@ export class WorkflowRunsPanel {
         this._panel.webview.postMessage({
           type: 'gitContextMismatch',
           success: false,
-          error:
-            'Repository or branch has changed. Please reload the extension data.',
+          error: 'Repository or branch has changed. Please reload the extension data.',
         });
         return;
       }
@@ -2787,9 +2532,7 @@ export class WorkflowRunsPanel {
         // Refresh runs
         await this._sendWorkflowRuns();
       } else {
-        vscode.window.showErrorMessage(
-          `❌ Failed to rerun workflow: ${result.error}`
-        );
+        vscode.window.showErrorMessage(`❌ Failed to rerun workflow: ${result.error}`);
         this._panel.webview.postMessage({
           type: 'rerunWorkflowResponse',
           success: false,
@@ -2799,15 +2542,12 @@ export class WorkflowRunsPanel {
       }
     } catch (error) {
       vscode.window.showErrorMessage(
-        `❌ Error rerunning workflow: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
+        `❌ Error rerunning workflow: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
       this._panel.webview.postMessage({
         type: 'rerunWorkflowResponse',
         success: false,
-        error:
-          error instanceof Error ? error.message : 'Failed to rerun workflow',
+        error: error instanceof Error ? error.message : 'Failed to rerun workflow',
         data: { runId: data.runId },
       });
     }
@@ -2836,11 +2576,7 @@ export class WorkflowRunsPanel {
       }
 
       // Resolve workflow file path from workflow_id
-      const workflowMeta = await getWorkflowById(
-        repoInfo.owner,
-        repoInfo.name,
-        run.workflow_id
-      );
+      const workflowMeta = await getWorkflowById(repoInfo.owner, repoInfo.name, run.workflow_id);
       if (!workflowMeta || !workflowMeta.path) {
         await this._rerunWorkflow({ runId });
         return;
@@ -2849,17 +2585,11 @@ export class WorkflowRunsPanel {
       const workflowFilename = path.posix.basename(workflowMeta.path);
 
       // Get workflow definition to check if it has inputs
-      const { getWorkflowDefinition } = await import(
-        '../utils/workflow-parser'
-      );
+      const { getWorkflowDefinition } = await import('../utils/workflow-parser');
       const workflowDef = await getWorkflowDefinition(workflowFilename);
 
       // Case 3: Workflow has NO inputs → Just rerun directly
-      if (
-        !workflowDef ||
-        !workflowDef.inputs ||
-        workflowDef.inputs.length === 0
-      ) {
+      if (!workflowDef || !workflowDef.inputs || workflowDef.inputs.length === 0) {
         await this._rerunWorkflow({ runId });
         return;
       }
@@ -2928,10 +2658,7 @@ export class WorkflowRunsPanel {
           });
         }
       } catch (postError) {
-        console.error(
-          'Failed to notify webview of rerun prompt completion:',
-          postError
-        );
+        console.error('Failed to notify webview of rerun prompt completion:', postError);
       }
     }
   }
@@ -2943,10 +2670,7 @@ export class WorkflowRunsPanel {
    * reconstruct inputs for the specific run via _recoverInputsForRun(runId),
    * so its semantics match the Parameters modal.
    */
-  private async _canRecoverInputs(
-    runId: number,
-    _workflowFilename: string
-  ): Promise<boolean> {
+  private async _canRecoverInputs(runId: number, _workflowFilename: string): Promise<boolean> {
     try {
       const recovered = await this._recoverInputsForRun(runId);
       return !!recovered;
@@ -2960,18 +2684,12 @@ export class WorkflowRunsPanel {
    *
    * Delegates opening and readiness handling to the prefillDispatch command.
    */
-  private async _openSidebarForWorkflow(
-    workflowFilename: string,
-    branch?: string
-  ) {
-    await vscode.commands.executeCommand(
-      'github-workflow-runner.prefillDispatch',
-      {
-        workflowFilename,
-        branch: branch || '',
-        inputs: {},
-      }
-    );
+  private async _openSidebarForWorkflow(workflowFilename: string, branch?: string) {
+    await vscode.commands.executeCommand('github-workflow-runner.prefillDispatch', {
+      workflowFilename,
+      branch: branch || '',
+      inputs: {},
+    });
   }
 
   /**
@@ -2993,11 +2711,7 @@ export class WorkflowRunsPanel {
       }
 
       // Resolve workflow file path from workflow_id
-      const workflowMeta = await getWorkflowById(
-        repoInfo.owner,
-        repoInfo.name,
-        run.workflow_id
-      );
+      const workflowMeta = await getWorkflowById(repoInfo.owner, repoInfo.name, run.workflow_id);
       if (!workflowMeta || !workflowMeta.path) {
         await this._rerunWorkflow({ runId });
         return;
@@ -3008,15 +2722,12 @@ export class WorkflowRunsPanel {
       // Preferred path: use the same recovery logic as the Parameters modal
       const recovered = await this._recoverInputsForRun(runId);
       if (recovered) {
-        await vscode.commands.executeCommand(
-          'github-workflow-runner.prefillDispatch',
-          {
-            workflowFilename: recovered.workflowFilename,
-            branch: recovered.branch,
-            inputs: recovered.inputs,
-            runId,
-          }
-        );
+        await vscode.commands.executeCommand('github-workflow-runner.prefillDispatch', {
+          workflowFilename: recovered.workflowFilename,
+          branch: recovered.branch,
+          inputs: recovered.inputs,
+          runId,
+        });
         return;
       }
 
@@ -3024,23 +2735,18 @@ export class WorkflowRunsPanel {
       const history = await Storage.getHistoryForWorkflow(workflowFilename, 1);
       if (history && history.length > 0) {
         const latest = history[0];
-        const branch = this._normalizeBranch(
-          latest.branch || run.head_branch || ''
-        );
+        const branch = this._normalizeBranch(latest.branch || run.head_branch || '');
         const filteredInputs = await this._filterInputsForWorkflow(
           workflowFilename,
           latest.inputs || {}
         );
 
-        await vscode.commands.executeCommand(
-          'github-workflow-runner.prefillDispatch',
-          {
-            workflowFilename,
-            branch,
-            inputs: filteredInputs,
-            runId,
-          }
-        );
+        await vscode.commands.executeCommand('github-workflow-runner.prefillDispatch', {
+          workflowFilename,
+          branch,
+          inputs: filteredInputs,
+          runId,
+        });
         return;
       }
 
@@ -3070,11 +2776,7 @@ export class WorkflowRunsPanel {
       return null;
     }
 
-    const workflowMeta = await getWorkflowById(
-      repoInfo.owner,
-      repoInfo.name,
-      run.workflow_id
-    );
+    const workflowMeta = await getWorkflowById(repoInfo.owner, repoInfo.name, run.workflow_id);
     if (!workflowMeta || !workflowMeta.path) {
       return null;
     }
@@ -3082,18 +2784,14 @@ export class WorkflowRunsPanel {
 
     // Priority 1: Local persistence (match by runId to ensure per-run parameters)
     const history = await Storage.getHistoryForWorkflow(workflowFilename);
-    const matching = history.find(
-      (h) => typeof h.runId === 'number' && h.runId === runId
-    );
+    const matching = history.find((h) => typeof h.runId === 'number' && h.runId === runId);
 
     if (matching) {
       const filteredInputs = await this._filterInputsForWorkflow(
         workflowFilename,
         matching.inputs || {}
       );
-      const branch = this._normalizeBranch(
-        matching.branch || run.head_branch || ''
-      );
+      const branch = this._normalizeBranch(matching.branch || run.head_branch || '');
 
       return {
         workflowFilename,
@@ -3103,28 +2801,20 @@ export class WorkflowRunsPanel {
     }
 
     // Priority 2: Artifact-based recovery
-    const artifacts = await getWorkflowRunArtifacts(
-      repoInfo.owner,
-      repoInfo.name,
-      runId
-    );
+    const artifacts = await getWorkflowRunArtifacts(repoInfo.owner, repoInfo.name, runId);
     const pattern = await this._getArtifactPattern(workflowFilename);
     const regex = this._createPatternRegex(pattern);
-    const paramArtifact = (artifacts || []).find(
-      (a) => regex.test(a.name) && !a.expired
-    );
+    const paramArtifact = (artifacts || []).find((a) => regex.test(a.name) && !a.expired);
     if (paramArtifact) {
-      const buf = await downloadArtifact(
-        repoInfo.owner,
-        repoInfo.name,
-        paramArtifact.id
-      );
+      const buf = await downloadArtifact(repoInfo.owner, repoInfo.name, paramArtifact.id);
       if (buf) {
         try {
           const zip = new AdmZip(Buffer.from(buf));
           const entries = zip.getEntries();
           for (const entry of entries) {
-            if (entry.isDirectory) continue;
+            if (entry.isDirectory) {
+              continue;
+            }
             const lc = entry.entryName.toLowerCase();
             if (!lc.endsWith('.json')) {
               continue;
@@ -3143,8 +2833,7 @@ export class WorkflowRunsPanel {
                 extracted.inputs
               );
               const branch =
-                extracted.branchFromArtifact ??
-                this._normalizeBranch(run.head_branch || '');
+                extracted.branchFromArtifact ?? this._normalizeBranch(run.head_branch || '');
 
               return {
                 workflowFilename,
@@ -3170,22 +2859,18 @@ export class WorkflowRunsPanel {
   private async _rerunWithLatestCommit(runId: number) {
     try {
       const repoInfo = await getRepositoryInfo();
-      if (!repoInfo) return;
-
-      const recovered = await this._recoverInputsForRun(runId);
-      if (!recovered) {
-        vscode.window.showErrorMessage(
-          '❌ Could not recover inputs for this run.'
-        );
+      if (!repoInfo) {
         return;
       }
 
-      const { getWorkflowDefinition } = await import(
-        '../utils/workflow-parser'
-      );
-      const definition = await getWorkflowDefinition(
-        recovered.workflowFilename
-      );
+      const recovered = await this._recoverInputsForRun(runId);
+      if (!recovered) {
+        vscode.window.showErrorMessage('❌ Could not recover inputs for this run.');
+        return;
+      }
+
+      const { getWorkflowDefinition } = await import('../utils/workflow-parser');
+      const definition = await getWorkflowDefinition(recovered.workflowFilename);
       if (!definition) {
         vscode.window.showErrorMessage('❌ Workflow definition not found.');
         return;
@@ -3211,12 +2896,10 @@ export class WorkflowRunsPanel {
         addToWatchList = confirmation.addToWatchList;
       }
 
-      const result = await dispatchWorkflowWithRunId(
-        repoInfo.owner,
-        repoInfo.name,
-        definition,
-        { ref: recovered.branch, inputs: recovered.inputs }
-      );
+      const result = await dispatchWorkflowWithRunId(repoInfo.owner, repoInfo.name, definition, {
+        ref: recovered.branch,
+        inputs: recovered.inputs,
+      });
 
       if (!result.success) {
         return;
@@ -3238,16 +2921,12 @@ export class WorkflowRunsPanel {
           await this._addRunToWatchList(result.runId);
         }
 
-        await WorkflowRunsPanel.createOrShowForAction(
-          this._extensionUri,
-          'rerun',
-          {
-            workflowName: definition.filename, // Use filename for consistent comparison with filter
-            actorFilter: 'all', // Default to "All Users" for rerun actions
-            showBotRuns: false,
-            runId: result.runId,
-          }
-        );
+        await WorkflowRunsPanel.createOrShowForAction(this._extensionUri, 'rerun', {
+          workflowName: definition.filename, // Use filename for consistent comparison with filter
+          actorFilter: 'all', // Default to "All Users" for rerun actions
+          showBotRuns: false,
+          runId: result.runId,
+        });
         WorkflowRunsPanel.highlightRun(result.runId);
       }
     } catch (err) {
@@ -3355,9 +3034,7 @@ export class WorkflowRunsPanel {
       });
     } catch (error) {
       vscode.window.showErrorMessage(
-        `Failed to open workflow file: ${
-          error instanceof Error ? error.message : 'Unknown error'
-        }`
+        `Failed to open workflow file: ${error instanceof Error ? error.message : 'Unknown error'}`
       );
     }
   }
@@ -3365,27 +3042,16 @@ export class WorkflowRunsPanel {
   private _getHtmlForWebview(webview: vscode.Webview) {
     // Add cache-busting query parameter to force webview to reload the script
     // This is critical for ensuring timezone fixes and other updates are loaded
-    const scriptPath = vscode.Uri.joinPath(
-      this._extensionUri,
-      'dist',
-      'workflow-runs.js'
-    );
+    const scriptPath = vscode.Uri.joinPath(this._extensionUri, 'dist', 'workflow-runs.js');
     const scriptUri = webview.asWebviewUri(scriptPath);
     // Append timestamp AND random string to bust VS Code's aggressive webview caching
     // Using both timestamp and random ensures the URL is always unique
-    const cacheBuster = `${Date.now()}_${Math.random()
-      .toString(36)
-      .substring(7)}`;
+    const cacheBuster = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
     const scriptUriWithCacheBust = `${scriptUri}?v=${cacheBuster}`;
     const nonce = getNonce();
     // Load VS Code Codicons CSS from extension's node_modules
     const codiconsUri = webview.asWebviewUri(
-      vscode.Uri.joinPath(
-        this._extensionUri,
-        'media',
-        'codicons',
-        'codicon.css'
-      )
+      vscode.Uri.joinPath(this._extensionUri, 'media', 'codicons', 'codicon.css')
     );
 
     return `<!DOCTYPE html>
@@ -3486,9 +3152,7 @@ export class WorkflowRunsPanel {
     }
 
     const branchFromArtifact =
-      typeof root.ref === 'string'
-        ? this._normalizeBranch(root.ref)
-        : undefined;
+      typeof root.ref === 'string' ? this._normalizeBranch(root.ref) : undefined;
 
     return { inputs, branchFromArtifact };
   }
@@ -3523,9 +3187,7 @@ export class WorkflowRunsPanel {
     const result: Record<string, string> = {};
 
     try {
-      const { getWorkflowDefinition } = await import(
-        '../utils/workflow-parser'
-      );
+      const { getWorkflowDefinition } = await import('../utils/workflow-parser');
       const definition = await getWorkflowDefinition(workflowFilename);
 
       if (!definition?.inputs || definition.inputs.length === 0) {
@@ -3574,18 +3236,12 @@ export class WorkflowRunsPanel {
    */
   private _createPatternRegex(pattern: string): RegExp {
     // Check if it's already a regex pattern (starts with ^ or contains regex special chars)
-    if (
-      pattern.startsWith('^') ||
-      pattern.includes('.*') ||
-      pattern.includes('\\')
-    ) {
+    if (pattern.startsWith('^') || pattern.includes('.*') || pattern.includes('\\')) {
       try {
         return new RegExp(pattern, 'i');
       } catch {
         // If invalid regex, fall back to wildcard pattern
-        console.warn(
-          `Invalid regex pattern: ${pattern}, falling back to wildcard`
-        );
+        console.warn(`Invalid regex pattern: ${pattern}, falling back to wildcard`);
       }
     }
 
