@@ -3328,10 +3328,23 @@
         buildAvailableWorkflows();
         filterRuns();
 
-        // Refresh jobs for watched runs that are in-progress
+        // Refresh jobs for watched runs that are in-progress OR have just completed
+        // (to ensure job statuses are updated when a workflow finishes)
         for (const run of updatedRuns as WorkflowRun[]) {
-          if (run.status === 'in_progress' || run.status === 'queued') {
-            vscode.postMessage({ type: 'getWorkflowRunJobs', data: { runId: run.id } });
+          const runId = run.id;
+          const needsJobRefresh =
+            // Always refresh in-progress/queued runs
+            run.status === 'in_progress' ||
+            run.status === 'queued' ||
+            // Refresh completed runs if they have jobs visible (graph, jobs list, or summary)
+            (run.status === 'completed' &&
+              (showDependencyGraph.has(runId) ||
+                expandedRuns.has(runId) ||
+                showSummary.has(runId) ||
+                runJobs.has(runId)));
+
+          if (needsJobRefresh) {
+            vscode.postMessage({ type: 'getWorkflowRunJobs', data: { runId } });
           }
         }
 
@@ -3442,6 +3455,8 @@
           conclusion?: string;
           matchesActiveFilters: boolean;
         }> = [];
+        // Track runs that just completed so we can refresh their job statuses
+        const justCompletedRunIds = new Set<number>();
         const existingRunIds = new Set(runs.map((r) => r.id));
         runs = runs.map((run) => {
           if (newRunsMap.has(run.id)) {
@@ -3463,6 +3478,11 @@
               const isWorkflowStarted = run.status === 'queued' && newRun.status === 'in_progress';
               const isWorkflowCompleted =
                 run.status === 'in_progress' && newRun.status === 'completed';
+
+              // Track just-completed runs so we can refresh their job statuses
+              if (isWorkflowCompleted) {
+                justCompletedRunIds.add(run.id);
+              }
 
               if (isWorkflowStarted || isWorkflowCompleted) {
                 // Check if run matches all active filters (workflow, actor, bot)
@@ -3554,10 +3574,23 @@
 
         // Issue 8: Refresh jobs for all in-progress runs
         // This ensures the mini progress indicator and graph stay updated
+        // Also refresh jobs for runs that just completed to update final job statuses
         for (const run of runs) {
-          if (run.status === 'in_progress' || run.status === 'queued') {
-            // Refresh jobs for in-progress runs
-            vscode.postMessage({ type: 'getWorkflowRunJobs', data: { runId: run.id } });
+          const runId = run.id;
+          const needsJobRefresh =
+            // Always refresh in-progress/queued runs
+            run.status === 'in_progress' ||
+            run.status === 'queued' ||
+            // Refresh just-completed runs if they have jobs visible (graph, jobs list, or summary)
+            // or if we have cached job data that needs to be updated
+            (justCompletedRunIds.has(runId) &&
+              (showDependencyGraph.has(runId) ||
+                expandedRuns.has(runId) ||
+                showSummary.has(runId) ||
+                runJobs.has(runId)));
+
+          if (needsJobRefresh) {
+            vscode.postMessage({ type: 'getWorkflowRunJobs', data: { runId } });
           }
         }
 
@@ -3565,10 +3598,17 @@
         // (even if the run has completed, so the modal shows updated status)
         if (selectedJobForStepsModal && selectedJobRunIdForSteps) {
           const modalRunUpdated = newRunsMap.has(selectedJobRunIdForSteps);
-          // Only refresh if the run was updated and not already refreshed above
+          // Check if already refreshed above (in-progress/queued OR just-completed with visible jobs)
           const modalRun = runs.find((r) => r.id === selectedJobRunIdForSteps);
           const alreadyRefreshed =
-            modalRun && (modalRun.status === 'in_progress' || modalRun.status === 'queued');
+            modalRun &&
+            (modalRun.status === 'in_progress' ||
+              modalRun.status === 'queued' ||
+              (justCompletedRunIds.has(selectedJobRunIdForSteps) &&
+                (showDependencyGraph.has(selectedJobRunIdForSteps) ||
+                  expandedRuns.has(selectedJobRunIdForSteps) ||
+                  showSummary.has(selectedJobRunIdForSteps) ||
+                  runJobs.has(selectedJobRunIdForSteps))));
           if (modalRunUpdated && !alreadyRefreshed) {
             vscode.postMessage({
               type: 'getWorkflowRunJobs',
