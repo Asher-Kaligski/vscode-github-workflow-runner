@@ -13,19 +13,25 @@ export const LOG_SCHEME = 'workflow-runner-log';
  * @param repo Repository name
  * @param jobId Job ID
  * @param runId Workflow run ID (for context)
+ * @param stepNumber Optional step number for step-specific logs
+ * @param stepName Optional step name for step-specific logs (used for matching in logs)
  */
 export function buildLogURI(
   jobName: string,
   owner: string,
   repo: string,
   jobId: number,
-  runId: number
+  runId: number,
+  stepNumber?: number,
+  stepName?: string
 ): vscode.Uri {
-  // Format: workflow-runner-log://owner/repo/jobName?jobId=123&runId=456
+  // Format: workflow-runner-log://owner/repo/jobName?jobId=123&runId=456&step=1&stepName=...
   // jobName must not contain '/'
   const sanitizedJobName = jobName.replace(/\//g, '-');
+  const stepParam = stepNumber !== undefined ? `&step=${stepNumber}` : '';
+  const stepNameParam = stepName ? `&stepName=${encodeURIComponent(stepName)}` : '';
   return vscode.Uri.parse(
-    `${LOG_SCHEME}://${owner}/${repo}/${sanitizedJobName}?jobId=${jobId}&runId=${runId}`
+    `${LOG_SCHEME}://${owner}/${repo}/${sanitizedJobName}?jobId=${jobId}&runId=${runId}${stepParam}${stepNameParam}`
   );
 }
 
@@ -38,6 +44,8 @@ export function parseLogURI(uri: vscode.Uri): {
   jobName: string;
   jobId: number;
   runId: number;
+  stepNumber?: number;
+  stepName?: string;
 } {
   if (uri.scheme !== LOG_SCHEME) {
     throw new Error(`URI is not of log scheme: ${uri.scheme}`);
@@ -47,6 +55,8 @@ export function parseLogURI(uri: vscode.Uri): {
   const params = new URLSearchParams(uri.query);
   const jobId = params.get('jobId');
   const runId = params.get('runId');
+  const step = params.get('step');
+  const stepName = params.get('stepName');
 
   if (!jobId || !runId) {
     throw new Error('Missing jobId or runId in log URI');
@@ -63,5 +73,7 @@ export function parseLogURI(uri: vscode.Uri): {
     jobName,
     jobId: parseInt(jobId, 10),
     runId: parseInt(runId, 10),
+    stepNumber: step ? parseInt(step, 10) : undefined,
+    stepName: stepName ? decodeURIComponent(stepName) : undefined,
   };
 }

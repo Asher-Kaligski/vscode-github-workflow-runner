@@ -7,10 +7,12 @@ import * as vscode from 'vscode';
 import { dispatchWorkflowWithRunId } from '../api/workflow-dispatcher';
 import {
   cancelWorkflowRun,
+  checkJobLogsAvailable,
   downloadArtifact,
   downloadWorkflowArtifacts,
   getCurrentPullRequest,
   getWorkflowById,
+  getWorkflowJob,
   getWorkflowRun,
   getWorkflowRunArtifacts,
   getWorkflowRunJobs,
@@ -32,7 +34,7 @@ import { buildLogURI } from '../utils/log-uri-scheme';
 import { Storage } from '../utils/storage';
 
 const AUTO_REFRESH_SECONDS_OPTIONS: number[] = [0, 15, 30, 45, 60, 90, 120, 180];
-const DEFAULT_AUTO_REFRESH_SECONDS = 60;
+const DEFAULT_AUTO_REFRESH_SECONDS = 30;
 
 export class WorkflowRunsPanel {
   /**
@@ -77,6 +79,31 @@ export class WorkflowRunsPanel {
       WorkflowRunsPanel.createOrShow(extensionUri, options);
       return;
     }
+
+    // Panel exists - decide whether to focus based on action type and visibility
+    // Sidebar actions: "viewLastRun" (always focus), "dispatch" (prompt if not visible)
+    // Note: "rerun" and "cancel" are not triggered from sidebar, no special handling needed
+    const shouldAutoFocus = action === 'viewLastRun';
+    const isPanelVisible = WorkflowRunsPanel.isVisible();
+
+    if (shouldAutoFocus) {
+      // Always focus for "View Last Run" action (user explicitly wants to VIEW)
+      WorkflowRunsPanel.reveal();
+    } else if (action === 'dispatch' && !isPanelVisible) {
+      // Panel is open but not visible - ask user if they want to switch
+      vscode.window
+        .showInformationMessage(
+          'Workflow dispatched successfully. Would you like to switch to the GitHub Workflow Runs panel?',
+          'Switch to Panel',
+          'Stay Here'
+        )
+        .then((choice) => {
+          if (choice === 'Switch to Panel') {
+            WorkflowRunsPanel.reveal();
+          }
+        });
+    }
+    // If panel is already visible or action is rerun/cancel, no need to reveal or ask
 
     // Panel is open - request current filter state from webview
     const filterState = await WorkflowRunsPanel._requestFilterState();
@@ -177,11 +204,44 @@ export class WorkflowRunsPanel {
       );
 
       if (choice === `Switch to ${workflowLabel}`) {
-        // Switch to the target workflow
-        WorkflowRunsPanel.currentPanel._initialWorkflowFilter = targetWorkflowName;
-        WorkflowRunsPanel.currentPanel._initialActorFilter = options.actorFilter || null;
-        WorkflowRunsPanel.currentPanel._initialShowBotRuns = options.showBotRuns ?? null;
-        WorkflowRunsPanel.currentPanel._update();
+        // Switch to the target workflow using postMessage to preserve webview state
+        // (don't use _update() which reloads the entire HTML and destroys state)
+        const workflowPath = targetWorkflowName.startsWith('.github/workflows/')
+          ? targetWorkflowName
+          : `.github/workflows/${targetWorkflowName}`;
+
+        // Update workflow filter
+        WorkflowRunsPanel.currentPanel!._panel.webview.postMessage({
+          type: 'setWorkflowFilter',
+          success: true,
+          data: { workflowPath },
+        });
+
+        // Update actor filter if provided
+        if (options.actorFilter) {
+          WorkflowRunsPanel.currentPanel!._panel.webview.postMessage({
+            type: 'setActorFilter',
+            success: true,
+            data: { actorFilter: options.actorFilter },
+          });
+        }
+
+        // Update show bot runs filter if provided
+        if (options.showBotRuns !== undefined) {
+          WorkflowRunsPanel.currentPanel!._panel.webview.postMessage({
+            type: 'setShowBotRuns',
+            success: true,
+            data: { showBotRuns: options.showBotRuns },
+          });
+        }
+
+        // Trigger a refresh to load runs for the new workflow
+        await WorkflowRunsPanel.backgroundRefresh();
+
+        // Highlight the run if available
+        if (options.runId) {
+          WorkflowRunsPanel.highlightRun(options.runId);
+        }
       }
       // If cancelled (undefined choice), do nothing
     }
@@ -199,20 +259,42 @@ export class WorkflowRunsPanel {
       ? vscode.window.activeTextEditor.viewColumn
       : undefined;
 
-    // If we already have a panel, show it.
+    // If we already have a panel, show it and update filters via postMessage
+    // (preserves webview state - scroll position, expanded sections, etc.)
     if (WorkflowRunsPanel.currentPanel) {
       WorkflowRunsPanel.currentPanel._panel.reveal(column);
-      // Set the filters if provided
+
+      // Update filters via postMessage to preserve webview state
+      // (don't use _update() which reloads the entire HTML and destroys state)
       if (options?.workflowName) {
-        WorkflowRunsPanel.currentPanel._initialWorkflowFilter = options.workflowName;
+        const workflowPath = options.workflowName.startsWith('.github/workflows/')
+          ? options.workflowName
+          : `.github/workflows/${options.workflowName}`;
+        WorkflowRunsPanel.currentPanel._panel.webview.postMessage({
+          type: 'setWorkflowFilter',
+          success: true,
+          data: { workflowPath },
+        });
       }
       if (options?.actorFilter) {
-        WorkflowRunsPanel.currentPanel._initialActorFilter = options.actorFilter;
+        WorkflowRunsPanel.currentPanel._panel.webview.postMessage({
+          type: 'setActorFilter',
+          success: true,
+          data: { actorFilter: options.actorFilter },
+        });
       }
       if (options?.showBotRuns !== undefined) {
-        WorkflowRunsPanel.currentPanel._initialShowBotRuns = options.showBotRuns;
+        WorkflowRunsPanel.currentPanel._panel.webview.postMessage({
+          type: 'setShowBotRuns',
+          success: true,
+          data: { showBotRuns: options.showBotRuns },
+        });
       }
-      WorkflowRunsPanel.currentPanel._update();
+
+      // Trigger a background refresh if any filters were updated
+      if (options?.workflowName || options?.actorFilter || options?.showBotRuns !== undefined) {
+        WorkflowRunsPanel.backgroundRefresh();
+      }
       return;
     }
 
@@ -225,6 +307,8 @@ export class WorkflowRunsPanel {
         enableScripts: true,
         // Allow loading bundled JS (dist) and static assets like Codicons (media)
         localResourceRoots: [extensionUri],
+        // Preserve webview state when hidden (scroll position, expanded runs, filters, etc.)
+        retainContextWhenHidden: true,
       }
     );
 
@@ -457,15 +541,18 @@ export class WorkflowRunsPanel {
     // Listen for when the panel is disposed
     this._panel.onDidDispose(() => this.dispose(), null, this._disposables);
 
-    // Listen for visibility changes to stop auto-refresh when panel is not visible
+    // Listen for visibility changes to stop/restore auto-refresh
     this._panel.onDidChangeViewState(
-      (e) => {
+      async (e) => {
         if (!e.webviewPanel.visible) {
           // Panel is no longer visible, stop auto-refresh
           this._panel.webview.postMessage({
             type: 'stopAutoRefresh',
             success: true,
           });
+        } else {
+          // Panel became visible again, restore persisted auto-refresh setting
+          await this._sendRestoreAutoRefresh();
         }
       },
       null,
@@ -668,6 +755,35 @@ export class WorkflowRunsPanel {
         break;
       }
 
+      case 'updateNotificationSettings': {
+        const { showWorkflowToastNotifications, showProgressIndicators } = (message.data || {}) as {
+          showWorkflowToastNotifications?: boolean;
+          showProgressIndicators?: boolean;
+        };
+
+        // Build update object with only provided values
+        const updates: {
+          showWorkflowToastNotifications?: boolean;
+          showProgressIndicators?: boolean;
+        } = {};
+
+        if (typeof showWorkflowToastNotifications === 'boolean') {
+          updates.showWorkflowToastNotifications = showWorkflowToastNotifications;
+        }
+        if (typeof showProgressIndicators === 'boolean') {
+          updates.showProgressIndicators = showProgressIndicators;
+        }
+
+        if (Object.keys(updates).length > 0) {
+          try {
+            await Storage.updateWorkflowRunsPanelSettings(updates);
+          } catch (error) {
+            console.error('Failed to persist notification settings:', error);
+          }
+        }
+        break;
+      }
+
       case 'updateDateFilter': {
         const { from, to } = (message.data || {}) as {
           from?: string;
@@ -706,6 +822,10 @@ export class WorkflowRunsPanel {
 
       case 'getWorkflowRunJobs':
         await this._sendWorkflowRunJobs(message.data as { runId: number });
+        break;
+
+      case 'getJobDependencies':
+        await this._sendJobDependencies(message.data as { runId: number; workflowPath: string });
         break;
 
       case 'viewWorkflowRunLogs':
@@ -759,12 +879,37 @@ export class WorkflowRunsPanel {
         break;
 
       case 'progressiveFetchRuns':
-        await this._progressiveFetchRuns(message.data as { startPage: number; maxPages: number });
+        await this._progressiveFetchRuns(
+          message.data as { startPage: number; maxPages: number; generation?: number }
+        );
         break;
 
       case 'viewJobLogs':
         await this._viewJobLogs(message.data as { jobId: number; jobName: string; runId: number });
         break;
+
+      case 'checkJobLogsAvailability':
+        await this._checkJobLogsAvailability(
+          message.data as { jobId: number; jobName: string; runId: number }
+        );
+        break;
+
+      case 'getJobDetails':
+        await this._getJobDetails(message.data as { jobId: number; runId: number });
+        break;
+
+      // TODO: Step logs temporarily disabled due to extraction issues
+      // case 'viewStepLogs':
+      //   await this._viewStepLogs(
+      //     message.data as {
+      //       jobId: number;
+      //       jobName: string;
+      //       runId: number;
+      //       stepNumber: number;
+      //       stepName: string;
+      //     }
+      //   );
+      //   break;
 
       case 'getWorkflowRunArtifacts':
         await this._getWorkflowRunArtifacts(message.data as { runId: number });
@@ -1187,6 +1332,16 @@ export class WorkflowRunsPanel {
           ? persistedAutoRefreshSeconds
           : DEFAULT_AUTO_REFRESH_SECONDS;
 
+      // Extract notification settings with defaults (true if not set)
+      const showWorkflowToastNotifications =
+        typeof panelSettings.showWorkflowToastNotifications === 'boolean'
+          ? panelSettings.showWorkflowToastNotifications
+          : true;
+      const showProgressIndicators =
+        typeof panelSettings.showProgressIndicators === 'boolean'
+          ? panelSettings.showProgressIndicators
+          : true;
+
       // CRITICAL FIX: Do NOT apply persisted date filters to the initial load.
       // Date filters from previous sessions can prevent any runs from being
       // fetched if the date range has no matching runs. Instead, always start
@@ -1205,6 +1360,8 @@ export class WorkflowRunsPanel {
           nonDateMaxTotalRuns,
           dateFilterMaxTotalRuns,
           autoRefreshSeconds,
+          showWorkflowToastNotifications,
+          showProgressIndicators,
         }
       );
 
@@ -1220,6 +1377,8 @@ export class WorkflowRunsPanel {
           dateFilterTo: null,
           nonDateMaxTotalRuns,
           dateFilterMaxTotalRuns,
+          showWorkflowToastNotifications,
+          showProgressIndicators,
         },
       });
     } catch (error) {
@@ -1229,6 +1388,50 @@ export class WorkflowRunsPanel {
         success: false,
         error:
           error instanceof Error ? error.message : 'Failed to load Workflow Runs panel settings',
+      });
+    }
+  }
+
+  /**
+   * Send restore auto-refresh message when panel becomes visible again.
+   * This retrieves the persisted auto-refresh setting and tells the webview
+   * to resume auto-refresh with the correct interval.
+   */
+  private async _sendRestoreAutoRefresh() {
+    try {
+      const panelSettings = await Storage.getWorkflowRunsPanelSettings();
+
+      const persistedAutoRefreshSeconds =
+        typeof panelSettings.autoRefreshSeconds === 'number' &&
+        Number.isFinite(panelSettings.autoRefreshSeconds) &&
+        panelSettings.autoRefreshSeconds >= 0
+          ? panelSettings.autoRefreshSeconds
+          : undefined;
+
+      const autoRefreshSeconds =
+        typeof persistedAutoRefreshSeconds === 'number' &&
+        AUTO_REFRESH_SECONDS_OPTIONS.includes(persistedAutoRefreshSeconds)
+          ? persistedAutoRefreshSeconds
+          : DEFAULT_AUTO_REFRESH_SECONDS;
+
+      console.log(
+        '[WorkflowRunsPanel] _sendRestoreAutoRefresh: Restoring auto-refresh to',
+        autoRefreshSeconds,
+        'seconds'
+      );
+
+      this._panel.webview.postMessage({
+        type: 'restoreAutoRefresh',
+        success: true,
+        data: { autoRefreshSeconds },
+      });
+    } catch (error) {
+      console.error('Failed to restore auto-refresh setting:', error);
+      // If we can't load the persisted setting, restore with default
+      this._panel.webview.postMessage({
+        type: 'restoreAutoRefresh',
+        success: true,
+        data: { autoRefreshSeconds: DEFAULT_AUTO_REFRESH_SECONDS },
       });
     }
   }
@@ -1447,19 +1650,28 @@ export class WorkflowRunsPanel {
 
       const config = getConfig();
 
-      // Only update the stored workflow ID when we receive an explicit numeric ID.
-      if (
-        options &&
-        typeof options.workflowId === 'number' &&
-        Number.isFinite(options.workflowId)
-      ) {
-        console.log(
-          '[WorkflowRunsPanel] _sendWorkflowRuns: updating _currentWorkflowId from',
-          this._currentWorkflowId,
-          'to',
-          options.workflowId
-        );
-        this._currentWorkflowId = options.workflowId;
+      // Update the stored workflow ID based on the options:
+      // - If options.workflowId is a valid number, store it (specific workflow)
+      // - If options is provided but workflowId is undefined/null, clear it (all workflows)
+      // - If options is not provided, keep the current stored value (refresh/background)
+      if (options) {
+        if (typeof options.workflowId === 'number' && Number.isFinite(options.workflowId)) {
+          console.log(
+            '[WorkflowRunsPanel] _sendWorkflowRuns: updating _currentWorkflowId from',
+            this._currentWorkflowId,
+            'to',
+            options.workflowId
+          );
+          this._currentWorkflowId = options.workflowId;
+        } else if (options.workflowId === undefined || options.workflowId === null) {
+          // Explicitly clearing the workflow filter - request for "all workflows"
+          console.log(
+            '[WorkflowRunsPanel] _sendWorkflowRuns: clearing _currentWorkflowId (was:',
+            this._currentWorkflowId,
+            ')'
+          );
+          this._currentWorkflowId = undefined;
+        }
       }
 
       const workflowId = this._currentWorkflowId;
@@ -1568,6 +1780,8 @@ export class WorkflowRunsPanel {
             perPage: config.monitoring.maxRuns,
             repository: { owner: repoConfig.owner, name: repoConfig.name },
             truncated,
+            // Include workflowId so webview can identify workflow-specific vs all-runs responses
+            workflowId: workflowId || null,
           },
         });
       } else {
@@ -2096,7 +2310,14 @@ export class WorkflowRunsPanel {
    * Fetches multiple pages in sequence to help client-side filtering reach
    * the desired number of matching results.
    */
-  private async _progressiveFetchRuns(data: { startPage: number; maxPages: number }) {
+  private async _progressiveFetchRuns(data: {
+    startPage: number;
+    maxPages: number;
+    generation?: number;
+  }) {
+    // Capture generation to pass back in response for stale detection
+    const generation = data.generation;
+
     try {
       const authenticated = await TokenManager.getGithubToken();
       if (!authenticated) {
@@ -2104,6 +2325,7 @@ export class WorkflowRunsPanel {
           type: 'progressiveFetchRunsResponse',
           success: false,
           error: 'Not authenticated',
+          data: { generation },
         });
         return;
       }
@@ -2114,6 +2336,7 @@ export class WorkflowRunsPanel {
           type: 'progressiveFetchRunsResponse',
           success: false,
           error: 'Could not get repository information',
+          data: { generation },
         });
         return;
       }
@@ -2183,6 +2406,7 @@ export class WorkflowRunsPanel {
           runs: allRuns,
           fetchedPages: currentPage - data.startPage,
           repository: { owner: repoConfig.owner, name: repoConfig.name },
+          generation,
         },
       });
     } catch (error) {
@@ -2191,6 +2415,7 @@ export class WorkflowRunsPanel {
         type: 'progressiveFetchRunsResponse',
         success: false,
         error: 'An error occurred during progressive fetch',
+        data: { generation },
       });
     }
   }
@@ -2222,6 +2447,48 @@ export class WorkflowRunsPanel {
         type: 'getWorkflowRunJobs',
         success: false,
         error: error instanceof Error ? error.message : 'Failed to fetch jobs',
+      });
+    }
+  }
+
+  /**
+   * Send job dependencies to webview for graph visualization
+   * Combines runtime job data from API with dependency info from YAML
+   */
+  private async _sendJobDependencies(data: { runId: number; workflowPath: string }) {
+    try {
+      const repoInfo = await getRepositoryInfo();
+      if (!repoInfo) {
+        this._panel.webview.postMessage({
+          type: 'getJobDependenciesResponse',
+          success: false,
+          error: 'Could not get repository information',
+        });
+        return;
+      }
+
+      // Get runtime jobs from GitHub API
+      const jobs = await getWorkflowRunJobs(repoInfo.owner, repoInfo.name, data.runId);
+
+      // Parse job dependencies from workflow YAML
+      const { parseJobDependencies } = await import('../utils/workflow-parser');
+      const jobDefinitions = await parseJobDependencies(data.workflowPath);
+
+      this._panel.webview.postMessage({
+        type: 'getJobDependenciesResponse',
+        success: true,
+        data: {
+          runId: data.runId,
+          jobs: jobs || [],
+          jobDefinitions,
+        },
+      });
+    } catch (error) {
+      console.error('Error fetching job dependencies:', error);
+      this._panel.webview.postMessage({
+        type: 'getJobDependenciesResponse',
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to fetch job dependencies',
       });
     }
   }
@@ -2261,12 +2528,31 @@ export class WorkflowRunsPanel {
   /**
    * View job logs using TextDocumentContentProvider
    * Opens logs in VSCode's native text editor
+   * Checks if logs are available first to provide user-friendly error messages
    */
   private async _viewJobLogs(data: { jobId: number; jobName: string; runId: number }) {
     try {
       const repoInfo = await getRepositoryInfo();
       if (!repoInfo) {
         vscode.window.showErrorMessage('Could not get repository information');
+        return;
+      }
+
+      // Check if logs are available before attempting to open
+      const availability = await checkJobLogsAvailable(repoInfo.owner, repoInfo.name, data.jobId);
+
+      if (!availability.available) {
+        // Show user-friendly message instead of opening a tab that will fail
+        const reason = availability.reason || 'The job has not completed yet.';
+        vscode.window.showInformationMessage(
+          `Logs are not yet available for "${data.jobName}". ${reason} You can try viewing individual step logs if the job has started.`
+        );
+        this._panel.webview.postMessage({
+          type: 'viewJobLogsResponse',
+          success: false,
+          error: 'Logs not available',
+          data: { jobId: data.jobId, available: false, reason },
+        });
         return;
       }
 
@@ -2281,6 +2567,7 @@ export class WorkflowRunsPanel {
 
       // Open the log document in VSCode's text editor
       const doc = await vscode.workspace.openTextDocument(logUri);
+
       await vscode.window.showTextDocument(doc, {
         preview: true,
         preserveFocus: false,
@@ -2300,6 +2587,171 @@ export class WorkflowRunsPanel {
         type: 'viewJobLogsResponse',
         success: false,
         error: error instanceof Error ? error.message : 'Failed to view logs',
+      });
+    }
+  }
+
+  /**
+   * Check if job logs are available before attempting to display them
+   * Returns availability status to allow webview to show appropriate loading/message
+   */
+  private async _checkJobLogsAvailability(data: { jobId: number; jobName: string; runId: number }) {
+    try {
+      const repoInfo = await getRepositoryInfo();
+      if (!repoInfo) {
+        this._panel.webview.postMessage({
+          type: 'checkJobLogsAvailabilityResponse',
+          success: false,
+          error: 'Could not get repository information',
+          data: { jobId: data.jobId },
+        });
+        return;
+      }
+
+      const result = await checkJobLogsAvailable(repoInfo.owner, repoInfo.name, data.jobId);
+
+      this._panel.webview.postMessage({
+        type: 'checkJobLogsAvailabilityResponse',
+        success: true,
+        data: {
+          jobId: data.jobId,
+          available: result.available,
+          reason: result.reason,
+        },
+      });
+    } catch (error) {
+      this._panel.webview.postMessage({
+        type: 'checkJobLogsAvailabilityResponse',
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to check logs availability',
+        data: { jobId: data.jobId },
+      });
+    }
+  }
+
+  /**
+   * Get detailed job information including current steps
+   * Used to fetch steps for running jobs
+   */
+  private async _getJobDetails(data: { jobId: number; runId: number }) {
+    try {
+      const repoInfo = await getRepositoryInfo();
+      if (!repoInfo) {
+        this._panel.webview.postMessage({
+          type: 'getJobDetailsResponse',
+          success: false,
+          error: 'Could not get repository information',
+          data: { jobId: data.jobId },
+        });
+        return;
+      }
+
+      const job = await getWorkflowJob(repoInfo.owner, repoInfo.name, data.jobId);
+
+      if (job) {
+        this._panel.webview.postMessage({
+          type: 'getJobDetailsResponse',
+          success: true,
+          data: { jobId: data.jobId, job },
+        });
+      } else {
+        this._panel.webview.postMessage({
+          type: 'getJobDetailsResponse',
+          success: false,
+          error: 'Job not found',
+          data: { jobId: data.jobId },
+        });
+      }
+    } catch (error) {
+      this._panel.webview.postMessage({
+        type: 'getJobDetailsResponse',
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to fetch job details',
+        data: { jobId: data.jobId },
+      });
+    }
+  }
+
+  /**
+   * View logs for a specific step within a job
+   * Fetches the job logs and extracts the section for the specified step
+   */
+  private async _viewStepLogs(data: {
+    jobId: number;
+    jobName: string;
+    runId: number;
+    stepNumber: number;
+    stepName: string;
+  }) {
+    try {
+      const repoInfo = await getRepositoryInfo();
+      if (!repoInfo) {
+        vscode.window.showErrorMessage('Could not get repository information');
+        this._panel.webview.postMessage({
+          type: 'viewStepLogsResponse',
+          success: false,
+          error: 'Could not get repository information',
+          data: { jobId: data.jobId, stepNumber: data.stepNumber },
+        });
+        return;
+      }
+
+      // Check if job logs are available before attempting to open step logs
+      // Step logs are extracted from job logs, so job logs must be available first
+      const availability = await checkJobLogsAvailable(repoInfo.owner, repoInfo.name, data.jobId);
+
+      if (!availability.available) {
+        // Show user-friendly message instead of opening a tab that will fail
+        const reason = availability.reason || 'The job logs are not yet generated.';
+        vscode.window.showInformationMessage(
+          `Logs for step "${data.stepName}" are not yet available. ${reason}`
+        );
+        this._panel.webview.postMessage({
+          type: 'viewStepLogsResponse',
+          success: false,
+          error: 'Step logs not yet available',
+          data: { jobId: data.jobId, stepNumber: data.stepNumber, available: false },
+        });
+        return;
+      }
+
+      // Build log URI with step number and step name as query parameters
+      // The log document provider will handle extracting the step-specific logs
+      // Step name is crucial for accurate log extraction since GitHub Actions logs
+      // contain internal groups that are NOT user-defined steps
+      const logUri = buildLogURI(
+        `${data.jobName} - Step ${data.stepNumber}: ${data.stepName}`,
+        repoInfo.owner,
+        repoInfo.name,
+        data.jobId,
+        data.runId,
+        data.stepNumber,
+        data.stepName
+      );
+
+      // Open the log document in VSCode's text editor
+      const doc = await vscode.workspace.openTextDocument(logUri);
+
+      await vscode.window.showTextDocument(doc, {
+        preview: true,
+        preserveFocus: false,
+        viewColumn: vscode.ViewColumn.One,
+      });
+
+      this._panel.webview.postMessage({
+        type: 'viewStepLogsResponse',
+        success: true,
+        data: { jobId: data.jobId, stepNumber: data.stepNumber, opened: true },
+      });
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Failed to view step logs: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      this._panel.webview.postMessage({
+        type: 'viewStepLogsResponse',
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to view step logs',
+        data: { jobId: data.jobId, stepNumber: data.stepNumber },
       });
     }
   }

@@ -4,7 +4,17 @@
    */
   import { onMount, onDestroy, tick } from 'svelte';
   import { fade, slide, fly } from 'svelte/transition';
-  import type { WorkflowRun, WorkflowJob, CancellationState } from '../src/types/workflow-types';
+  import type {
+    WorkflowRun,
+    WorkflowJob,
+    CancellationState,
+    WorkflowJobDefinition,
+    JobGraphNode,
+  } from '../src/types/workflow-types';
+  import JobDependencyGraph from './components/JobDependencyGraph.svelte';
+  import JobStepsModal from './components/JobStepsModal.svelte';
+  import JobGraphModal from './components/JobGraphModal.svelte';
+  import { formatDuration as formatMs } from './utils/graph-utils';
 
   // Debug: Log immediately when script runs
   console.log('[WorkflowRuns] Script block executing...');
@@ -51,7 +61,7 @@
   const AUTO_REFRESH_SECONDS_OPTIONS: number[] = [0, 15, 30, 45, 60, 90, 120, 180];
   const DEFAULT_MAX_TOTAL_RUNS = 2000;
   const DEFAULT_WORKFLOW_LOAD_LIMIT = 20;
-  const DEFAULT_AUTO_REFRESH_SECONDS = 60;
+  const DEFAULT_AUTO_REFRESH_SECONDS = 30;
 
   let runs: WorkflowRun[] = [];
   let filteredRuns: WorkflowRun[] = [];
@@ -71,6 +81,7 @@
   let statusFilter = 'all';
   let refreshing = false;
   let showRefreshSettings = false;
+  let settingsActiveTab: 'general' | 'notifications' = 'general'; // Active tab in settings dropdown
   let totalCount = 0; // Total number of runs available (server-side count)
   let currentPage = 1; // Current client-side page over filteredRuns
   let loadingMore = false; // Loading more runs from the backend via an explicit user action
@@ -78,14 +89,23 @@
   let dateFilterFrom = ''; // Date/time filter: show runs from this point onwards (empty = no filter)
   let dateFilterTo = ''; // Date/time filter: show runs up to this point (empty = no upper bound)
 
+  // Notification settings
+  let showWorkflowToastNotifications = true; // Show toast notifications for workflow run events (start, complete, fail)
+  let showProgressIndicators = true; // Show inline job progress for running workflows
+
   let fetchingDateFilteredRuns = false; // True while backend is fetching runs for an active date filter
   let dateFilterTruncated = false; // True when the backend truncated date-filtered results due to pagination limits
   // Backend pagination state: which GitHub API page to request next when loading
   // additional runs. This is intentionally decoupled from the client-side
   // currentPage used for paginating over filteredRuns.
   let nextBackendPage: number | null = null;
+  // When progressive fetching is paused due to hitting the max limit, store the
+  // page number here so we can resume if the user increases the limit.
+  let pausedBackendPage: number | null = null;
   let smartSuggestions: string[] = [];
   let progressiveFetching = false; // True while progressive fetching is in progress
+  let showFetchingIndicator = false; // Delayed visibility for background fetch indicator (prevents flashing)
+  let fetchingIndicatorTimeout: ReturnType<typeof setTimeout> | null = null;
   let totalRunsFetched = 0; // Total number of runs fetched so far (for progressive loading limits)
   let DATE_FILTER_MAX_TOTAL_RUNS = DEFAULT_MAX_TOTAL_RUNS; // Max runs to fetch when a date filter is active
   let NON_DATE_MAX_TOTAL_RUNS = DEFAULT_MAX_TOTAL_RUNS; // Max runs to fetch when no date filter is active
@@ -100,6 +120,20 @@
   // Track initial filter messages to avoid double-loading perception
   let waitingForInitialFilters = false; // True when we're waiting for initial filter messages after getWorkflowRuns
   let initialFilterTimeout: number | null = null; // Timeout to finalize initial load if filter messages don't arrive
+
+  // Track when we're manually switching workflows (user interaction, not initial load)
+  // This bypasses the 500ms filter message wait since no filter messages are expected
+  let isManualWorkflowFetch = false;
+  // Track the expected workflowId for the pending manual workflow fetch
+  // This is used to ignore stale responses from webviewReady/other sources
+  let pendingWorkflowId: number | null | 'all' = null;
+
+  // Timeout ID for scheduled progressive fetch - allows cancellation when switching workflows
+  let progressiveFetchTimeoutId: number | null = null;
+  // Debounce timeout ID for workflow switches to prevent rapid-fire requests
+  let workflowSwitchDebounceId: number | null = null;
+  // Counter to track workflow switch generation - used to ignore stale progressive fetch callbacks
+  let workflowSwitchGeneration = 0;
 
   // Default to "All Users" so the initial render matches the common entry points
   // (View Workflow Runs / View Last Run / Dispatch / Rerun) which all request
@@ -134,7 +168,9 @@
   let workflowSearchQuery = ''; // Search query for workflow filter dropdown
   let isWorkflowSearchActive = false; // Whether the current workflowSearchQuery should be treated as an active search filter
   let workflowDropdownOpen = false; // Whether workflow filter dropdown is open
-  let filtersExpanded = false; // Whether the "Applied Filters" section is expanded
+  let filtersExpanded = true; // Whether the "Applied Filters" section is expanded (default: expanded)
+  let userManuallyToggledFilters = false; // Whether user manually toggled filters (prevents auto-collapse override)
+  let isScrolled = false; // Whether user has scrolled down (for auto-collapse and sticky shadow)
   let showWatchedRunsModal = false; // Whether the watched runs management modal is open
   const MAX_WATCHED_RUNS_PER_REPO = 20; // Maximum watched runs per repository
   let rerunLoadingRunIds: Set<number> = new Set(); // Track which runs have rerun buttons in loading state
@@ -169,6 +205,53 @@
     window.setTimeout(() => {
       toasts = toasts.filter((t) => t.id !== id);
     }, ms);
+  }
+
+  /**
+   * Clear all toasts immediately.
+   * Called when switching workflows to prevent stale notifications from showing.
+   */
+  function clearAllToasts() {
+    toasts = [];
+  }
+
+  /**
+   * Cancel all pending operations when switching workflows.
+   * This prevents race conditions and resource exhaustion from rapid workflow switches.
+   */
+  function cancelPendingOperations() {
+    // Cancel pending progressive fetch timeout
+    if (progressiveFetchTimeoutId !== null) {
+      window.clearTimeout(progressiveFetchTimeoutId);
+      progressiveFetchTimeoutId = null;
+    }
+
+    // Cancel pending workflow switch debounce
+    if (workflowSwitchDebounceId !== null) {
+      window.clearTimeout(workflowSwitchDebounceId);
+      workflowSwitchDebounceId = null;
+    }
+
+    // Cancel pending initial filter timeout
+    if (initialFilterTimeout !== null) {
+      window.clearTimeout(initialFilterTimeout);
+      initialFilterTimeout = null;
+    }
+
+    // Reset progressive fetching state
+    progressiveFetching = false;
+
+    // Increment generation to invalidate any in-flight progressive fetch callbacks
+    workflowSwitchGeneration++;
+  }
+
+  /**
+   * Clear all status change indicators.
+   * Called when switching workflows to prevent stale inline status messages.
+   */
+  function clearStatusChanges() {
+    statusChanges.clear();
+    statusChanges = statusChanges; // Trigger reactivity
   }
 
   function getToastIcon(t: ToastType): string {
@@ -247,6 +330,12 @@
     markedWorkflows.includes(w.path)
   ).length;
 
+  // Reactive: Reset "Favorites Only" filter when no favorites are available
+  // This prevents the checkbox from being checked but disabled
+  $: if (availableMarkedWorkflowsCount === 0 && showFavoritesOnly) {
+    showFavoritesOnly = false;
+  }
+
   // Reactive: Active filter labels for display
   // Explicitly depend on all filter variables AND filteredRuns to ensure updates
   $: activeFilterLabels = getActiveFilterLabels(
@@ -271,6 +360,30 @@
     if (workflowFilter !== previousWorkflowFilter) {
       currentPage = 1;
       previousWorkflowFilter = workflowFilter;
+    }
+  }
+
+  // Track previous username to detect changes
+  let previousCurrentUsername = '';
+
+  // Reactive: Re-apply filters when currentUsername changes while actorFilter is 'me'.
+  // This fixes an intermittent bug where the "My Runs" filter fails to work correctly
+  // when the user changes to "My Runs" before the getUserInfo response arrives.
+  // Without this, if currentUsername is empty when filterRuns() is called, the actor
+  // filter is skipped, and subsequent updates to currentUsername don't trigger re-filtering.
+  $: {
+    if (currentUsername !== previousCurrentUsername) {
+      previousCurrentUsername = currentUsername;
+      // Only re-filter if we have runs loaded and actor filter is set to 'me'
+      // This ensures we update the display when username becomes available
+      if (runs.length > 0 && actorFilter === 'me' && currentUsername) {
+        console.log(
+          '[WorkflowRuns] currentUsername changed to',
+          currentUsername,
+          '- re-applying filters for My Runs'
+        );
+        filterRuns();
+      }
     }
   }
 
@@ -324,6 +437,61 @@
     });
   }
 
+  // Reactive: Manage delayed visibility for background fetch indicator
+  // This prevents the indicator from flashing for brief fetches (< 300ms)
+  // and ensures smooth transitions when fetching starts/stops
+  const FETCH_INDICATOR_SHOW_DELAY = 300; // ms before showing indicator
+  const FETCH_INDICATOR_HIDE_DELAY = 200; // ms before hiding indicator (prevents flicker)
+
+  /**
+   * Handle changes to progressiveFetching state by showing/hiding the indicator
+   * with appropriate delays to prevent flicker.
+   */
+  function handleProgressiveFetchingChange(isFetching: boolean) {
+    if (fetchingIndicatorTimeout) {
+      clearTimeout(fetchingIndicatorTimeout);
+      fetchingIndicatorTimeout = null;
+    }
+
+    if (isFetching) {
+      // When fetching starts, delay showing the indicator
+      fetchingIndicatorTimeout = setTimeout(() => {
+        showFetchingIndicator = true;
+        fetchingIndicatorTimeout = null;
+      }, FETCH_INDICATOR_SHOW_DELAY);
+    } else {
+      // When fetching stops, delay hiding to prevent flicker
+      fetchingIndicatorTimeout = setTimeout(() => {
+        showFetchingIndicator = false;
+        fetchingIndicatorTimeout = null;
+      }, FETCH_INDICATOR_HIDE_DELAY);
+    }
+  }
+
+  // React to progressiveFetching changes
+  $: handleProgressiveFetchingChange(progressiveFetching);
+
+  // Reactive: Track if progressive fetching is active or will resume shortly.
+  // This is computed reactively to ensure the UI updates when any of the
+  // underlying state changes (progressiveFetching, nextBackendPage, runs,
+  // totalCount, totalRunsFetched, showWatchedOnly, loading, filteredRuns, etc.)
+  $: isSearchingForRuns = computeIsSearchingForRuns(
+    progressiveFetching,
+    nextBackendPage,
+    runs,
+    totalCount,
+    totalRunsFetched,
+    showWatchedOnly,
+    loading,
+    filteredRuns,
+    workflowLoadLimit,
+    currentPage,
+    dateFilterFrom,
+    dateFilterTo,
+    DATE_FILTER_MAX_TOTAL_RUNS,
+    NON_DATE_MAX_TOTAL_RUNS
+  );
+
   // Reactive: Current page number for display
   // Explicitly depend on filteredRuns to ensure updates
   $: currentPageNumber = getCurrentPage(filteredRuns, workflowLoadLimit, currentPage);
@@ -341,6 +509,11 @@
   let expandedRuns = new Set<number>(); // Set of expanded run IDs
   let runJobs = new Map<number, WorkflowJob[]>(); // Map of run ID to jobs
   let loadingJobs = new Set<number>(); // Set of run IDs currently loading jobs
+
+  // Job dependency graph state
+  let runJobDefinitions = new Map<number, WorkflowJobDefinition[]>(); // Map of run ID to job definitions
+  let loadingJobDependencies = new Set<number>(); // Set of run IDs currently loading job dependencies
+  let showDependencyGraph = new Set<number>(); // Set of run IDs with graph visible
 
   // Artifacts state
   let runArtifacts = new Map<number, any[]>(); // Map of run ID to artifacts
@@ -376,6 +549,17 @@
   let dispatchConfirmBranch: string | null = null;
   let dispatchConfirmInputs: Record<string, unknown> = {};
 
+  // Job steps modal state (for jobs list view)
+  let selectedJobForStepsModal: JobGraphNode | null = null;
+  let selectedJobRunIdForSteps: number | null = null;
+  let loadingJobSteps: Set<number> = new Set(); // Track jobs currently loading steps
+  let loadingJobLogs: Set<number> = new Set(); // Track jobs currently checking logs availability
+  let loadingStepLogs: Map<string, boolean> = new Map(); // Track steps currently loading logs (key: jobId-stepNumber)
+
+  // Job graph modal state (full screen view)
+  let showJobGraphModal = false;
+  let jobGraphModalRunId: number | null = null;
+
   function formatParameterValue(value: unknown): string {
     if (value === null || value === undefined) {
       return '';
@@ -403,6 +587,31 @@
   // Map of workflow path -> cache
   let workflowRunsCache: Map<string, WorkflowRunsCache> = new Map();
   const CACHE_EXPIRATION_MS = 3 * 60 * 1000; // 3 minutes
+
+  // Scroll threshold (pixels) after which Active Filters auto-collapses
+  const SCROLL_THRESHOLD = 50;
+
+  /**
+   * Handle scroll events for smart Active Filters auto-collapse.
+   * - When scrolled past threshold: auto-collapse filters (unless user manually toggled)
+   * - When scrolled back to top: reset manual toggle flag and expand filters
+   */
+  function handleScroll() {
+    const scrollTop = window.scrollY || document.documentElement.scrollTop;
+    const wasScrolled = isScrolled;
+    isScrolled = scrollTop > SCROLL_THRESHOLD;
+
+    // When scrolling down past threshold: auto-collapse if user hasn't manually toggled
+    if (isScrolled && !wasScrolled && !userManuallyToggledFilters) {
+      filtersExpanded = false;
+    }
+
+    // When scrolling back to top: reset manual toggle flag and expand filters
+    if (!isScrolled && wasScrolled) {
+      userManuallyToggledFilters = false;
+      filtersExpanded = true;
+    }
+  }
 
   onMount(() => {
     // Check cache first for current workflow filter
@@ -441,6 +650,9 @@
     // Listen for clicks outside workflow dropdown
     window.addEventListener('click', handleWorkflowDropdownClickOutside);
 
+    // Listen for scroll events (for smart Active Filters auto-collapse)
+    window.addEventListener('scroll', handleScroll, { passive: true });
+
     // Start auto-refresh if enabled
     startAutoRefresh();
 
@@ -450,6 +662,7 @@
     return () => {
       window.removeEventListener('message', handleMessage);
       window.removeEventListener('click', handleWorkflowDropdownClickOutside);
+      window.removeEventListener('scroll', handleScroll);
       stopAutoRefresh();
     };
   });
@@ -554,6 +767,21 @@
       data: { autoRefreshSeconds: seconds },
     });
   }
+
+  /**
+   * Update notification settings and persist to extension storage.
+   * Call this function whenever any notification checkbox is toggled.
+   */
+  function updateNotificationSettings() {
+    vscode.postMessage({
+      type: 'updateNotificationSettings',
+      data: {
+        showWorkflowToastNotifications,
+        showProgressIndicators,
+      },
+    });
+  }
+
   /**
    * Update the max number of workflow runs shown per page and notify the extension host.
    *
@@ -843,6 +1071,8 @@
 
   /**
    * Update the non-date (no date filter) maximum total run cap and persist it.
+   * If the new limit is higher than totalRunsFetched and we have a paused page,
+   * resume progressive fetching.
    */
   function updateNonDateMaxTotalRuns(limit: number) {
     if (!Number.isFinite(limit) || limit <= 0) {
@@ -859,11 +1089,16 @@
       },
     });
 
-    scheduleProgressiveFetchIfNeeded();
+    // If we're not in date filter mode, check if we can resume fetching
+    if (!hasActiveDateFilter()) {
+      resumeProgressiveFetchingIfNeeded();
+    }
   }
 
   /**
    * Update the date-filtered maximum total run cap and persist it.
+   * If the new limit is higher than totalRunsFetched and we have a paused page,
+   * resume progressive fetching.
    */
   function updateDateFilterMaxTotalRuns(limit: number) {
     if (!Number.isFinite(limit) || limit <= 0) {
@@ -880,9 +1115,27 @@
       },
     });
 
+    // If we're in date filter mode, check if we can resume fetching
     if (hasActiveDateFilter()) {
-      scheduleProgressiveFetchIfNeeded();
+      resumeProgressiveFetchingIfNeeded();
     }
+  }
+
+  /**
+   * Check if progressive fetching was paused due to hitting the limit and can
+   * now resume because the limit was increased. If so, restore nextBackendPage
+   * from pausedBackendPage and trigger progressive fetching.
+   */
+  function resumeProgressiveFetchingIfNeeded() {
+    // If we have a paused page and the new limit allows more fetching, resume
+    if (pausedBackendPage !== null && totalRunsFetched < getMaxTotalRuns() && hasMoreRuns()) {
+      // Restore the paused page so progressive fetching can continue
+      nextBackendPage = pausedBackendPage;
+      pausedBackendPage = null;
+      // Clear the truncation flag since we're resuming
+      dateFilterTruncated = false;
+    }
+    scheduleProgressiveFetchIfNeeded();
   }
 
   function handleNonDateMaxTotalRunsSliderChange(event: Event) {
@@ -967,27 +1220,36 @@
       data: {
         startPage: nextBackendPage,
         maxPages: pagesToFetch,
+        // Include generation so we can detect stale responses
+        generation: workflowSwitchGeneration,
       },
     });
   }
 
   /**
    * Toggle expansion of the "Applied Filters" summary section.
+   * Marks userManuallyToggledFilters=true so auto-collapse respects user's choice.
    */
   function toggleFiltersExpanded() {
     filtersExpanded = !filtersExpanded;
+    userManuallyToggledFilters = true;
   }
 
   /**
    * Toggle run expansion to show/hide jobs
+   * Closes other sections (Graph, Artifacts, Summary) when opening
    */
   function toggleRunExpansion(runId: number) {
     if (expandedRuns.has(runId)) {
       expandedRuns.delete(runId);
       expandedRuns = expandedRuns; // Trigger reactivity
     } else {
-      // When opening jobs, close artifacts and summary for this run so that
-      // only one section (Jobs, Artifacts, or Summary) is expanded at a time.
+      // When opening jobs, close other sections so that
+      // only one section (Graph, Jobs, Artifacts, or Summary) is expanded at a time.
+      if (showDependencyGraph.has(runId)) {
+        showDependencyGraph.delete(runId);
+        showDependencyGraph = showDependencyGraph; // Trigger reactivity
+      }
       if (showArtifacts.has(runId)) {
         showArtifacts.delete(runId);
         showArtifacts = showArtifacts; // Trigger reactivity
@@ -1011,6 +1273,68 @@
   }
 
   /**
+   * Toggle job dependency graph visibility
+   * Fetches job definitions from workflow YAML if not already loaded
+   * Closes other sections (Jobs, Artifacts, Summary) when opening
+   */
+  function toggleDependencyGraph(run: WorkflowRun) {
+    const runId = run.id;
+
+    if (showDependencyGraph.has(runId)) {
+      showDependencyGraph.delete(runId);
+      showDependencyGraph = showDependencyGraph; // Trigger reactivity
+    } else {
+      // Close other sections when opening graph
+      if (expandedRuns.has(runId)) {
+        expandedRuns.delete(runId);
+        expandedRuns = expandedRuns; // Trigger reactivity
+      }
+      if (showArtifacts.has(runId)) {
+        showArtifacts.delete(runId);
+        showArtifacts = showArtifacts; // Trigger reactivity
+      }
+      if (showSummary.has(runId)) {
+        showSummary.delete(runId);
+        showSummary = showSummary; // Trigger reactivity
+      }
+
+      showDependencyGraph.add(runId);
+      showDependencyGraph = showDependencyGraph; // Trigger reactivity
+
+      // Fetch job dependencies if not already loaded
+      if (!runJobDefinitions.has(runId) && !loadingJobDependencies.has(runId)) {
+        loadingJobDependencies.add(runId);
+        loadingJobDependencies = loadingJobDependencies; // Trigger reactivity
+
+        // Extract workflow path from run.path (format: ".github/workflows/filename.yml")
+        const workflowPath = run.path?.split('@')[0] || '';
+
+        vscode.postMessage({
+          type: 'getJobDependencies',
+          data: { runId, workflowPath },
+        });
+
+        // Also fetch jobs if not already loaded
+        if (!runJobs.has(runId) && !loadingJobs.has(runId)) {
+          loadingJobs.add(runId);
+          loadingJobs = loadingJobs; // Trigger reactivity
+          vscode.postMessage({ type: 'getWorkflowRunJobs', data: { runId } });
+        }
+      }
+    }
+  }
+
+  /**
+   * Handle click on a job node in the dependency graph
+   * Opens the job logs
+   */
+  function handleGraphJobClick(node: JobGraphNode, runId: number) {
+    if (node.jobId) {
+      viewJobLogs(node.jobId, node.name, runId);
+    }
+  }
+
+  /**
    * View job logs
    */
   function viewJobLogs(jobId: number, jobName: string, runId: number) {
@@ -1028,6 +1352,137 @@
       type: 'viewJobLogs',
       data: { jobId, jobName, runId },
     });
+  }
+
+  /**
+   * View logs for a specific step within a job
+   */
+  function viewStepLogs(
+    jobId: number,
+    jobName: string,
+    runId: number,
+    stepNumber: number,
+    stepName: string
+  ) {
+    // Track loading state
+    const key = `${jobId}-${stepNumber}`;
+    loadingStepLogs.set(key, true);
+    loadingStepLogs = loadingStepLogs; // Trigger reactivity
+
+    // Pause auto-refresh briefly to avoid disruptive refresh when a new tab opens
+    autoRefreshPaused = true;
+    stopAutoRefresh();
+    window.setTimeout(() => {
+      autoRefreshPaused = false;
+      if (autoRefreshSeconds > 0) {
+        startAutoRefresh();
+      }
+    }, 30_000);
+
+    vscode.postMessage({
+      type: 'viewStepLogs',
+      data: { jobId, jobName, runId, stepNumber, stepName },
+    });
+  }
+
+  /**
+   * Get loading state for a specific step's logs
+   */
+  function getStepLogsLoadingSet(jobId: number | undefined): Set<number> {
+    if (jobId === undefined) return new Set();
+    const result = new Set<number>();
+    loadingStepLogs.forEach((_, key) => {
+      const [keyJobId, stepNum] = key.split('-').map(Number);
+      if (keyJobId === jobId) {
+        result.add(stepNum);
+      }
+    });
+    return result;
+  }
+
+  /**
+   * Open job steps modal from jobs list
+   * Converts WorkflowJob to JobGraphNode format for the modal
+   * For running jobs, fetches the latest steps from the API
+   */
+  function openJobStepsModal(job: WorkflowJob, runId: number) {
+    // Don't show steps for queued jobs (they haven't started yet)
+    if (job.status === 'queued') {
+      return;
+    }
+
+    // For completed jobs with steps, show immediately
+    if (job.status === 'completed' && job.steps && job.steps.length > 0) {
+      showJobStepsModalWithData(job, runId);
+      return;
+    }
+
+    // For running jobs or jobs without steps data, fetch from API
+    if (job.status === 'in_progress' || !job.steps || job.steps.length === 0) {
+      loadingJobSteps.add(job.id);
+      loadingJobSteps = loadingJobSteps; // Trigger reactivity
+
+      // Set the runId so the response handler knows which run this is for
+      selectedJobRunIdForSteps = runId;
+
+      vscode.postMessage({
+        type: 'getJobDetails',
+        data: { jobId: job.id, runId },
+      });
+      return;
+    }
+
+    // Fallback: show with available data
+    showJobStepsModalWithData(job, runId);
+  }
+
+  /**
+   * Helper to display job steps modal with job data
+   */
+  function showJobStepsModalWithData(job: WorkflowJob, runId: number) {
+    const duration =
+      job.started_at && job.completed_at
+        ? new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()
+        : job.started_at
+          ? Date.now() - new Date(job.started_at).getTime()
+          : undefined;
+
+    selectedJobForStepsModal = {
+      id: job.name,
+      name: job.name,
+      status: job.status,
+      conclusion: job.conclusion || undefined,
+      position: { x: 0, y: 0 },
+      dependencies: [],
+      jobId: job.id,
+      steps: job.steps || [],
+      duration,
+    };
+    selectedJobRunIdForSteps = runId;
+  }
+
+  /**
+   * Close job steps modal
+   */
+  function closeJobStepsModal() {
+    selectedJobForStepsModal = null;
+    selectedJobRunIdForSteps = null;
+  }
+
+  /**
+   * Open job graph modal for a specific run
+   */
+  function openJobGraphModal(runId: number) {
+    jobGraphModalRunId = runId;
+    showJobGraphModal = true;
+  }
+
+  /**
+   * Close job graph modal
+   */
+  function closeJobGraphModal() {
+    showJobGraphModal = false;
+    jobGraphModalRunId = null;
   }
 
   /**
@@ -1132,30 +1587,6 @@
   }
 
   /**
-   * Build GitHub branch URL
-   */
-  function getBranchUrl(branch: string): string | null {
-    if (!repository) {
-      return null;
-    }
-    return `https://github.com/${repository.owner}/${repository.name}/tree/${branch}`;
-  }
-
-  /**
-   * Open branch on GitHub
-   */
-  function openBranch(branch: string, event: Event) {
-    event.stopPropagation();
-    const url = getBranchUrl(branch);
-    if (url) {
-      vscode.postMessage({
-        type: 'openWorkflowRun',
-        data: url,
-      });
-    }
-  }
-
-  /**
    * Format file size
    */
   function formatFileSize(bytes: number): string {
@@ -1249,9 +1680,27 @@
   <li><strong>Watched Runs Only:</strong> When enabled, shows <em>only</em> runs you have explicitly marked as watched (using the Watch/Watching button on each run) and ignores all other filters (actor, workflow, date, status, search, favorites, and bot visibility). Only watched runs that exist in the currently loaded dataset can be shown.</li>
 </ul>
 
+<h4>📊 Job Dependencies Graph</h4>
+<ul>
+  <li><strong>Graph Button:</strong> Click the <strong>Graph</strong> button on any run to visualize job dependencies. This is also the default view when clicking on a run.</li>
+  <li><strong>Visual Layout:</strong> Jobs are displayed in a horizontal left-to-right layout showing execution stages. Connected lines indicate dependencies between jobs.</li>
+  <li><strong>Job Status:</strong> Each job node shows its current status with color-coded icons:
+    <ul>
+      <li><span style="color: #2ea043;">●</span> Success – job completed successfully</li>
+      <li><span style="color: #f85149;">●</span> Failure – job failed</li>
+      <li><span style="color: #d29922;">●</span> In Progress – job is currently running (animated)</li>
+      <li><span style="color: #8b949e;">●</span> Queued/Skipped – job is waiting or was skipped</li>
+    </ul>
+  </li>
+  <li><strong>Matrix Jobs:</strong> Jobs using matrix strategies are grouped together. Click the group header to expand and see individual matrix job variants.</li>
+  <li><strong>Click a Job:</strong> Click on any job node to view its step details in a modal. You can also view the full job logs by clicking the "View Logs" button.</li>
+  <li><strong>Full Screen:</strong> Click the expand icon in the top-right corner of the graph to open it in a full-screen modal for better visibility of complex workflows.</li>
+  <li><strong>Real-Time Updates:</strong> For in-progress runs, the graph updates automatically as jobs start and complete.</li>
+</ul>
+
 <h4>⚡ Run Actions</h4>
 <ul>
-  <li><strong>Click Run:</strong> Expand or collapse the run to show its Jobs, Artifacts, and Summary sections and action buttons.</li>
+  <li><strong>Click Run:</strong> Opens the job dependencies graph view (default). Use the action buttons to switch to Jobs list, Artifacts, or Summary views.</li>
   <li><strong><span class="codicon codicon-debug-restart"></span> Rerun:</strong> Rerun the workflow. When inputs are available, you'll be prompted to reuse or edit them.</li>
   <li><strong><span class="codicon codicon-debug-restart"></span> Rerun Failed:</strong> Only rerun jobs that failed for this run (available when the run conclusion is Failed).</li>
   <li><strong><span class="codicon codicon-circle-slash"></span> Cancel:</strong> Cancel a running workflow (In Progress or Queued).</li>
@@ -1261,6 +1710,14 @@
   <li><strong><span class="codicon codicon-eye"></span> View:</strong> Open the run in your browser on GitHub.</li>
   <li><strong><span class="codicon codicon-watch"></span> Watch/Watching:</strong> Mark runs for tracking (they appear when "Watched Runs Only" is enabled).</li>
   <li><strong><span class="codicon codicon-file-code"></span> View File:</strong> Open the workflow YAML file in the editor.</li>
+</ul>
+
+<h4>🔔 Notification Settings</h4>
+<ul>
+  <li>Click the <span class="codicon codicon-gear"></span> settings button and select the <strong>Notifications</strong> tab to customize notification behavior.</li>
+  <li><strong>Workflow Toast Notifications:</strong> Show toast messages in the top-right corner when workflows start, complete, or fail.</li>
+  <li><strong>Progress Indicators:</strong> Show inline progress (e.g., "2/5 jobs completed") on in-progress workflow runs.</li>
+  <li>All notification settings are persisted across sessions.</li>
 </ul>
 
 <h4>⭐ Workflow Favorites</h4>
@@ -1276,14 +1733,15 @@
   <li>To see all runs you've marked as watched, regardless of who triggered them or when they ran, enable <strong>Watched Runs Only</strong>. Other filters are ignored.</li>
   <li>To focus on your recent successful runs for a single workflow, select that workflow, set <strong>Status</strong> to <strong>Success</strong>, choose <strong>My Runs</strong>, and optionally apply a date range in settings.</li>
   <li>To view only runs from your most important workflows, mark them as favorites in the workflow dropdown and enable <strong>Favorites Only</strong>.</li>
+  <li>To understand why a workflow failed, click the run to open the <strong>Graph</strong> view, then click on the failed job to see its step details and identify which step caused the failure.</li>
 </ul>
 
-	<h4>🔄 Auto-Refresh</h4>
-	<ul>
-	  <li>Click the <span class="codicon codicon-gear"></span> settings button next to the Refresh button to configure auto-refresh.</li>
-	  <li>Use the slider to choose intervals such as Off, 15s, 30s, 45s, 1min, 1.5min, 2min, or 3min.</li>
-	  <li>Auto-refresh pauses when viewing external resources.</li>
-	</ul>
+<h4>🔄 Auto-Refresh</h4>
+<ul>
+  <li>Click the <span class="codicon codicon-gear"></span> settings button next to the Refresh button to configure auto-refresh.</li>
+  <li>Use the slider to choose intervals such as Off, 15s, 30s, 45s, 1min, 1.5min, 2min, or 3min.</li>
+  <li>Auto-refresh pauses when viewing external resources.</li>
+</ul>
 
 	`.trim();
     showHelpModal = true;
@@ -1425,13 +1883,21 @@
   /**
    * Request runs for a specific workflow, ensuring we scope by workflow_id so the
    * backend can persist it for subsequent operations (for example, date filters).
+   * Uses debouncing to prevent overwhelming the backend with rapid workflow switches.
    */
   function requestRunsForWorkflow(workflow: { path: string; name: string; filename: string }) {
+    // Cancel all pending operations from previous workflow switch
+    cancelPendingOperations();
+
     // Try to find workflow_id from existing runs for this workflow
     const matchingRun = runs.find((run) => {
       const runPath = run.path.split('@')[0];
       return runPath === workflow.path;
     });
+
+    // Clear notifications from previous workflow to prevent stale notifications
+    clearAllToasts();
+    clearStatusChanges();
 
     // Show a loading state while fetching runs for the selected workflow
     runs = [];
@@ -1439,29 +1905,40 @@
     smartSuggestions = [];
     loading = true;
 
-    if (matchingRun) {
-      // Found a matching run, use its workflow_id to fetch runs
-      console.log(
-        '[WorkflowRuns] Found workflow_id from existing run:',
-        workflow.name,
-        'workflow_id:',
-        matchingRun.workflow_id
-      );
-      vscode.postMessage({
-        type: 'getWorkflowRuns',
-        data: { workflowId: matchingRun.workflow_id },
-      });
-    } else {
-      // No matching run found, request workflow ID from backend
-      console.log(
-        '[WorkflowRuns] No existing run found, requesting workflow ID for:',
-        workflow.filename
-      );
-      vscode.postMessage({
-        type: 'getWorkflowId',
-        data: { workflowFilename: workflow.filename },
-      });
-    }
+    // Mark this as a manual workflow fetch to skip the filter message wait
+    isManualWorkflowFetch = true;
+
+    // Debounce the actual request to prevent rapid-fire API calls
+    workflowSwitchDebounceId = window.setTimeout(() => {
+      workflowSwitchDebounceId = null;
+
+      if (matchingRun) {
+        // Found a matching run, use its workflow_id to fetch runs
+        console.log(
+          '[WorkflowRuns] Found workflow_id from existing run:',
+          workflow.name,
+          'workflow_id:',
+          matchingRun.workflow_id
+        );
+        // Track the expected workflowId to ignore stale responses
+        pendingWorkflowId = matchingRun.workflow_id;
+        vscode.postMessage({
+          type: 'getWorkflowRuns',
+          data: { workflowId: matchingRun.workflow_id },
+        });
+      } else {
+        // No matching run found, request workflow ID from backend
+        // pendingWorkflowId will be set when we get the workflow ID response
+        console.log(
+          '[WorkflowRuns] No existing run found, requesting workflow ID for:',
+          workflow.filename
+        );
+        vscode.postMessage({
+          type: 'getWorkflowId',
+          data: { workflowFilename: workflow.filename },
+        });
+      }
+    }, 150); // 150ms debounce for rapid workflow switches
   }
 
   /**
@@ -1480,10 +1957,17 @@
    * Clear workflow filter
    */
   function clearWorkflowFilter() {
+    // Cancel all pending operations from previous workflow
+    cancelPendingOperations();
+
     workflowFilter = 'all';
     workflowSearchQuery = '';
     isWorkflowSearchActive = false;
     workflowDropdownOpen = false;
+
+    // Clear notifications from previous workflow to prevent stale notifications
+    clearAllToasts();
+    clearStatusChanges();
 
     // Show a loading state while fetching runs without a workflow filter
     runs = [];
@@ -1491,8 +1975,17 @@
     smartSuggestions = [];
     loading = true;
 
-    // Request all runs (no workflow filter)
-    vscode.postMessage({ type: 'getWorkflowRuns' });
+    // Mark this as a manual workflow fetch to skip the filter message wait
+    isManualWorkflowFetch = true;
+    // Track that we're expecting "all" runs (no workflow filter)
+    pendingWorkflowId = 'all';
+
+    // Debounce the actual request to prevent rapid-fire API calls
+    workflowSwitchDebounceId = window.setTimeout(() => {
+      workflowSwitchDebounceId = null;
+      // Request all runs (no workflow filter)
+      vscode.postMessage({ type: 'getWorkflowRuns' });
+    }, 150); // 150ms debounce for rapid workflow switches
   }
 
   /**
@@ -1573,6 +2066,12 @@
     if (watchedRuns.has(runId)) {
       watchedRuns.delete(runId);
       nowWatched = false;
+
+      // When the last watch is removed, reset the "Watched Runs Only" filter
+      // to prevent the checkbox from being checked but disabled
+      if (watchedRuns.size === 0 && showWatchedOnly) {
+        showWatchedOnly = false;
+      }
     } else {
       // Check if we've reached the maximum limit (20 runs per repository)
       const MAX_WATCHED_RUNS_PER_REPO = 20;
@@ -1870,6 +2369,31 @@
   }
 
   /**
+   * Auto-load jobs for in-progress runs to show mini progress indicator.
+   * This provides immediate visibility into running workflows without expanding the graph.
+   */
+  function autoLoadJobsForInProgressRuns() {
+    const inProgressRuns = runs.filter(
+      (run) => run.status === 'in_progress' || run.status === 'queued'
+    );
+
+    if (inProgressRuns.length === 0) {
+      return;
+    }
+
+    console.log('[WorkflowRuns] Auto-loading jobs for', inProgressRuns.length, 'in-progress runs');
+
+    // Load jobs for all in-progress runs so mini progress indicator can show them
+    for (const run of inProgressRuns) {
+      if (!runJobs.has(run.id) && !loadingJobs.has(run.id)) {
+        loadingJobs.add(run.id);
+        loadingJobs = loadingJobs; // Trigger reactivity
+        vscode.postMessage({ type: 'getWorkflowRunJobs', data: { runId: run.id } });
+      }
+    }
+  }
+
+  /**
    * Finalize initial load by applying filters and clearing loading state.
    * This is called after all initial filter messages have been received,
    * or after a timeout to prevent indefinite waiting.
@@ -1897,6 +2421,9 @@
     filterRuns();
     loading = false;
     refreshing = false;
+
+    // Auto-load jobs for in-progress runs to show mini progress indicator (Issue 5)
+    autoLoadJobsForInProgressRuns();
   }
 
   /**
@@ -1938,6 +2465,8 @@
           dateFilterTo?: string | null;
           nonDateMaxTotalRuns?: number;
           dateFilterMaxTotalRuns?: number;
+          showWorkflowToastNotifications?: boolean;
+          showProgressIndicators?: boolean;
         };
 
         const {
@@ -1947,6 +2476,8 @@
           dateFilterTo: savedTo,
           nonDateMaxTotalRuns: savedNonDateMaxTotalRuns,
           dateFilterMaxTotalRuns: savedDateFilterMaxTotalRuns,
+          showWorkflowToastNotifications: savedWorkflowToast,
+          showProgressIndicators: savedProgress,
         } = settings;
 
         if (typeof savedLimit === 'number' && Number.isFinite(savedLimit) && savedLimit > 0) {
@@ -1990,6 +2521,11 @@
         autoRefreshIndex = getAutoRefreshOptionIndex(autoRefreshSeconds);
         startAutoRefresh();
 
+        // Initialize notification settings (default to true if not set)
+        showWorkflowToastNotifications =
+          typeof savedWorkflowToast === 'boolean' ? savedWorkflowToast : true;
+        showProgressIndicators = typeof savedProgress === 'boolean' ? savedProgress : true;
+
         dateFilterFrom = savedFrom ?? '';
         dateFilterTo = savedTo ?? '';
 
@@ -2003,6 +2539,31 @@
       const newRuns = message.data?.runs || [];
       totalCount = message.data?.totalCount || 0;
       repository = message.data?.repository || null;
+      const responseWorkflowId = message.data?.workflowId ?? null;
+
+      // Check if this is a stale response that should be ignored
+      // This happens when we're waiting for a workflow-specific response but
+      // a response from webviewReady (with all runs) arrives first
+      if (isManualWorkflowFetch && pendingWorkflowId !== null) {
+        const pendingIsAll = pendingWorkflowId === 'all';
+        const responseIsAll = responseWorkflowId === null;
+
+        // Only accept the response if it matches what we're expecting
+        if (
+          pendingIsAll !== responseIsAll ||
+          (!pendingIsAll && pendingWorkflowId !== responseWorkflowId)
+        ) {
+          console.log(
+            '[WorkflowRuns] Ignoring stale getWorkflowRuns response:',
+            'expected workflowId:',
+            pendingWorkflowId,
+            'received workflowId:',
+            responseWorkflowId
+          );
+          // Don't process this response - wait for the correct one
+          return;
+        }
+      }
 
       // Update date filter truncation state based on the backend flag.
       // We only show the warning when a date filter is currently active.
@@ -2014,6 +2575,8 @@
       // next page to request via loadMoreRuns is 2 as long as there are more
       // runs available on the server.
       nextBackendPage = hasMoreRuns() ? 2 : null;
+      // Clear any paused page from a previous fetch session
+      pausedBackendPage = null;
 
       // Get cache key for current workflow
       const cacheKey = getCacheKey();
@@ -2035,6 +2598,20 @@
 
       // Update total runs fetched counter
       totalRunsFetched = runs.length;
+
+      // Check if cache merge caused us to exceed the max limit.
+      // If so, stop progressive fetching by clearing nextBackendPage.
+      // This prevents the UI from showing "Searching..." when we've already
+      // hit the limit via cached runs.
+      const effectiveMaxRuns = getMaxTotalRuns();
+      if (totalRunsFetched >= effectiveMaxRuns && nextBackendPage !== null) {
+        pausedBackendPage = nextBackendPage;
+        nextBackendPage = null;
+        // Set truncation flag only if there's an active date filter
+        if (hasActiveDateFilter()) {
+          dateFilterTruncated = true;
+        }
+      }
 
       // Save merged runs to cache
       saveToCache(cacheKey, runs, totalCount, repository);
@@ -2061,10 +2638,20 @@
 
       // Check if we're in the initial load and should wait for filter messages
       // We wait for filter messages only if this is the first load (loading === true)
-      // and we're not refreshing (refreshing === false)
-      const isInitialLoad = loading && !refreshing;
+      // and we're not refreshing (refreshing === false) and NOT a manual workflow fetch
+      const isInitialLoad = loading && !refreshing && !isManualWorkflowFetch;
 
-      if (isInitialLoad) {
+      if (isManualWorkflowFetch) {
+        // This is a manual workflow switch (user clicked dropdown) - apply filters immediately
+        // No need to wait for filter messages since this is a user-initiated action
+        console.log('[WorkflowRuns] Manual workflow fetch - applying filters immediately');
+        isManualWorkflowFetch = false; // Reset the flag
+        pendingWorkflowId = null; // Reset the pending workflow ID
+        buildAvailableWorkflows();
+        filterRuns();
+        loading = false;
+        refreshing = false;
+      } else if (isInitialLoad) {
         console.log(
           '[WorkflowRuns] Initial load detected - waiting for filter messages before finalizing'
         );
@@ -2085,6 +2672,13 @@
         loading = false;
         refreshing = false;
       }
+    } else if (message.type === 'getWorkflowRuns' && !message.success) {
+      // Handle error case - reset loading states
+      console.error('[WorkflowRuns] Failed to fetch workflow runs:', message.error);
+      isManualWorkflowFetch = false;
+      pendingWorkflowId = null;
+      loading = false;
+      refreshing = false;
     } else if (message.type === 'getUserInfo' && message.success) {
       currentUsername = message.data?.login || '';
       userInfo = message.data || null;
@@ -2141,6 +2735,19 @@
 
         if (workflowForContext) {
           requestedRunsForWorkflow = true;
+          // Cancel any pending initial filter timeout since we're starting a new load cycle
+          // This prevents setActorFilter/setShowBotRuns from calling finalizeInitialLoad()
+          // before the workflow-specific getWorkflowRuns response arrives
+          if (waitingForInitialFilters) {
+            console.log(
+              '[WorkflowRuns] setWorkflowFilter: Cancelling initial filter wait - starting workflow-specific fetch'
+            );
+            if (initialFilterTimeout !== null) {
+              clearTimeout(initialFilterTimeout);
+              initialFilterTimeout = null;
+            }
+            waitingForInitialFilters = false;
+          }
           requestRunsForWorkflow(workflowForContext);
         }
       }
@@ -2182,8 +2789,14 @@
         clearDateFilter();
       }
 
-      // If we're waiting for initial filters, finalize the load now
-      if (waitingForInitialFilters) {
+      // Skip filter application if we're waiting for a workflow-specific fetch
+      // The filters will be applied when the getWorkflowRuns response arrives
+      if (isManualWorkflowFetch) {
+        console.log(
+          '[WorkflowRuns] setActorFilter: skipping filterRuns - waiting for workflow-specific fetch'
+        );
+      } else if (waitingForInitialFilters) {
+        // If we're waiting for initial filters, finalize the load now
         console.log('[WorkflowRuns] setActorFilter received during initial load - finalizing');
         finalizeInitialLoad();
       } else {
@@ -2211,8 +2824,14 @@
         clearDateFilter();
       }
 
-      // If we're waiting for initial filters, finalize the load now
-      if (waitingForInitialFilters) {
+      // Skip filter application if we're waiting for a workflow-specific fetch
+      // The filters will be applied when the getWorkflowRuns response arrives
+      if (isManualWorkflowFetch) {
+        console.log(
+          '[WorkflowRuns] setShowBotRuns: skipping filterRuns - waiting for workflow-specific fetch'
+        );
+      } else if (waitingForInitialFilters) {
+        // If we're waiting for initial filters, finalize the load now
         console.log('[WorkflowRuns] setShowBotRuns received during initial load - finalizing');
         finalizeInitialLoad();
       } else {
@@ -2286,6 +2905,38 @@
           vscode.postMessage({ type: 'refreshWorkflowRuns' });
         }, 2000);
       }
+    } else if (message.type === 'getJobDetailsResponse') {
+      // Handle response for fetching job details (for running jobs)
+      const jobId = message.data?.jobId;
+      if (jobId) {
+        loadingJobSteps.delete(jobId);
+        loadingJobSteps = loadingJobSteps; // Trigger reactivity
+      }
+      if (message.success && message.data?.job) {
+        const job = message.data.job as WorkflowJob;
+        // Find the run ID from the pending request context
+        const runId = selectedJobRunIdForSteps;
+        if (runId) {
+          showJobStepsModalWithData(job, runId);
+        }
+      }
+    } else if (message.type === 'checkJobLogsAvailabilityResponse') {
+      // Handle response for checking job logs availability
+      const jobId = message.data?.jobId;
+      if (jobId) {
+        loadingJobLogs.delete(jobId);
+        loadingJobLogs = loadingJobLogs; // Trigger reactivity
+      }
+      // The actual log viewing is handled by the extension
+    } else if (message.type === 'viewStepLogsResponse') {
+      // Handle response for viewing step logs
+      const jobId = message.data?.jobId;
+      const stepNumber = message.data?.stepNumber;
+      if (jobId && stepNumber !== undefined) {
+        const key = `${jobId}-${stepNumber}`;
+        loadingStepLogs.delete(key);
+        loadingStepLogs = loadingStepLogs; // Trigger reactivity
+      }
     } else if (message.type === 'promptRerunWorkflowComplete') {
       const responseRunId: number | undefined = message.data?.runId;
       if (responseRunId) {
@@ -2318,6 +2969,19 @@
     } else if (message.type === 'progressiveFetchRunsResponse') {
       progressiveFetching = false;
 
+      // Check if this response is for a stale workflow switch (ignore if so)
+      const responseGeneration = message.data?.generation;
+      if (responseGeneration !== undefined && responseGeneration !== workflowSwitchGeneration) {
+        console.log(
+          '[WorkflowRuns] Ignoring stale progressiveFetchRunsResponse for generation',
+          responseGeneration,
+          'current:',
+          workflowSwitchGeneration
+        );
+        // Don't modify any other state for stale responses - just exit early
+        return;
+      }
+
       if (message.success && message.data) {
         const newRuns = message.data.runs || [];
         const fetchedPages = message.data.fetchedPages || 0;
@@ -2338,6 +3002,8 @@
           if (totalRunsFetched >= effectiveMaxRuns) {
             // Only set truncation flag if there's an active date filter
             dateFilterTruncated = hasActiveDateFilter();
+            // Save the current page so we can resume if the user increases the limit
+            pausedBackendPage = nextBackendPage;
             nextBackendPage = null; // Stop further fetching
           }
 
@@ -2351,9 +3017,22 @@
           // more data for the current page (or to prefetch the next page).
           scheduleProgressiveFetchIfNeeded();
         } else {
-          // No more runs available
+          // No more runs available from GitHub - stop fetching
           nextBackendPage = null;
+          pausedBackendPage = null; // Clear paused page since there's nothing more
+          // Re-apply filters to ensure UI updates and shows "no matches" if applicable
+          filterRuns();
         }
+      } else {
+        // Response failed or had no data - reset fetching state
+        // Don't clear nextBackendPage so the user can retry, but ensure UI reflects
+        // that we're not actively searching anymore (progressiveFetching is already false)
+        console.warn(
+          '[WorkflowRuns] progressiveFetchRunsResponse failed or had no data:',
+          message.error || 'No data'
+        );
+        // Re-apply filters to update the UI state
+        filterRuns();
       }
     } else if (message.type === 'getWorkflowRunJobs') {
       const runId = message.data?.runId;
@@ -2362,8 +3041,64 @@
         loadingJobs = loadingJobs; // Trigger reactivity
 
         if (message.success) {
-          runJobs.set(runId, message.data?.jobs || []);
+          const jobs = message.data?.jobs || [];
+          runJobs.set(runId, jobs);
           runJobs = runJobs; // Trigger reactivity
+
+          // Update job steps modal if it's open and showing a job from this run
+          if (
+            selectedJobForStepsModal &&
+            selectedJobRunIdForSteps === runId &&
+            selectedJobForStepsModal.jobId
+          ) {
+            const updatedJob = jobs.find(
+              (j: WorkflowJob) => j.id === selectedJobForStepsModal?.jobId
+            );
+            if (updatedJob) {
+              // Update the modal with fresh job data
+              showJobStepsModalWithData(updatedJob, runId);
+            }
+          }
+        }
+      }
+    } else if (message.type === 'getJobDependenciesResponse') {
+      // Handle job dependencies response for graph visualization
+      const runId = message.data?.runId;
+      if (runId) {
+        loadingJobDependencies.delete(runId);
+        loadingJobDependencies = loadingJobDependencies; // Trigger reactivity
+
+        if (message.success) {
+          // Store job definitions for this run
+          runJobDefinitions.set(runId, message.data?.jobDefinitions || []);
+          runJobDefinitions = runJobDefinitions; // Trigger reactivity
+
+          // Also update jobs if included in response
+          if (message.data?.jobs) {
+            const jobs = message.data.jobs;
+            runJobs.set(runId, jobs);
+            runJobs = runJobs; // Trigger reactivity
+
+            loadingJobs.delete(runId);
+            loadingJobs = loadingJobs; // Trigger reactivity
+
+            // Update job steps modal if it's open and showing a job from this run
+            if (
+              selectedJobForStepsModal &&
+              selectedJobRunIdForSteps === runId &&
+              selectedJobForStepsModal.jobId
+            ) {
+              const updatedJob = jobs.find(
+                (j: WorkflowJob) => j.id === selectedJobForStepsModal?.jobId
+              );
+              if (updatedJob) {
+                // Update the modal with fresh job data
+                showJobStepsModalWithData(updatedJob, runId);
+              }
+            }
+          }
+        } else {
+          console.error('[WorkflowRuns] Failed to fetch job dependencies:', message.error);
         }
       }
     } else if (message.type === 'getWorkflowRunArtifacts') {
@@ -2419,6 +3154,12 @@
           markedWorkflows = [...markedWorkflows, workflowPath];
         } else {
           markedWorkflows = markedWorkflows.filter((p) => p !== workflowPath);
+
+          // When the last favorite is removed, reset the "Favorites Only" filter
+          // to prevent the checkbox from being checked but disabled
+          if (markedWorkflows.length === 0 && showFavoritesOnly) {
+            showFavoritesOnly = false;
+          }
         }
         // Trigger reactivity by reassigning
         markedWorkflows = markedWorkflows;
@@ -2459,6 +3200,12 @@
         } else if (!isWatched && wasWatched) {
           watchedRuns.delete(runId);
           watchedRuns = watchedRuns; // Trigger reactivity
+
+          // When the last watch is removed, reset the "Watched Runs Only" filter
+          // to prevent the checkbox from being checked but disabled
+          if (watchedRuns.size === 0 && showWatchedOnly) {
+            showWatchedOnly = false;
+          }
         }
 
         console.log(
@@ -2504,27 +3251,31 @@
           'watched runs'
         );
 
+        // Skip processing if we're in the middle of a workflow switch
+        // This prevents stale status changes from appearing during the transition
+        if (isManualWorkflowFetch || loading) {
+          console.log('[WorkflowRuns] Skipping watched runs refresh - workflow switch in progress');
+          return;
+        }
+
         if (!updatedRuns.length) {
           return;
         }
 
-        // Update only the runs that have changed status and add any watched
-        // runs that are not yet present in the dataset. This ensures that
-        // "Watched Runs Only" can be populated using only the specific
-        // watched IDs without requiring full pagination over all runs.
+        // Update watched runs in the dataset, tracking status changes for
+        // notifications. Also add any watched runs not yet present so that
+        // "Watched Runs Only" can be populated without a full pagination.
         const updatedRunsMap = new Map(updatedRuns.map((run: WorkflowRun) => [run.id, run]));
         const existingIds = new Set(runs.map((run) => run.id));
 
-        let hasChanges = false;
         runs = runs.map((run) => {
           if (updatedRunsMap.has(run.id)) {
             const updatedRun = updatedRunsMap.get(run.id);
-            // Only update if status or conclusion has changed
+            // Track status changes for inline notification
             if (
               updatedRun &&
               (run.status !== updatedRun.status || run.conclusion !== updatedRun.conclusion)
             ) {
-              hasChanges = true;
               console.log(
                 '[WorkflowRuns] Background refresh: run',
                 run.id,
@@ -2547,9 +3298,9 @@
                 statusChanges.delete(run.id);
                 statusChanges = statusChanges;
               }, 10000);
-
-              return updatedRun;
             }
+            // Always return the updated run to get latest data (e.g., updated_at)
+            return updatedRun;
           }
           return run;
         });
@@ -2564,7 +3315,6 @@
         }
 
         if (newRunsToAdd.length > 0) {
-          hasChanges = true;
           runs = [...runs, ...newRunsToAdd];
           console.log(
             '[WorkflowRuns] Background refresh: added',
@@ -2573,17 +3323,43 @@
           );
         }
 
-        // If there were changes, rebuild workflow options and re-filter to
-        // update the UI.
-        if (hasChanges) {
-          buildAvailableWorkflows();
-          filterRuns();
+        // Always rebuild workflow options and re-filter to update the UI,
+        // matching the behavior of backgroundRefreshAllRunsResponse.
+        buildAvailableWorkflows();
+        filterRuns();
+
+        // Refresh jobs for watched runs that are in-progress
+        for (const run of updatedRuns as WorkflowRun[]) {
+          if (run.status === 'in_progress' || run.status === 'queued') {
+            vscode.postMessage({ type: 'getWorkflowRunJobs', data: { runId: run.id } });
+          }
+        }
+
+        // Also refresh jobs if the modal is open showing a job from a watched run
+        // (even if the run has completed, so the modal shows updated status)
+        if (selectedJobForStepsModal && selectedJobRunIdForSteps) {
+          const modalRunUpdated = updatedRuns.find(
+            (r: WorkflowRun) => r.id === selectedJobRunIdForSteps
+          );
+          if (modalRunUpdated) {
+            vscode.postMessage({
+              type: 'getWorkflowRunJobs',
+              data: { runId: selectedJobRunIdForSteps },
+            });
+          }
         }
       }
     } else if (message.type === 'backgroundRefreshAllRunsResponse') {
       if (message.success && message.data) {
         const newRuns = message.data.runs || [];
         console.log('[WorkflowRuns] Background refresh all: received', newRuns.length, 'runs');
+
+        // Skip processing if we're in the middle of a workflow switch
+        // This prevents stale notifications from appearing during the transition
+        if (isManualWorkflowFetch || loading) {
+          console.log('[WorkflowRuns] Skipping background refresh - workflow switch in progress');
+          return;
+        }
 
         // Create a map of new runs by ID for quick lookup
         const newRunsMap = new Map(newRuns.map((run: WorkflowRun) => [run.id, run]));
@@ -2592,7 +3368,80 @@
         let updatedCount = 0;
         let newRunsCount = 0;
 
+        /**
+         * Helper to check if a run matches ALL currently active filters.
+         * This ensures notifications only appear for runs the user wants to see.
+         */
+        const runMatchesActiveFilters = (run: WorkflowRun): boolean => {
+          // Check workflow filter
+          if (workflowFilter !== 'all') {
+            const runPath = run.path?.split('@')[0] || '';
+            if (runPath !== workflowFilter) {
+              return false;
+            }
+          }
+
+          // Check actor filter
+          if (actorFilter === 'me' && currentUsername) {
+            if (run.actor?.login !== currentUsername) {
+              return false;
+            }
+          } else if (actorFilter !== 'all' && actorFilter !== 'me') {
+            if (run.actor?.login !== actorFilter) {
+              return false;
+            }
+          }
+
+          // Check bot filter - if showBotRuns is false, exclude bot runs
+          if (!showBotRuns && run.actor?.login) {
+            const login = run.actor.login.toLowerCase();
+            if (login.includes('[bot]') || login.endsWith('-bot') || login.includes('bot[')) {
+              return false;
+            }
+          }
+
+          // Note: Status filter is intentionally NOT checked here for the initial run match
+          // because we want to show notifications when a run's status CHANGES to match
+          // the filter (e.g., show "completed" notification when filter is set to "completed")
+          // The status check is done separately based on the NEW status after the change.
+
+          return true;
+        };
+
+        /**
+         * Helper to check if a run's NEW status matches the current status filter.
+         * Used to determine if a status change notification should be shown.
+         */
+        const runStatusMatchesFilter = (newStatus: string, newConclusion?: string): boolean => {
+          if (statusFilter === 'all') {
+            return true;
+          }
+          if (statusFilter === 'completed') {
+            return newStatus === 'completed' && newConclusion === 'success';
+          }
+          if (statusFilter === 'failed') {
+            return newStatus === 'completed' && newConclusion === 'failure';
+          }
+          if (statusFilter === 'in_progress') {
+            return newStatus === 'in_progress';
+          }
+          if (statusFilter === 'queued') {
+            return newStatus === 'queued';
+          }
+          if (statusFilter === 'cancelled') {
+            return newStatus === 'completed' && newConclusion === 'cancelled';
+          }
+          return true;
+        };
+
         // Update existing runs and track changes
+        // Track workflow-level status changes for notifications (Issue 9)
+        const workflowStatusChanges: Array<{
+          name: string;
+          status: string;
+          conclusion?: string;
+          matchesActiveFilters: boolean;
+        }> = [];
         const existingRunIds = new Set(runs.map((r) => r.id));
         runs = runs.map((run) => {
           if (newRunsMap.has(run.id)) {
@@ -2608,6 +3457,27 @@
                 'to',
                 newRun.status
               );
+
+              // Track workflow-level status changes for notification (Issue 9)
+              // Only notify for significant workflow state transitions
+              const isWorkflowStarted = run.status === 'queued' && newRun.status === 'in_progress';
+              const isWorkflowCompleted =
+                run.status === 'in_progress' && newRun.status === 'completed';
+
+              if (isWorkflowStarted || isWorkflowCompleted) {
+                // Check if run matches all active filters (workflow, actor, bot)
+                // AND if the NEW status matches the status filter
+                const matchesFilters =
+                  runMatchesActiveFilters(newRun) &&
+                  runStatusMatchesFilter(newRun.status, newRun.conclusion);
+
+                workflowStatusChanges.push({
+                  name: newRun.name || `Run #${newRun.id}`,
+                  status: newRun.status,
+                  conclusion: newRun.conclusion,
+                  matchesActiveFilters: matchesFilters,
+                });
+              }
 
               // Track status change for inline message
               statusChanges.set(run.id, {
@@ -2636,29 +3506,83 @@
           if (!existingRunIds.has(newRun.id)) {
             runs = [newRun, ...runs];
             newRunsCount++;
+            // New runs are also workflow-level events
+            // Check if run matches all active filters (workflow, actor, bot)
+            // For new runs, we check if their current status matches the status filter
+            const matchesFilters =
+              runMatchesActiveFilters(newRun) &&
+              runStatusMatchesFilter(newRun.status, newRun.conclusion);
+
+            workflowStatusChanges.push({
+              name: newRun.name || `Run #${newRun.id}`,
+              status: 'new',
+              conclusion: undefined,
+              matchesActiveFilters: matchesFilters,
+            });
           }
         }
 
-        // Show a non-intrusive toast if there were updates
-        if (updatedCount > 0 || newRunsCount > 0) {
-          let message = '';
-          if (newRunsCount > 0 && updatedCount > 0) {
-            message = `${newRunsCount} new run${newRunsCount > 1 ? 's' : ''}, ${updatedCount} updated`;
-          } else if (newRunsCount > 0) {
-            message = `${newRunsCount} new run${newRunsCount > 1 ? 's' : ''}`;
-          } else {
-            message = `${updatedCount} run${updatedCount > 1 ? 's' : ''} updated`;
+        // Show workflow-level notifications only (Issue 9)
+        // Instead of showing "X runs updated", show specific workflow events
+        // Only show if workflow toast notifications are enabled
+        // Filter to only show notifications for runs that match all active filters
+        const relevantChanges = workflowStatusChanges.filter((c) => c.matchesActiveFilters);
+        if (showWorkflowToastNotifications && relevantChanges.length > 0) {
+          for (const change of relevantChanges) {
+            let message = '';
+            if (change.status === 'new') {
+              message = `New workflow: ${change.name}`;
+            } else if (change.status === 'in_progress') {
+              message = `Workflow started: ${change.name}`;
+            } else if (change.status === 'completed') {
+              const conclusionText =
+                change.conclusion === 'success'
+                  ? '✓'
+                  : change.conclusion === 'failure'
+                    ? '✗'
+                    : change.conclusion || '';
+              message = `Workflow completed ${conclusionText}: ${change.name}`;
+            }
+            if (message) {
+              showToast(message, 'info', 3000);
+            }
           }
-          showToast(message, 'info', 3000);
         }
 
         // Re-filter to update the UI
         filterRuns();
+
+        // Issue 8: Refresh jobs for all in-progress runs
+        // This ensures the mini progress indicator and graph stay updated
+        for (const run of runs) {
+          if (run.status === 'in_progress' || run.status === 'queued') {
+            // Refresh jobs for in-progress runs
+            vscode.postMessage({ type: 'getWorkflowRunJobs', data: { runId: run.id } });
+          }
+        }
+
+        // Also refresh jobs if the modal is open showing a job from any updated run
+        // (even if the run has completed, so the modal shows updated status)
+        if (selectedJobForStepsModal && selectedJobRunIdForSteps) {
+          const modalRunUpdated = newRunsMap.has(selectedJobRunIdForSteps);
+          // Only refresh if the run was updated and not already refreshed above
+          const modalRun = runs.find((r) => r.id === selectedJobRunIdForSteps);
+          const alreadyRefreshed =
+            modalRun && (modalRun.status === 'in_progress' || modalRun.status === 'queued');
+          if (modalRunUpdated && !alreadyRefreshed) {
+            vscode.postMessage({
+              type: 'getWorkflowRunJobs',
+              data: { runId: selectedJobRunIdForSteps },
+            });
+          }
+        }
       }
     } else if (message.type === 'getWorkflowIdResponse') {
       if (message.success && message.data) {
         const { workflowId } = message.data;
         console.log('[WorkflowRuns] Received workflow ID:', workflowId, 'requesting runs...');
+        // Track the expected workflowId to ignore stale responses
+        pendingWorkflowId = workflowId;
         // Now request runs for this workflow
         vscode.postMessage({
           type: 'getWorkflowRuns',
@@ -2666,14 +3590,36 @@
         });
       } else {
         console.error('[WorkflowRuns] Failed to get workflow ID:', message.error);
-        // Fall back to local filtering
+        // Reset the manual workflow fetch flag since we won't get a getWorkflowRuns response
+        isManualWorkflowFetch = false;
+        pendingWorkflowId = null;
+        // Fall back to local filtering and clear loading state
         filterRuns();
+        loading = false;
       }
     } else if (message.type === 'stopAutoRefresh') {
       // Panel is no longer visible, stop auto-refresh
       console.log('[WorkflowRuns] Panel not visible, stopping auto-refresh');
       stopAutoRefresh();
-      autoRefreshSeconds = 0;
+      // Note: We do NOT reset autoRefreshSeconds here anymore.
+      // The persisted value will be restored when the panel becomes visible again.
+    } else if (message.type === 'restoreAutoRefresh') {
+      // Panel became visible again, restore the persisted auto-refresh setting
+      if (message.success && message.data) {
+        const { autoRefreshSeconds: restoredSeconds } = message.data as {
+          autoRefreshSeconds?: number;
+        };
+        if (
+          typeof restoredSeconds === 'number' &&
+          Number.isFinite(restoredSeconds) &&
+          restoredSeconds >= 0
+        ) {
+          console.log('[WorkflowRuns] Restoring auto-refresh to', restoredSeconds, 'seconds');
+          autoRefreshSeconds = restoredSeconds;
+          autoRefreshIndex = getAutoRefreshOptionIndex(autoRefreshSeconds);
+          startAutoRefresh();
+        }
+      }
     } else if (message.type === 'getFilterState') {
       // Extension is requesting current filter state
       console.log('[WorkflowRuns] Sending filter state to extension');
@@ -2951,7 +3897,25 @@
       return;
     }
 
-    setTimeout(() => progressiveFetch(), 100);
+    // Cancel any existing scheduled progressive fetch
+    if (progressiveFetchTimeoutId !== null) {
+      window.clearTimeout(progressiveFetchTimeoutId);
+    }
+
+    // Capture the current generation to detect stale callbacks
+    const generation = workflowSwitchGeneration;
+
+    progressiveFetchTimeoutId = window.setTimeout(() => {
+      progressiveFetchTimeoutId = null;
+
+      // Check if this callback is stale (workflow switched since it was scheduled)
+      if (generation !== workflowSwitchGeneration) {
+        console.log('[WorkflowRuns] Ignoring stale progressive fetch callback');
+        return;
+      }
+
+      progressiveFetch();
+    }, 100);
   }
 
   /**
@@ -2992,6 +3956,82 @@
     const requiredFilteredCount = pagesToCover * limit;
 
     return filteredRuns.length < requiredFilteredCount;
+  }
+
+  /**
+   * Check if progressive fetching is currently active OR will resume shortly.
+   * This is used to avoid flickering the empty state UI between fetch cycles.
+   * Returns true if we're actively fetching OR if conditions are met for more fetching.
+   *
+   * @deprecated Use the reactive `isSearchingForRuns` variable instead for UI rendering.
+   * This function remains for internal use.
+   */
+  function isProgressiveFetchingActive(): boolean {
+    // If currently fetching, obviously active
+    if (progressiveFetching) {
+      return true;
+    }
+
+    // If no more runs to fetch, not active
+    if (!nextBackendPage || !hasMoreRuns()) {
+      return false;
+    }
+
+    // If at max limit, not active
+    const effectiveMaxRuns = getMaxTotalRuns();
+    if (totalRunsFetched >= effectiveMaxRuns) {
+      return false;
+    }
+
+    // Watched only mode doesn't use progressive fetch
+    if (showWatchedOnly) {
+      return false;
+    }
+
+    // If loading initial data, let that complete first
+    if (loading) {
+      return false;
+    }
+
+    // Check if we still need more runs to fill the current view
+    // This mirrors the logic in shouldProgressiveFetchForCurrentView but
+    // without the progressiveFetching guard since we want to detect the
+    // "about to resume" state
+    const limit = workflowLoadLimit > 0 ? workflowLoadLimit : 20;
+    const safePage = currentPage > 0 ? currentPage : 1;
+    const pagesToCover = safePage + 1;
+    const requiredFilteredCount = pagesToCover * limit;
+
+    return filteredRuns.length < requiredFilteredCount;
+  }
+
+  /**
+   * Compute whether we're searching for matching runs.
+   * This is a wrapper function for use in reactive statements that explicitly
+   * lists all dependencies so Svelte can properly track them and re-render
+   * the UI when any of them change.
+   *
+   * The parameters are passed explicitly even though they're accessed via
+   * closure to ensure Svelte's reactivity system tracks them as dependencies.
+   */
+  function computeIsSearchingForRuns(
+    _progressiveFetching: boolean,
+    _nextBackendPage: number | null,
+    _runs: WorkflowRun[],
+    _totalCount: number,
+    _totalRunsFetched: number,
+    _showWatchedOnly: boolean,
+    _loading: boolean,
+    _filteredRuns: WorkflowRun[],
+    _workflowLoadLimit: number,
+    _currentPage: number,
+    _dateFilterFrom: string,
+    _dateFilterTo: string,
+    _dateFilterMaxTotalRuns: number,
+    _nonDateMaxTotalRuns: number
+  ): boolean {
+    // Use the actual implementation from isProgressiveFetchingActive
+    return isProgressiveFetchingActive();
   }
 
   /**
@@ -3498,10 +4538,11 @@
   }
 
   /**
-   * Handle clicking on a run - toggle expansion to show jobs
+   * Handle clicking on a run - toggle dependency graph view
+   * Changed from Jobs to Graph as the default view per Issue 4
    */
   function openRun(run: WorkflowRun) {
-    toggleRunExpansion(run.id);
+    toggleDependencyGraph(run);
   }
 
   /**
@@ -3582,231 +4623,296 @@
           </button>
           {#if showRefreshSettings}
             <div class="refresh-settings-dropdown">
-              <div class="refresh-settings-header">
-                <span>Auto-Refresh</span>
+              <!-- Settings Tab Navigation -->
+              <div class="settings-tabs">
                 <button
-                  class="info-icon clickable settings-info-icon"
                   type="button"
-                  on:click={showAutoRefreshSettingsHelp}
-                  title="Learn more about Auto-Refresh"
+                  class="settings-tab"
+                  class:settings-tab--active={settingsActiveTab === 'general'}
+                  on:click={() => (settingsActiveTab = 'general')}
                 >
-                  <span class="codicon codicon-info"></span>
+                  <span class="codicon codicon-gear"></span>
+                  <span>General</span>
+                </button>
+                <button
+                  type="button"
+                  class="settings-tab"
+                  class:settings-tab--active={settingsActiveTab === 'notifications'}
+                  on:click={() => (settingsActiveTab = 'notifications')}
+                >
+                  <span class="codicon codicon-bell"></span>
+                  <span>Notifications</span>
                 </button>
               </div>
-              <div class="settings-slider-row">
-                <input
-                  type="range"
-                  min="0"
-                  max={AUTO_REFRESH_SECONDS_OPTIONS.length - 1}
-                  step="1"
-                  value={autoRefreshIndex}
-                  on:input={handleAutoRefreshSliderChange}
-                  title={formatAutoRefreshLabel(autoRefreshSeconds)}
-                />
-                <span class="settings-slider-value">
-                  {formatAutoRefreshLabel(autoRefreshSeconds)}
-                </span>
-              </div>
-              <div class="settings-help-text">
-                Controls how often the panel refreshes runs in the background.
-              </div>
 
-              <div class="settings-divider"></div>
-
-              <div class="refresh-settings-header">
-                <span
-                  title="Maximum total workflow runs to progressively load when no date filter is active"
-                >
-                  Maximum Workflow Runs Limit (on open)
-                </span>
-                <button
-                  class="info-icon clickable settings-info-icon"
-                  type="button"
-                  on:click={showNonDateMaxTotalRunsHelp}
-                  title="Learn more about the on-open workflow runs limit"
-                >
-                  <span class="codicon codicon-info"></span>
-                </button>
-              </div>
-              <div class="settings-slider-row">
-                <input
-                  type="range"
-                  min="0"
-                  max={MAX_TOTAL_RUNS_OPTIONS.length - 1}
-                  step="1"
-                  value={nonDateMaxTotalRunsIndex}
-                  on:input={handleNonDateMaxTotalRunsSliderChange}
-                  title={`Maximum ${NON_DATE_MAX_TOTAL_RUNS.toLocaleString()} runs to load when no date filter is active`}
-                />
-                <span class="settings-slider-value">
-                  {NON_DATE_MAX_TOTAL_RUNS.toLocaleString()} runs
-                </span>
-              </div>
-              <div class="settings-help-text">
-                Caps how many runs are progressively loaded when no date filter is active.
-              </div>
-
-              <div class="settings-divider"></div>
-
-              <div class="refresh-settings-header">
-                <span title="Maximum workflow runs to scan when a Date Filter is active">
-                  Maximum Workflow Runs Limit (Date Range)
-                </span>
-                <button
-                  class="info-icon clickable settings-info-icon"
-                  type="button"
-                  on:click={showDateFilterMaxTotalRunsHelp}
-                  title="Learn more about the date-range workflow runs limit"
-                >
-                  <span class="codicon codicon-info"></span>
-                </button>
-              </div>
-              <div class="settings-slider-row">
-                <input
-                  type="range"
-                  min="0"
-                  max={MAX_TOTAL_RUNS_OPTIONS.length - 1}
-                  step="1"
-                  value={dateFilterMaxTotalRunsIndex}
-                  on:input={handleDateFilterMaxTotalRunsSliderChange}
-                  title={`Maximum ${DATE_FILTER_MAX_TOTAL_RUNS.toLocaleString()} runs to scan when a date range is active`}
-                />
-                <span class="settings-slider-value">
-                  {DATE_FILTER_MAX_TOTAL_RUNS.toLocaleString()} runs
-                </span>
-              </div>
-              <div class="settings-help-text">
-                Limits how many runs are scanned for an active Date Filter before marking results as
-                truncated.
-              </div>
-
-              <div class="settings-divider"></div>
-
-              <div class="refresh-settings-header">
-                <span title="Number of workflow runs shown per page in this panel">
-                  Workflow Runs Per Page
-                </span>
-                <button
-                  class="info-icon clickable settings-info-icon"
-                  type="button"
-                  on:click={showWorkflowLoadLimitHelp}
-                  title="Learn more about Workflow Runs Per Page"
-                >
-                  <span class="codicon codicon-info"></span>
-                </button>
-              </div>
-              <div class="settings-slider-row">
-                <input
-                  type="range"
-                  min="0"
-                  max={WORKFLOW_LOAD_LIMIT_OPTIONS.length - 1}
-                  step="1"
-                  value={workflowLoadLimitIndex}
-                  on:input={handleWorkflowLoadLimitSliderChange}
-                  title={`Show ${workflowLoadLimit} runs per page in this panel`}
-                />
-                <span class="settings-slider-value">
-                  {workflowLoadLimit} per page
-                </span>
-              </div>
-
-              <div class="settings-divider"></div>
-
-              <div class="refresh-settings-header">Date Filter</div>
-              <div class="settings-input-group">
-                <label for="date-filter-from" class="settings-date-label">From:</label>
-                <input
-                  id="date-filter-from"
-                  type="datetime-local"
-                  class="settings-date-input"
-                  bind:value={dateFilterFrom}
-                  max={dateFilterTo || undefined}
-                  on:change={handleDateFilterChange}
-                  disabled={showWatchedOnly}
-                  title={showWatchedOnly
-                    ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
-                    : 'Lower bound of date range; only show runs created on or after this date/time'}
-                />
-                {#if dateFilterFrom}
-                  <button
-                    type="button"
-                    class="settings-clear-button"
-                    on:click={clearDateFilterFrom}
-                    disabled={showWatchedOnly}
-                    title={showWatchedOnly
-                      ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
-                      : "Clear 'From' date"}
-                  >
-                    <span class="codicon codicon-close"></span>
-                  </button>
-                {/if}
-              </div>
-              <div class="settings-input-group">
-                <label for="date-filter-to" class="settings-date-label">To:</label>
-                <input
-                  id="date-filter-to"
-                  type="datetime-local"
-                  class="settings-date-input"
-                  bind:value={dateFilterTo}
-                  min={dateFilterFrom || undefined}
-                  on:change={handleDateFilterToChange}
-                  disabled={showWatchedOnly}
-                  title={showWatchedOnly
-                    ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
-                    : 'Upper bound of date range; only show runs created on or before this date/time'}
-                />
-                {#if dateFilterTo}
-                  <button
-                    type="button"
-                    class="settings-clear-button"
-                    on:click={clearDateFilterTo}
-                    disabled={showWatchedOnly}
-                    title={showWatchedOnly
-                      ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
-                      : "Clear 'To' date"}
-                  >
-                    <span class="codicon codicon-close"></span>
-                  </button>
-                {/if}
-              </div>
-              <div class="settings-help-text">
-                Only show runs created between these date/times (inclusive).
-              </div>
-              {#if autoRefreshSeconds > 0 && dateFilterTo}
-                <div class="settings-help-text settings-help-text--info">
-                  <span class="codicon codicon-info"></span>
-                  <span>
-                    Auto-refresh is active, but new runs won't appear in this historical date range.
-                  </span>
-                </div>
-              {/if}
-              {#if fetchingDateFilteredRuns && (dateFilterFrom || dateFilterTo)}
-                <div class="settings-help-text settings-help-text--fetching">
-                  <span class="codicon codicon-loading spinning-icon"></span>
-                  <span>Fetching runs for the selected date range…</span>
-                </div>
-              {/if}
-              {#if !showWatchedOnly}
-                {#if dateFilterTruncated && (dateFilterFrom || dateFilterTo)}
-                  <div class="settings-help-text settings-help-text--warning">
-                    <span class="codicon codicon-alert"></span>
-                    <span>
-                      Fetched the {DATE_FILTER_MAX_TOTAL_RUNS} most recent runs for this date range. Filters
-                      are applied to these
-                      {DATE_FILTER_MAX_TOTAL_RUNS} runs. If you're not seeing expected results, there
-                      may be more matching runs beyond this limit. Try narrowing the date range to fetch
-                      different runs.
+              <!-- General Tab Content -->
+              {#if settingsActiveTab === 'general'}
+                <div class="settings-tab-content">
+                  <div class="refresh-settings-header">
+                    <span>Auto-Refresh</span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showAutoRefreshSettingsHelp}
+                      title="Learn more about Auto-Refresh"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-slider-row">
+                    <input
+                      type="range"
+                      min="0"
+                      max={AUTO_REFRESH_SECONDS_OPTIONS.length - 1}
+                      step="1"
+                      value={autoRefreshIndex}
+                      on:input={handleAutoRefreshSliderChange}
+                      title={formatAutoRefreshLabel(autoRefreshSeconds)}
+                    />
+                    <span class="settings-slider-value">
+                      {formatAutoRefreshLabel(autoRefreshSeconds)}
                     </span>
                   </div>
-                {:else if !hasActiveDateFilter() && totalRunsFetched >= NON_DATE_MAX_TOTAL_RUNS}
-                  <div class="settings-help-text settings-help-text--warning">
-                    <span class="codicon codicon-alert"></span>
-                    <span>
-                      Loaded {NON_DATE_MAX_TOTAL_RUNS} most recent runs. Please apply date filters to
-                      search further back in history.
+                  <div class="settings-help-text">
+                    Controls how often the panel refreshes runs in the background.
+                  </div>
+
+                  <div class="settings-divider"></div>
+
+                  <div class="refresh-settings-header">
+                    <span
+                      title="Maximum total workflow runs to progressively load when no date filter is active"
+                    >
+                      Maximum Workflow Runs Limit (on open)
+                    </span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showNonDateMaxTotalRunsHelp}
+                      title="Learn more about the on-open workflow runs limit"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-slider-row">
+                    <input
+                      type="range"
+                      min="0"
+                      max={MAX_TOTAL_RUNS_OPTIONS.length - 1}
+                      step="1"
+                      value={nonDateMaxTotalRunsIndex}
+                      on:input={handleNonDateMaxTotalRunsSliderChange}
+                      title={`Maximum ${NON_DATE_MAX_TOTAL_RUNS.toLocaleString()} runs to load when no date filter is active`}
+                    />
+                    <span class="settings-slider-value">
+                      {NON_DATE_MAX_TOTAL_RUNS.toLocaleString()} runs
                     </span>
                   </div>
-                {/if}
+                  <div class="settings-help-text">
+                    Caps how many runs are progressively loaded when no date filter is active.
+                  </div>
+
+                  <div class="settings-divider"></div>
+
+                  <div class="refresh-settings-header">
+                    <span title="Maximum workflow runs to scan when a Date Filter is active">
+                      Maximum Workflow Runs Limit (Date Range)
+                    </span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showDateFilterMaxTotalRunsHelp}
+                      title="Learn more about the date-range workflow runs limit"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-slider-row">
+                    <input
+                      type="range"
+                      min="0"
+                      max={MAX_TOTAL_RUNS_OPTIONS.length - 1}
+                      step="1"
+                      value={dateFilterMaxTotalRunsIndex}
+                      on:input={handleDateFilterMaxTotalRunsSliderChange}
+                      title={`Maximum ${DATE_FILTER_MAX_TOTAL_RUNS.toLocaleString()} runs to scan when a date range is active`}
+                    />
+                    <span class="settings-slider-value">
+                      {DATE_FILTER_MAX_TOTAL_RUNS.toLocaleString()} runs
+                    </span>
+                  </div>
+                  <div class="settings-help-text">
+                    Limits how many runs are scanned for an active Date Filter before marking
+                    results as truncated.
+                  </div>
+
+                  <div class="settings-divider"></div>
+
+                  <div class="refresh-settings-header">
+                    <span title="Number of workflow runs shown per page in this panel">
+                      Workflow Runs Per Page
+                    </span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showWorkflowLoadLimitHelp}
+                      title="Learn more about Workflow Runs Per Page"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-slider-row">
+                    <input
+                      type="range"
+                      min="0"
+                      max={WORKFLOW_LOAD_LIMIT_OPTIONS.length - 1}
+                      step="1"
+                      value={workflowLoadLimitIndex}
+                      on:input={handleWorkflowLoadLimitSliderChange}
+                      title={`Show ${workflowLoadLimit} runs per page in this panel`}
+                    />
+                    <span class="settings-slider-value">
+                      {workflowLoadLimit} per page
+                    </span>
+                  </div>
+
+                  <div class="settings-divider"></div>
+
+                  <div class="refresh-settings-header">Date Filter</div>
+                  <div class="settings-input-group">
+                    <label for="date-filter-from" class="settings-date-label">From:</label>
+                    <input
+                      id="date-filter-from"
+                      type="datetime-local"
+                      class="settings-date-input"
+                      bind:value={dateFilterFrom}
+                      max={dateFilterTo || undefined}
+                      on:change={handleDateFilterChange}
+                      disabled={showWatchedOnly}
+                      title={showWatchedOnly
+                        ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
+                        : 'Lower bound of date range; only show runs created on or after this date/time'}
+                    />
+                    {#if dateFilterFrom}
+                      <button
+                        type="button"
+                        class="settings-clear-button"
+                        on:click={clearDateFilterFrom}
+                        disabled={showWatchedOnly}
+                        title={showWatchedOnly
+                          ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
+                          : "Clear 'From' date"}
+                      >
+                        <span class="codicon codicon-close"></span>
+                      </button>
+                    {/if}
+                  </div>
+                  <div class="settings-input-group">
+                    <label for="date-filter-to" class="settings-date-label">To:</label>
+                    <input
+                      id="date-filter-to"
+                      type="datetime-local"
+                      class="settings-date-input"
+                      bind:value={dateFilterTo}
+                      min={dateFilterFrom || undefined}
+                      on:change={handleDateFilterToChange}
+                      disabled={showWatchedOnly}
+                      title={showWatchedOnly
+                        ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
+                        : 'Upper bound of date range; only show runs created on or before this date/time'}
+                    />
+                    {#if dateFilterTo}
+                      <button
+                        type="button"
+                        class="settings-clear-button"
+                        on:click={clearDateFilterTo}
+                        disabled={showWatchedOnly}
+                        title={showWatchedOnly
+                          ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
+                          : "Clear 'To' date"}
+                      >
+                        <span class="codicon codicon-close"></span>
+                      </button>
+                    {/if}
+                  </div>
+                  <div class="settings-help-text">
+                    Only show runs created between these date/times (inclusive).
+                  </div>
+                  {#if autoRefreshSeconds > 0 && dateFilterTo}
+                    <div class="settings-help-text settings-help-text--info">
+                      <span class="codicon codicon-info"></span>
+                      <span>
+                        Auto-refresh is active, but new runs won't appear in this historical date
+                        range.
+                      </span>
+                    </div>
+                  {/if}
+                  {#if fetchingDateFilteredRuns && (dateFilterFrom || dateFilterTo)}
+                    <div class="settings-help-text settings-help-text--fetching">
+                      <span class="codicon codicon-loading spinning-icon"></span>
+                      <span>Fetching runs for the selected date range…</span>
+                    </div>
+                  {/if}
+                  {#if !showWatchedOnly}
+                    {#if dateFilterTruncated && (dateFilterFrom || dateFilterTo)}
+                      <div class="settings-help-text settings-help-text--warning">
+                        <span class="codicon codicon-alert"></span>
+                        <span>
+                          Fetched the {DATE_FILTER_MAX_TOTAL_RUNS} most recent runs for this date range.
+                          Filters are applied to these
+                          {DATE_FILTER_MAX_TOTAL_RUNS} runs. If you're not seeing expected results, there
+                          may be more matching runs beyond this limit. Try narrowing the date range to
+                          fetch different runs.
+                        </span>
+                      </div>
+                    {:else if !hasActiveDateFilter() && totalRunsFetched >= NON_DATE_MAX_TOTAL_RUNS}
+                      <div class="settings-help-text settings-help-text--warning">
+                        <span class="codicon codicon-alert"></span>
+                        <span>
+                          Loaded {NON_DATE_MAX_TOTAL_RUNS} most recent runs. Please apply date filters
+                          to search further back in history.
+                        </span>
+                      </div>
+                    {/if}
+                  {/if}
+                </div>
+              {/if}
+
+              <!-- Notifications Tab Content -->
+              {#if settingsActiveTab === 'notifications'}
+                <div class="settings-tab-content">
+                  <div class="settings-checkbox-row">
+                    <label class="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={showWorkflowToastNotifications}
+                        on:change={updateNotificationSettings}
+                        title="Show toast notifications when workflows start, complete, or fail"
+                      />
+                      <span>Workflow Toast Notifications</span>
+                    </label>
+                  </div>
+                  <div class="settings-help-text">
+                    Show toast notifications when workflows start, complete, or fail.
+                  </div>
+
+                  <div class="settings-divider"></div>
+
+                  <div class="settings-checkbox-row">
+                    <label class="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={showProgressIndicators}
+                        on:change={updateNotificationSettings}
+                        title="Show inline job progress indicators for running workflows"
+                      />
+                      <span>Progress Indicators</span>
+                    </label>
+                  </div>
+                  <div class="settings-help-text">
+                    Show inline job progress for running workflows (e.g., "2/5 jobs completed").
+                  </div>
+                </div>
               {/if}
             </div>
           {/if}
@@ -3843,188 +4949,253 @@
           </button>
           {#if showRefreshSettings}
             <div class="refresh-settings-dropdown">
-              <div class="refresh-settings-header">
-                <span>Auto-Refresh</span>
+              <!-- Settings Tab Navigation -->
+              <div class="settings-tabs">
                 <button
-                  class="info-icon clickable settings-info-icon"
                   type="button"
-                  on:click={showAutoRefreshSettingsHelp}
-                  title="Learn more about Auto-Refresh"
+                  class="settings-tab"
+                  class:settings-tab--active={settingsActiveTab === 'general'}
+                  on:click={() => (settingsActiveTab = 'general')}
                 >
-                  <span class="codicon codicon-info"></span>
+                  <span class="codicon codicon-gear"></span>
+                  <span>General</span>
+                </button>
+                <button
+                  type="button"
+                  class="settings-tab"
+                  class:settings-tab--active={settingsActiveTab === 'notifications'}
+                  on:click={() => (settingsActiveTab = 'notifications')}
+                >
+                  <span class="codicon codicon-bell"></span>
+                  <span>Notifications</span>
                 </button>
               </div>
-              <div class="settings-slider-row">
-                <input
-                  type="range"
-                  min="0"
-                  max={AUTO_REFRESH_SECONDS_OPTIONS.length - 1}
-                  step="1"
-                  value={autoRefreshIndex}
-                  on:input={handleAutoRefreshSliderChange}
-                  title={formatAutoRefreshLabel(autoRefreshSeconds)}
-                />
-                <span class="settings-slider-value">
-                  {formatAutoRefreshLabel(autoRefreshSeconds)}
-                </span>
-              </div>
-              <div class="settings-help-text">
-                Controls how often the panel refreshes runs in the background.
-              </div>
 
-              <div class="settings-divider"></div>
+              <!-- General Tab Content -->
+              {#if settingsActiveTab === 'general'}
+                <div class="settings-tab-content">
+                  <div class="refresh-settings-header">
+                    <span>Auto-Refresh</span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showAutoRefreshSettingsHelp}
+                      title="Learn more about Auto-Refresh"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-slider-row">
+                    <input
+                      type="range"
+                      min="0"
+                      max={AUTO_REFRESH_SECONDS_OPTIONS.length - 1}
+                      step="1"
+                      value={autoRefreshIndex}
+                      on:input={handleAutoRefreshSliderChange}
+                      title={formatAutoRefreshLabel(autoRefreshSeconds)}
+                    />
+                    <span class="settings-slider-value">
+                      {formatAutoRefreshLabel(autoRefreshSeconds)}
+                    </span>
+                  </div>
+                  <div class="settings-help-text">
+                    Controls how often the panel refreshes runs in the background.
+                  </div>
 
-              <div class="refresh-settings-header">
-                <span
-                  title="Maximum total workflow runs to progressively load when no date filter is active"
-                >
-                  Maximum Workflow Runs Limit (on open)
-                </span>
-                <button
-                  class="info-icon clickable settings-info-icon"
-                  type="button"
-                  on:click={showNonDateMaxTotalRunsHelp}
-                  title="Learn more about the on-open workflow runs limit"
-                >
-                  <span class="codicon codicon-info"></span>
-                </button>
-              </div>
-              <div class="settings-slider-row">
-                <input
-                  type="range"
-                  min="0"
-                  max={MAX_TOTAL_RUNS_OPTIONS.length - 1}
-                  step="1"
-                  value={nonDateMaxTotalRunsIndex}
-                  on:input={handleNonDateMaxTotalRunsSliderChange}
-                  title={`Maximum ${NON_DATE_MAX_TOTAL_RUNS.toLocaleString()} runs to load when no date filter is active`}
-                />
-                <span class="settings-slider-value">
-                  {NON_DATE_MAX_TOTAL_RUNS.toLocaleString()} runs
-                </span>
-              </div>
-              <div class="settings-help-text">
-                Caps how many runs are progressively loaded when no date filter is active.
-              </div>
+                  <div class="settings-divider"></div>
 
-              <div class="settings-divider"></div>
+                  <div class="refresh-settings-header">
+                    <span
+                      title="Maximum total workflow runs to progressively load when no date filter is active"
+                    >
+                      Maximum Workflow Runs Limit (on open)
+                    </span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showNonDateMaxTotalRunsHelp}
+                      title="Learn more about the on-open workflow runs limit"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-slider-row">
+                    <input
+                      type="range"
+                      min="0"
+                      max={MAX_TOTAL_RUNS_OPTIONS.length - 1}
+                      step="1"
+                      value={nonDateMaxTotalRunsIndex}
+                      on:input={handleNonDateMaxTotalRunsSliderChange}
+                      title={`Maximum ${NON_DATE_MAX_TOTAL_RUNS.toLocaleString()} runs to load when no date filter is active`}
+                    />
+                    <span class="settings-slider-value">
+                      {NON_DATE_MAX_TOTAL_RUNS.toLocaleString()} runs
+                    </span>
+                  </div>
+                  <div class="settings-help-text">
+                    Caps how many runs are progressively loaded when no date filter is active.
+                  </div>
 
-              <div class="refresh-settings-header">
-                <span title="Maximum workflow runs to scan when a Date Filter is active">
-                  Maximum Workflow Runs Limit (Date Range)
-                </span>
-                <button
-                  class="info-icon clickable settings-info-icon"
-                  type="button"
-                  on:click={showDateFilterMaxTotalRunsHelp}
-                  title="Learn more about the date-range workflow runs limit"
-                >
-                  <span class="codicon codicon-info"></span>
-                </button>
-              </div>
-              <div class="settings-slider-row">
-                <input
-                  type="range"
-                  min="0"
-                  max={MAX_TOTAL_RUNS_OPTIONS.length - 1}
-                  step="1"
-                  value={dateFilterMaxTotalRunsIndex}
-                  on:input={handleDateFilterMaxTotalRunsSliderChange}
-                  title={`Maximum ${DATE_FILTER_MAX_TOTAL_RUNS.toLocaleString()} runs to scan when a date range is active`}
-                />
-                <span class="settings-slider-value">
-                  {DATE_FILTER_MAX_TOTAL_RUNS.toLocaleString()} runs
-                </span>
-              </div>
-              <div class="settings-help-text">
-                Limits how many runs are scanned for an active Date Filter before marking results as
-                truncated.
-              </div>
+                  <div class="settings-divider"></div>
 
-              <div class="settings-divider"></div>
+                  <div class="refresh-settings-header">
+                    <span title="Maximum workflow runs to scan when a Date Filter is active">
+                      Maximum Workflow Runs Limit (Date Range)
+                    </span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showDateFilterMaxTotalRunsHelp}
+                      title="Learn more about the date-range workflow runs limit"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-slider-row">
+                    <input
+                      type="range"
+                      min="0"
+                      max={MAX_TOTAL_RUNS_OPTIONS.length - 1}
+                      step="1"
+                      value={dateFilterMaxTotalRunsIndex}
+                      on:input={handleDateFilterMaxTotalRunsSliderChange}
+                      title={`Maximum ${DATE_FILTER_MAX_TOTAL_RUNS.toLocaleString()} runs to scan when a date range is active`}
+                    />
+                    <span class="settings-slider-value">
+                      {DATE_FILTER_MAX_TOTAL_RUNS.toLocaleString()} runs
+                    </span>
+                  </div>
+                  <div class="settings-help-text">
+                    Limits how many runs are scanned for an active Date Filter before marking
+                    results as truncated.
+                  </div>
 
-              <div class="refresh-settings-header">
-                <span title="Number of workflow runs shown per page in this panel">
-                  Workflow Runs Per Page
-                </span>
-                <button
-                  class="info-icon clickable settings-info-icon"
-                  type="button"
-                  on:click={showWorkflowLoadLimitHelp}
-                  title="Learn more about Workflow Runs Per Page"
-                >
-                  <span class="codicon codicon-info"></span>
-                </button>
-              </div>
-              <div class="settings-slider-row">
-                <input
-                  type="range"
-                  min="0"
-                  max={WORKFLOW_LOAD_LIMIT_OPTIONS.length - 1}
-                  step="1"
-                  value={workflowLoadLimitIndex}
-                  on:input={handleWorkflowLoadLimitSliderChange}
-                  title={`Show ${workflowLoadLimit} runs per page in this panel`}
-                />
-                <span class="settings-slider-value">
-                  {workflowLoadLimit} per page
-                </span>
-              </div>
+                  <div class="settings-divider"></div>
 
-              <div class="settings-divider"></div>
+                  <div class="refresh-settings-header">
+                    <span title="Number of workflow runs shown per page in this panel">
+                      Workflow Runs Per Page
+                    </span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showWorkflowLoadLimitHelp}
+                      title="Learn more about Workflow Runs Per Page"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-slider-row">
+                    <input
+                      type="range"
+                      min="0"
+                      max={WORKFLOW_LOAD_LIMIT_OPTIONS.length - 1}
+                      step="1"
+                      value={workflowLoadLimitIndex}
+                      on:input={handleWorkflowLoadLimitSliderChange}
+                      title={`Show ${workflowLoadLimit} runs per page in this panel`}
+                    />
+                    <span class="settings-slider-value">
+                      {workflowLoadLimit} per page
+                    </span>
+                  </div>
 
-              <div class="refresh-settings-header">Date Filter</div>
-              <div class="settings-input-group">
-                <label for="date-filter-from-2" class="settings-date-label">From:</label>
-                <input
-                  id="date-filter-from-2"
-                  type="datetime-local"
-                  class="settings-date-input"
-                  bind:value={dateFilterFrom}
-                  max={dateFilterTo || undefined}
-                  on:change={handleDateFilterChange}
-                />
-                {#if dateFilterFrom}
-                  <button
-                    type="button"
-                    class="settings-clear-button"
-                    on:click={clearDateFilterFrom}
-                    title="Clear 'From' date"
-                  >
-                    <span class="codicon codicon-close"></span>
-                  </button>
-                {/if}
-              </div>
-              <div class="settings-input-group">
-                <label for="date-filter-to-2" class="settings-date-label">To:</label>
-                <input
-                  id="date-filter-to-2"
-                  type="datetime-local"
-                  class="settings-date-input"
-                  bind:value={dateFilterTo}
-                  min={dateFilterFrom || undefined}
-                  on:change={handleDateFilterToChange}
-                />
-                {#if dateFilterTo}
-                  <button
-                    type="button"
-                    class="settings-clear-button"
-                    on:click={clearDateFilterTo}
-                    title="Clear 'To' date"
-                  >
-                    <span class="codicon codicon-close"></span>
-                  </button>
-                {/if}
-              </div>
-              <div class="settings-help-text">
-                Only show runs created between these date/times (inclusive).
-              </div>
-              {#if autoRefreshSeconds > 0 && dateFilterTo}
-                <div class="settings-help-text settings-help-text--info">
-                  <span class="codicon codicon-info"></span>
-                  <span>
-                    Auto-refresh is active, but new runs won't appear in this historical date range.
-                  </span>
+                  <div class="settings-divider"></div>
+
+                  <div class="refresh-settings-header">Date Filter</div>
+                  <div class="settings-input-group">
+                    <label for="date-filter-from-2" class="settings-date-label">From:</label>
+                    <input
+                      id="date-filter-from-2"
+                      type="datetime-local"
+                      class="settings-date-input"
+                      bind:value={dateFilterFrom}
+                      max={dateFilterTo || undefined}
+                      on:change={handleDateFilterChange}
+                    />
+                    {#if dateFilterFrom}
+                      <button
+                        type="button"
+                        class="settings-clear-button"
+                        on:click={clearDateFilterFrom}
+                        title="Clear 'From' date"
+                      >
+                        <span class="codicon codicon-close"></span>
+                      </button>
+                    {/if}
+                  </div>
+                  <div class="settings-input-group">
+                    <label for="date-filter-to-2" class="settings-date-label">To:</label>
+                    <input
+                      id="date-filter-to-2"
+                      type="datetime-local"
+                      class="settings-date-input"
+                      bind:value={dateFilterTo}
+                      min={dateFilterFrom || undefined}
+                      on:change={handleDateFilterToChange}
+                    />
+                    {#if dateFilterTo}
+                      <button
+                        type="button"
+                        class="settings-clear-button"
+                        on:click={clearDateFilterTo}
+                        title="Clear 'To' date"
+                      >
+                        <span class="codicon codicon-close"></span>
+                      </button>
+                    {/if}
+                  </div>
+                  <div class="settings-help-text">
+                    Only show runs created between these date/times (inclusive).
+                  </div>
+                  {#if autoRefreshSeconds > 0 && dateFilterTo}
+                    <div class="settings-help-text settings-help-text--info">
+                      <span class="codicon codicon-info"></span>
+                      <span>
+                        Auto-refresh is active, but new runs won't appear in this historical date
+                        range.
+                      </span>
+                    </div>
+                  {/if}
+                </div>
+              {/if}
+
+              <!-- Notifications Tab Content -->
+              {#if settingsActiveTab === 'notifications'}
+                <div class="settings-tab-content">
+                  <div class="settings-checkbox-row">
+                    <label class="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={showWorkflowToastNotifications}
+                        on:change={updateNotificationSettings}
+                        title="Show toast notifications when workflows start, complete, or fail"
+                      />
+                      <span>Workflow Toast Notifications</span>
+                    </label>
+                  </div>
+                  <div class="settings-help-text">
+                    Show toast notifications when workflows start, complete, or fail.
+                  </div>
+
+                  <div class="settings-divider"></div>
+
+                  <div class="settings-checkbox-row">
+                    <label class="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        bind:checked={showProgressIndicators}
+                        on:change={updateNotificationSettings}
+                        title="Show inline job progress indicators for running workflows"
+                      />
+                      <span>Progress Indicators</span>
+                    </label>
+                  </div>
+                  <div class="settings-help-text">
+                    Show inline job progress for running workflows (e.g., "2/5 jobs completed").
+                  </div>
                 </div>
               {/if}
             </div>
@@ -4035,7 +5206,7 @@
   {/if}
 
   <!-- Search and Filter Controls -->
-  <div class="controls">
+  <div class="controls" class:is-scrolled={isScrolled}>
     {#if fetchingDateFilteredRuns && (dateFilterFrom || dateFilterTo)}
       <div class="settings-help-text settings-help-text--fetching">
         <span class="codicon codicon-loading spinning-icon"></span>
@@ -4316,26 +5487,6 @@
     </div>
   </div>
 
-  {#if runs.length > 0 && filteredRuns.length > 0}
-    <!-- Pagination Status Info -->
-    <div class="pagination-status-info">
-      {#if totalCount > 0}
-        {#if !showWatchedOnly && hasMoreRuns() && totalRunsFetched < getMaxTotalRuns()}
-          Showing page {currentPageNumber || 1} of {totalPagesNumber || 1} ({filteredRuns.length}
-          run{filteredRuns.length === 1 ? '' : 's'} total). Filters apply to the
-          {runs.length} run{runs.length !== 1 ? 's' : ''} currently loaded; more runs will be fetched
-          automatically as needed.
-        {:else}
-          Showing page {currentPageNumber || 1} of {totalPagesNumber || 1} ({filteredRuns.length}
-          run{filteredRuns.length === 1 ? '' : 's'} total). All runs matching the current filters are
-          loaded.
-        {/if}
-      {:else}
-        Showing {filteredRuns.length} run{filteredRuns.length !== 1 ? '' : 's'}
-      {/if}
-    </div>
-  {/if}
-
   {#if runs.length > 0}
     <!-- Active Filters Expandable Section -->
     <div class="filter-results">
@@ -4354,6 +5505,17 @@
             </span>
           {/if}
         </div>
+        <!-- Inline background fetch indicator - subtle text in header -->
+        {#if showFetchingIndicator && filteredRuns.length > 0}
+          <span
+            class="inline-fetch-indicator"
+            aria-live="polite"
+            transition:fade={{ duration: 250 }}
+          >
+            <span class="codicon codicon-loading spinning-icon" aria-hidden="true"></span>
+            <span>Searching... ({totalRunsFetched.toLocaleString()})</span>
+          </span>
+        {/if}
         <span
           class={`codicon ${
             filtersExpanded ? 'codicon-chevron-up' : 'codicon-chevron-down'
@@ -4425,12 +5587,31 @@
       </div>
 
       <div class="empty-icon">🔍</div>
-      <div class="empty-title">No workflow runs match your filters</div>
-      {#if !showWatchedOnly && progressiveFetching && hasMoreRuns() && totalRunsFetched < getMaxTotalRuns()}
+      {#if !showWatchedOnly && isSearchingForRuns}
+        <!-- Progressive fetching is active or will resume - show searching state, not final "no matches" -->
+        <div class="empty-title">Searching for matching runs...</div>
         <div class="empty-subtitle empty-subtitle--progressive">
           <span class="codicon codicon-sync spinning-icon"></span>
-          <span>No matching runs yet. Searching through workflow history...</span>
+          <span>
+            {#if progressiveFetching}
+              {#if totalRunsFetched > 0}
+                Searched {totalRunsFetched} run{totalRunsFetched === 1 ? '' : 's'}, fetching more...
+              {:else}
+                Loading workflow runs...
+              {/if}
+            {:else}
+              Searched {totalRunsFetched} run{totalRunsFetched === 1 ? '' : 's'}
+            {/if}
+          </span>
         </div>
+      {:else}
+        <!-- Progressive fetching complete - show final "no matches" state -->
+        <div class="empty-title">No workflow runs match your filters</div>
+        {#if totalRunsFetched > 0 && !showWatchedOnly}
+          <div class="empty-subtitle">
+            Searched {totalRunsFetched} run{totalRunsFetched === 1 ? '' : 's'} — no matches found.
+          </div>
+        {/if}
       {/if}
       <div class="empty-suggestions">
         {#if smartSuggestions.length > 0}
@@ -4522,26 +5703,12 @@
                 </div>
                 <div class="run-meta">
                   <div class="run-meta-line">
-                    {#if repository}
-                      <a
-                        href={getBranchUrl(run.head_branch)}
-                        class="branch-link"
-                        on:click={(e) => openBranch(run.head_branch, e)}
-                        title="Open branch on GitHub"
-                      >
-                        <span class="codicon codicon-git-branch"></span>
-                        <span class="branch-name">
-                          {run.head_branch}
-                        </span>
-                      </a>
-                    {:else}
-                      <span class="branch"
-                        ><span class="codicon codicon-git-branch"></span>
-                        <span class="branch-name">
-                          {run.head_branch}
-                        </span></span
-                      >
-                    {/if}
+                    <span class="branch"
+                      ><span class="codicon codicon-git-branch"></span>
+                      <span class="branch-name">
+                        {run.head_branch}
+                      </span></span
+                    >
                     <span class="separator">•</span>
                     <span class="actor"
                       ><span class="codicon codicon-account"></span>
@@ -4570,6 +5737,46 @@
                     <span class="separator">•</span>
                     <span class="run-number">#{run.run_number}</span>
                   </div>
+                  <!-- Mini job progress indicator for in-progress runs (controlled by showProgressIndicators) -->
+                  {#if showProgressIndicators && (run.status === 'in_progress' || run.status === 'queued') && runJobs.has(run.id)}
+                    {@const jobs = runJobs.get(run.id) || []}
+                    {@const completedJobs = jobs.filter((j) => j.status === 'completed')}
+                    {@const inProgressJobs = jobs.filter((j) => j.status === 'in_progress')}
+                    <div class="mini-job-progress">
+                      <span class="job-progress-bar">
+                        <span
+                          class="job-progress-fill"
+                          style="width: {jobs.length > 0
+                            ? ((completedJobs.length / jobs.length) * 100).toFixed(0)
+                            : 0}%"
+                        ></span>
+                      </span>
+                      <span class="job-progress-text">
+                        {completedJobs.length}/{jobs.length} jobs
+                      </span>
+                      {#if inProgressJobs.length > 0}
+                        <span class="running-jobs-indicator">
+                          <span class="codicon codicon-sync spinning-icon"></span>
+                          <span class="running-jobs-list">
+                            {#each inProgressJobs as runningJob (runningJob.id)}
+                              <span class="running-job-item" title={runningJob.name}>
+                                <span class="running-job-name"
+                                  >{runningJob.name.length > 50
+                                    ? runningJob.name.substring(0, 47) + '...'
+                                    : runningJob.name}</span
+                                >
+                                {#if runningJob.started_at}
+                                  <span class="running-job-duration"
+                                    >{formatDuration(runningJob.started_at)}</span
+                                  >
+                                {/if}
+                              </span>
+                            {/each}
+                          </span>
+                        </span>
+                      {/if}
+                    </div>
+                  {/if}
                 </div>
               </div>
             </div>
@@ -4577,6 +5784,21 @@
 
           <!-- Action buttons -->
           <div class="action-buttons">
+            <button
+              class="action-button graph-button"
+              on:click|stopPropagation={() => toggleDependencyGraph(run)}
+              title={showDependencyGraph.has(run.id)
+                ? 'Hide dependency graph'
+                : 'Show dependency graph'}
+            >
+              <span
+                class="codicon"
+                class:codicon-chevron-down={showDependencyGraph.has(run.id)}
+                class:codicon-chevron-right={!showDependencyGraph.has(run.id)}
+              ></span>
+              <span>Graph</span>
+            </button>
+
             <button
               class="action-button expand-button"
               on:click|stopPropagation={() => toggleRunExpansion(run.id)}
@@ -4724,6 +5946,31 @@
             </div>
           {/if}
 
+          <!-- Job Dependency Graph (below action buttons) -->
+          {#if showDependencyGraph.has(run.id)}
+            <div class="dependency-graph-section" transition:slide>
+              {#if loadingJobDependencies.has(run.id)}
+                <div class="graph-loading">
+                  <span class="codicon codicon-sync spinning-icon"></span>
+                  <span>Loading job dependencies...</span>
+                </div>
+              {:else}
+                <JobDependencyGraph
+                  runId={run.id}
+                  jobs={runJobs.get(run.id) || []}
+                  jobDefinitions={runJobDefinitions.get(run.id) || []}
+                  isRunning={run.status === 'in_progress' || run.status === 'queued'}
+                  onJobClick={(node) => handleGraphJobClick(node, run.id)}
+                  on:showSteps={(e) => {
+                    selectedJobForStepsModal = e.detail;
+                    selectedJobRunIdForSteps = run.id;
+                  }}
+                  on:openModal={() => openJobGraphModal(run.id)}
+                />
+              {/if}
+            </div>
+          {/if}
+
           <!-- Jobs list (expanded) -->
           {#if expandedRuns.has(run.id)}
             <div class="jobs-container" transition:slide>
@@ -4745,21 +5992,53 @@
                       <span class="job-status"
                         >{job.status === 'completed' ? job.conclusion : job.status}</span
                       >
-                      {#if job.started_at}
+                      {#if job.started_at && job.completed_at}
+                        <span class="job-duration" title="Job duration">
+                          <span class="codicon codicon-watch"></span>
+                          <span
+                            >{formatMs(
+                              new Date(job.completed_at).getTime() -
+                                new Date(job.started_at).getTime()
+                            )}</span
+                          >
+                        </span>
+                      {:else if job.started_at}
                         <span class="job-time">
                           <span class="codicon codicon-clock"></span>
                           <span>{formatRelativeTime(job.started_at)}</span>
                         </span>
                       {/if}
                     </div>
-                    <button
-                      class="job-logs-button"
-                      on:click|stopPropagation={() => viewJobLogs(job.id, job.name, run.id)}
-                      title="View logs for this job"
-                    >
-                      <span class="codicon codicon-file-text"></span>
-                      <span>View Logs</span>
-                    </button>
+                    <div class="job-actions">
+                      {#if job.status !== 'queued'}
+                        <button
+                          class="job-steps-button"
+                          on:click|stopPropagation={() => openJobStepsModal(job, run.id)}
+                          disabled={loadingJobSteps.has(job.id)}
+                          title={job.status === 'completed' && job.steps && job.steps.length > 0
+                            ? `View ${job.steps.length} step${job.steps.length !== 1 ? 's' : ''}`
+                            : job.status === 'in_progress'
+                              ? 'View current steps'
+                              : 'View steps'}
+                        >
+                          {#if loadingJobSteps.has(job.id)}
+                            <span class="codicon codicon-sync spinning-icon"></span>
+                            <span>Loading...</span>
+                          {:else}
+                            <span class="codicon codicon-list-ordered"></span>
+                            <span>Steps</span>
+                          {/if}
+                        </button>
+                      {/if}
+                      <button
+                        class="job-logs-button"
+                        on:click|stopPropagation={() => viewJobLogs(job.id, job.name, run.id)}
+                        title="View logs for this job"
+                      >
+                        <span class="codicon codicon-file-text"></span>
+                        <span>View Logs</span>
+                      </button>
+                    </div>
                   </div>
                 {/each}
               {:else}
@@ -5001,14 +6280,22 @@
 
         <div class="pagination-status">
           {#if progressiveFetching}
+            <!-- Actively fetching more runs in the background -->
             <span class="codicon codicon-sync spinning-icon"></span>
             {#if filteredRuns.length < (workflowLoadLimit > 0 ? workflowLoadLimit : 20)}
               <span>
-                Showing {filteredRuns.length} run{filteredRuns.length === 1 ? '' : 's'}. Loading
-                more in background to fill the page...
+                Showing {filteredRuns.length} run{filteredRuns.length === 1 ? '' : 's'}.
+                {#if totalRunsFetched > 0}
+                  Searched {totalRunsFetched}, fetching more...
+                {:else}
+                  Loading more in background...
+                {/if}
               </span>
             {:else}
-              <span>Fetching more runs...</span>
+              <span
+                >Searched {totalRunsFetched} run{totalRunsFetched === 1 ? '' : 's'}, fetching
+                more...</span
+              >
             {/if}
           {:else if !showWatchedOnly && hasMoreRuns() && totalRunsFetched < getMaxTotalRuns()}
             <span>
@@ -5286,6 +6573,91 @@
       </div>
     </div>
   </div>
+{/if}
+
+<!-- Job Steps Modal (from jobs list) -->
+{#if selectedJobForStepsModal}
+  <JobStepsModal
+    job={selectedJobForStepsModal}
+    onClose={closeJobStepsModal}
+    onViewLogs={selectedJobForStepsModal.jobId != null && selectedJobRunIdForSteps != null
+      ? () => {
+          const jobId = selectedJobForStepsModal?.jobId;
+          const runId = selectedJobRunIdForSteps;
+          if (jobId != null && runId != null) {
+            viewJobLogs(jobId, selectedJobForStepsModal?.name || 'Job', runId);
+          }
+        }
+      : undefined}
+    onViewStepLogs={selectedJobForStepsModal.jobId != null && selectedJobRunIdForSteps != null
+      ? (stepNumber, stepName) => {
+          const jobId = selectedJobForStepsModal?.jobId;
+          const runId = selectedJobRunIdForSteps;
+          if (jobId != null && runId != null) {
+            viewStepLogs(
+              jobId,
+              selectedJobForStepsModal?.name || 'Job',
+              runId,
+              stepNumber,
+              stepName
+            );
+          }
+        }
+      : undefined}
+    loadingStepLogs={getStepLogsLoadingSet(selectedJobForStepsModal.jobId)}
+  />
+{/if}
+
+<!-- Job Graph Modal (full screen view) -->
+{#if showJobGraphModal && jobGraphModalRunId}
+  {@const modalRun = runs.find((r) => r.id === jobGraphModalRunId)}
+  <JobGraphModal
+    runId={jobGraphModalRunId}
+    runName={modalRun?.display_title || modalRun?.name || ''}
+    jobs={runJobs.get(jobGraphModalRunId) || []}
+    jobDefinitions={runJobDefinitions.get(jobGraphModalRunId) || []}
+    isRunning={modalRun?.status === 'in_progress' || modalRun?.status === 'queued'}
+    onClose={closeJobGraphModal}
+    onJobClick={(node) => {
+      // Don't show steps for queued jobs
+      if (node.status === 'queued') {
+        return;
+      }
+
+      // For completed jobs with steps, show immediately
+      if (node.status === 'completed' && node.steps && node.steps.length > 0) {
+        selectedJobForStepsModal = node;
+        selectedJobRunIdForSteps = jobGraphModalRunId;
+        return;
+      }
+
+      // For running jobs or jobs without steps data, fetch from API
+      if (
+        node.jobId &&
+        jobGraphModalRunId &&
+        (node.status === 'in_progress' || !node.steps || node.steps.length === 0)
+      ) {
+        loadingJobSteps.add(node.jobId);
+        loadingJobSteps = loadingJobSteps; // Trigger reactivity
+        selectedJobRunIdForSteps = jobGraphModalRunId;
+
+        vscode.postMessage({
+          type: 'getJobDetails',
+          data: { jobId: node.jobId, runId: jobGraphModalRunId },
+        });
+        return;
+      }
+
+      // Fallback: show with available data
+      if (node.steps && node.steps.length > 0) {
+        selectedJobForStepsModal = node;
+        selectedJobRunIdForSteps = jobGraphModalRunId;
+      } else if (node.jobId && jobGraphModalRunId) {
+        // Fall back to viewing logs for jobs without steps data
+        viewJobLogs(node.jobId, node.name, jobGraphModalRunId);
+      }
+    }}
+  />
 {/if}
 
 <!-- Toast notifications -->
@@ -5619,6 +6991,48 @@
     min-width: 280px;
   }
 
+  /* Settings Tab Navigation */
+  .settings-tabs {
+    display: flex;
+    border-bottom: 1px solid var(--vscode-dropdown-border);
+  }
+
+  .settings-tab {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 12px;
+    background: transparent;
+    border: none;
+    border-bottom: 2px solid transparent;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: all 0.2s ease;
+  }
+
+  .settings-tab:hover {
+    background: var(--vscode-list-hoverBackground);
+    color: var(--vscode-foreground);
+  }
+
+  .settings-tab--active {
+    color: var(--vscode-foreground);
+    border-bottom-color: var(--vscode-focusBorder);
+    background: var(--vscode-list-activeSelectionBackground);
+  }
+
+  .settings-tab .codicon {
+    font-size: 14px;
+  }
+
+  .settings-tab-content {
+    padding: 4px 0;
+  }
+
   .refresh-settings-header {
     padding: 8px 12px;
     font-size: 11px;
@@ -5775,6 +7189,24 @@
     color: var(--vscode-descriptionForeground);
   }
 
+  .settings-checkbox-row {
+    padding: 8px 12px;
+  }
+
+  .settings-checkbox-label {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    cursor: pointer;
+    font-size: 12px;
+  }
+
+  .settings-checkbox-label input[type='checkbox'] {
+    width: 14px;
+    height: 14px;
+    cursor: pointer;
+  }
+
   .settings-help-text--fetching {
     display: flex;
     align-items: center;
@@ -5806,6 +7238,13 @@
     margin-bottom: 16px;
     padding: 8px 0;
     background-color: var(--vscode-sideBar-background);
+    transition: box-shadow 0.2s ease;
+  }
+
+  /* Add subtle shadow when controls are in sticky state (user has scrolled) */
+  .controls.is-scrolled {
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.15);
+    border-bottom: 1px solid var(--vscode-panel-border);
   }
 
   .search-box {
@@ -5916,18 +7355,24 @@
     transform: none;
   }
 
-  .pagination-status-info {
-    margin-bottom: 8px;
-    padding: 8px 12px;
-    background: var(--vscode-textBlockQuote-background);
-    border-left: 3px solid var(--vscode-textLink-foreground);
-    font-size: 12px;
-    color: var(--vscode-descriptionForeground);
-    line-height: 1.5;
-  }
-
   .filter-results {
     margin-bottom: 12px;
+  }
+
+  /* Inline fetch indicator - subtle text shown in Active Filters header */
+  .inline-fetch-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    margin-left: auto;
+    margin-right: 8px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.85;
+  }
+
+  .inline-fetch-indicator .spinning-icon {
+    font-size: 12px;
   }
 
   .filter-results-main {
@@ -6139,6 +7584,22 @@
   .run-item:hover {
     transform: translateY(-1px);
     box-shadow: 0 2px 6px rgba(0, 0, 0, 0.1);
+  }
+
+  /* Dependency graph section */
+  .dependency-graph-section {
+    padding: 12px 16px;
+    border-top: 1px solid var(--vscode-widget-border);
+    background: var(--vscode-editor-background);
+  }
+
+  .graph-loading {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    padding: 8px 0;
   }
 
   /* Action buttons container */
@@ -6356,6 +7817,103 @@
     opacity: 0.5;
   }
 
+  /* Mini job progress indicator for in-progress runs */
+  .mini-job-progress {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-top: 6px;
+    padding: 6px 10px;
+    background: var(--vscode-editor-inactiveSelectionBackground);
+    border-radius: 4px;
+    font-size: 11px;
+  }
+
+  .job-progress-bar {
+    width: 60px;
+    height: 4px;
+    background: var(--vscode-progressBar-background);
+    border-radius: 2px;
+    overflow: hidden;
+    flex-shrink: 0;
+  }
+
+  .job-progress-fill {
+    height: 100%;
+    background: var(--vscode-progressBar-background);
+    background: linear-gradient(
+      90deg,
+      var(--vscode-terminal-ansiGreen) 0%,
+      var(--vscode-terminal-ansiGreen) 100%
+    );
+    transition: width 0.3s ease;
+  }
+
+  .job-progress-text {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    color: var(--vscode-descriptionForeground);
+    flex-shrink: 0;
+  }
+
+  .running-jobs-indicator {
+    display: flex;
+    align-items: flex-start;
+    gap: 6px;
+    color: var(--vscode-terminal-ansiYellow);
+    flex: 1;
+    min-width: 0;
+  }
+
+  .running-jobs-indicator > .codicon {
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
+  .running-jobs-list {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+    min-width: 0;
+  }
+
+  .running-job-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    min-width: 0;
+  }
+
+  .running-job-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    min-width: 0;
+    flex: 1;
+  }
+
+  .running-job-duration {
+    flex-shrink: 0;
+    opacity: 0.8;
+    font-size: 10px;
+  }
+
+  /* Legacy styles - kept for backward compatibility */
+  .current-job-indicator {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    color: var(--vscode-terminal-ansiYellow);
+  }
+
+  .current-job-name {
+    max-width: 150px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
   .branch,
   .actor {
     display: flex;
@@ -6384,21 +7942,6 @@
     font-size: 12px;
     color: var(--vscode-descriptionForeground);
     margin-top: 4px;
-  }
-
-  .branch-link {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    color: var(--vscode-textLink-foreground);
-    text-decoration: none;
-    cursor: pointer;
-    transition: color 0.2s;
-  }
-
-  .branch-link:hover {
-    color: var(--vscode-textLink-activeForeground);
-    text-decoration: underline;
   }
 
   .run-item.highlighted {
@@ -6681,7 +8224,22 @@
     text-transform: capitalize;
   }
 
-  .job-logs-button {
+  .job-duration {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+  }
+
+  .job-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .job-logs-button,
+  .job-steps-button {
     padding: 6px 14px;
     background: var(--vscode-button-secondaryBackground);
     color: var(--vscode-button-secondaryForeground);
@@ -6690,9 +8248,13 @@
     cursor: pointer;
     font-size: 11px;
     transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
   }
 
-  .job-logs-button:hover {
+  .job-logs-button:hover,
+  .job-steps-button:hover {
     background: var(--vscode-button-secondaryHoverBackground);
     transform: translateY(-1px);
   }

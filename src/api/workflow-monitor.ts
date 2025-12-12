@@ -255,6 +255,88 @@ export async function getWorkflowRunJobs(
 }
 
 /**
+ * Get a specific job by ID
+ * Returns the job details including current status and steps
+ */
+export async function getWorkflowJob(
+  owner: string,
+  repo: string,
+  jobId: number
+): Promise<WorkflowJob | null> {
+  try {
+    const token = await TokenManager.getGithubToken();
+    if (!token) {
+      return null;
+    }
+
+    const url = `https://api.github.com/repos/${owner}/${repo}/actions/jobs/${jobId}`;
+
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
+
+    if (!response.ok) {
+      return null;
+    }
+
+    return (await response.json()) as WorkflowJob;
+  } catch (error) {
+    console.error('Error fetching workflow job:', error);
+    return null;
+  }
+}
+
+/**
+ * Check if logs are available for a job
+ * Returns true if logs exist, false if not yet available (404)
+ */
+export async function checkJobLogsAvailable(
+  owner: string,
+  repo: string,
+  jobId: number
+): Promise<{ available: boolean; reason?: string }> {
+  try {
+    const token = await TokenManager.getGithubToken();
+    if (!token) {
+      return { available: false, reason: 'Not authenticated' };
+    }
+
+    const url = `https://api.github.com/repos/${owner}/${repo}/actions/jobs/${jobId}/logs`;
+
+    // Use HEAD request to check availability without downloading full logs
+    const response = await fetch(url, {
+      method: 'HEAD',
+      headers: {
+        Accept: 'application/vnd.github+json',
+        Authorization: `Bearer ${token}`,
+        'X-GitHub-Api-Version': '2022-11-28',
+      },
+    });
+
+    if (response.ok || response.status === 302) {
+      return { available: true };
+    }
+
+    if (response.status === 404) {
+      return { available: false, reason: 'Logs are not available yet' };
+    }
+
+    if (response.status === 410) {
+      return { available: false, reason: 'Logs have expired and are no longer available' };
+    }
+
+    return { available: false, reason: `Failed to check logs: ${response.status}` };
+  } catch (error) {
+    console.error('Error checking job logs availability:', error);
+    return { available: false, reason: 'Failed to check logs availability' };
+  }
+}
+
+/**
  * Rerun a workflow run
  */
 export async function rerunWorkflowRun(

@@ -138,6 +138,153 @@ export interface WorkflowJob {
   started_at: string;
   /** Completed timestamp */
   completed_at?: string;
+  /** Workflow job key from YAML (e.g., "build", "test") - returned by GitHub API */
+  workflow_job_key?: string;
+  /** Job steps */
+  steps?: Array<{
+    name: string;
+    status: 'queued' | 'in_progress' | 'completed';
+    conclusion?: 'success' | 'failure' | 'cancelled' | 'skipped';
+    number: number;
+    started_at?: string;
+    completed_at?: string;
+  }>;
+}
+
+/**
+ * Enhanced WorkflowJob with dependency information
+ */
+export interface WorkflowJobWithDependencies extends WorkflowJob {
+  /** Job key identifier (from YAML job definition) */
+  job_key?: string;
+  /** Jobs this job depends on (from 'needs' keyword) */
+  needs?: string[];
+  /** Runner name if applicable */
+  runner_name?: string;
+  /** Matrix configuration if job is part of matrix */
+  matrix?: Record<string, string>;
+}
+
+/**
+ * Job step information for graph node
+ */
+export interface JobNodeStep {
+  /** Step name */
+  name: string;
+  /** Step status */
+  status: 'queued' | 'in_progress' | 'completed';
+  /** Step conclusion */
+  conclusion?: 'success' | 'failure' | 'cancelled' | 'skipped';
+  /** Step number/order */
+  number: number;
+  /** Started timestamp */
+  startedAt?: string;
+  /** Completed timestamp */
+  completedAt?: string;
+  /** Duration in milliseconds */
+  duration?: number;
+}
+
+/**
+ * Job node for graph visualization
+ */
+export interface JobGraphNode {
+  /** Unique identifier (matches job key or generated ID) */
+  id: string;
+  /** Display name */
+  name: string;
+  /** Job ID from GitHub API (for linking to logs) */
+  jobId?: number;
+  /** Current status */
+  status: WorkflowRunStatus;
+  /** Conclusion if completed */
+  conclusion: WorkflowRunConclusion;
+  /** Dependencies (job IDs this job needs) */
+  dependencies: string[];
+  /** Dependents (job IDs that need this job) */
+  dependents: string[];
+  /** Graph layout position */
+  position: { x: number; y: number };
+  /** Node level in graph (0 = root, 1 = first level deps, etc.) */
+  level: number;
+  /** Is this job currently in progress */
+  isActive?: boolean;
+  /** Is this a matrix job group */
+  isMatrix?: boolean;
+  /** Matrix label if applicable (e.g., "ubuntu-latest, node-18") */
+  matrixLabel?: string;
+  /** Number of completed matrix jobs (for matrix groups) */
+  matrixCompleted?: number;
+  /** Total number of matrix jobs (for matrix groups) */
+  matrixTotal?: number;
+  /** Individual matrix jobs (for expandable display) */
+  matrixJobs?: JobGraphNode[];
+  /** Duration in milliseconds */
+  duration?: number;
+  /** Started timestamp */
+  startedAt?: string;
+  /** Completed timestamp */
+  completedAt?: string;
+  /** Job steps */
+  steps?: JobNodeStep[];
+}
+
+/**
+ * Dependency edge for graph visualization
+ */
+export interface JobGraphEdge {
+  /** Source job ID */
+  from: string;
+  /** Target job ID */
+  to: string;
+  /** Edge type */
+  type: 'dependency' | 'parallel';
+}
+
+/**
+ * Complete job dependency graph
+ */
+export interface JobDependencyGraph {
+  /** All job nodes */
+  nodes: JobGraphNode[];
+  /** All edges between nodes */
+  edges: JobGraphEdge[];
+  /** Maximum depth of graph (number of levels) */
+  maxDepth: number;
+  /** Total number of jobs */
+  totalJobs: number;
+  /** Current running job ID(s) */
+  activeJobIds: string[];
+  /** Nodes organized by level for layout */
+  levels: JobGraphNode[][];
+}
+
+/**
+ * Graph display mode based on available space
+ */
+export type GraphDisplayMode =
+  | 'full' // All jobs visible
+  | 'focused' // Previous → Current → Next only
+  | 'minimal' // Current job only
+  | 'button'; // Fallback to button/icon
+
+/**
+ * Job dependencies parsed from workflow YAML
+ */
+export interface WorkflowJobDefinition {
+  /** Job key (identifier in YAML) */
+  key: string;
+  /** Job name (display name) */
+  name?: string;
+  /** Jobs this job depends on */
+  needs?: string | string[];
+  /** Matrix strategy if defined */
+  matrix?: {
+    include?: Record<string, unknown>[];
+    exclude?: Record<string, unknown>[];
+  } & Record<string, unknown[]>;
+  /** Reusable workflow reference (if this job calls another workflow) */
+  uses?: string;
 }
 
 /**
@@ -423,6 +570,7 @@ export type WebviewMessageType =
   | 'updateWorkflowRunsTotalLimits'
   | 'updateDateFilter'
   | 'updateAutoRefresh'
+  | 'updateNotificationSettings'
   | 'openWorkflowRun'
   | 'openWorkflowRuns'
   | 'cancelWorkflowRun'
@@ -479,6 +627,12 @@ export type WebviewMessageType =
   | 'loadMoreRuns'
   | 'viewJobLogs'
   | 'viewJobLogsResponse'
+  | 'checkJobLogsAvailability'
+  | 'checkJobLogsAvailabilityResponse'
+  | 'getJobDetails'
+  | 'getJobDetailsResponse'
+  | 'viewStepLogs'
+  | 'viewStepLogsResponse'
   | 'getWorkflowRunArtifacts'
   | 'getWorkflowRunArtifactsResponse'
   | 'downloadArtifact'
@@ -522,6 +676,8 @@ export type WebviewMessageType =
   | 'reloadExtensionDataResponse'
   | 'gitContextMismatch'
   | 'openExternalUrl'
+  | 'getJobDependencies'
+  | 'getJobDependenciesResponse'
   | 'cancelled'
   | 'error'
   | 'success'

@@ -43,6 +43,14 @@ type WorkflowRunsPanelSettings = {
    * Maximum total runs to fetch when a date range filter is active.
    */
   dateFilterMaxTotalRuns?: number;
+  /**
+   * Show toast notifications in the top-right corner when workflows start, complete, or fail.
+   */
+  showWorkflowToastNotifications?: boolean;
+  /**
+   * Show inline job progress for running workflows.
+   */
+  showProgressIndicators?: boolean;
 };
 
 /**

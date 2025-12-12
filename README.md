@@ -15,7 +15,7 @@ Dispatch workflows with dynamic inputs, monitor runs in real-time, save presets,
 
 ![GitHub Actions Runner Demo](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/vscode-github-workflow-runner.gif)
 
-> **Watch the extension in action:** Dispatch workflows, fill dynamic inputs, monitor runs in real-time — all without leaving VS Code.
+> **Watch the extension in action:** Dispatch workflows, visualize job dependencies, fill dynamic inputs, monitor runs in real-time — all without leaving VS Code.
 
 ---
 
@@ -43,10 +43,12 @@ Mark frequently used workflows as favorites for instant access. Pin workflows to
 ### 📊 **Real-Time Monitoring**
 
 - Live status updates with color-coded indicators
+- **Interactive job dependencies graph** with execution stages
 - Filter by workflow, branch, PR, or marked workflows
 - View logs directly in VS Code editor
 - Download artifacts with one click
 - Rerun failed jobs or entire workflows
+- **Click jobs to view step details**
 
 ### 🔐 **Secure & Flexible**
 
@@ -79,10 +81,12 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 ### 4️⃣ **Monitor Workflow Runs**
 
 1. Click **"Open Workflow Runs"** to view all runs
-2. Filter by workflow, branch, PR, or marked workflows
-3. Click **"View Logs"** to see job logs in VS Code
-4. Click **"Download Artifacts"** to download build artifacts
-5. Click **"Rerun"** to rerun workflows with smart input recovery
+2. **Click on a run** to see the job dependencies graph
+3. Filter by workflow, branch, PR, or marked workflows
+4. **Click on a job** in the graph to view step details
+5. Click **"View Logs"** to see job logs in VS Code
+6. Click **"Download Artifacts"** to download build artifacts
+7. Click **"Rerun"** to rerun workflows with smart input recovery
 
 ### 5️⃣ **Save Presets for Quick Access**
 
@@ -133,20 +137,29 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 
 > View workflow logs directly in VS Code editor
 
+### Job Dependencies Graph
+
+![Job Dependencies Graph](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/job-dependencies-graph.png)
+
+> Visualize job dependencies with an interactive graph showing execution stages, matrix jobs, and real-time status updates
+
 ---
 
 ## ✨ Features
 
 ### 🔧 Workflow Runs Panel
 
-| Feature                | Description                                                                   |
-| ---------------------- | ----------------------------------------------------------------------------- |
-| **View Logs**          | Open workflow run logs directly in VS Code editor                             |
-| **View Jobs & Steps**  | Expand any run to see individual jobs with status, duration, and step details |
-| **Download Artifacts** | Download workflow artifacts as ZIP files                                      |
-| **Rerun Workflows**    | Rerun all jobs or only failed jobs                                            |
-| **Cancel Runs**        | Cancel in-progress workflows with loading states and error handling           |
-| **Enhanced Metadata**  | View branch, commit, actor, and duration information                          |
+| Feature                    | Description                                                                   |
+| -------------------------- | ----------------------------------------------------------------------------- |
+| **Job Dependencies Graph** | Visualize job dependencies with an interactive graph showing execution stages |
+| **Matrix Job Groups**      | Matrix jobs are intelligently grouped with collapsible views for each variant |
+| **Job Steps Details**      | Click on any job to view step-by-step breakdown with status and duration      |
+| **View Logs**              | Open workflow run logs directly in VS Code editor                             |
+| **View Jobs & Steps**      | Expand any run to see individual jobs with status, duration, and step details |
+| **Download Artifacts**     | Download workflow artifacts as ZIP files                                      |
+| **Rerun Workflows**        | Rerun all jobs or only failed jobs                                            |
+| **Cancel Runs**            | Cancel in-progress workflows with loading states and error handling           |
+| **Enhanced Metadata**      | View branch, commit, actor, and duration information                          |
 
 ### 🔍 Advanced Filtering & Auto-Refresh
 
@@ -200,6 +213,8 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 - **Desktop Notifications** — Get notified when workflows complete
 - **Configurable Alerts** — Choose when to receive notifications (success/failure)
 - **Non-Intrusive** — Stay informed without switching contexts
+- **Workflow Toast Notifications** — Toast messages in the top-right corner for workflow start/complete/fail events
+- **Progress Indicators** — Inline job progress display (e.g., "2/5 jobs completed")
 
 ## ⚙️ Configuration
 
@@ -235,6 +250,8 @@ Access settings via `File > Preferences > Settings` and search for "GitHub Actio
 - `githubWorkflowRunner.notifications.enabled`: Enable notifications
 - `githubWorkflowRunner.notifications.onSuccess`: Notify on success
 - `githubWorkflowRunner.notifications.onFailure`: Notify on failure
+- `githubWorkflowRunner.notifications.showWorkflowToastNotifications`: Show toast notifications in the top-right corner when workflows start, complete, or fail. Default: `true`
+- `githubWorkflowRunner.notifications.showProgressIndicators`: Show inline job progress for running workflows. Default: `true`
 
 ### Authentication Settings
 

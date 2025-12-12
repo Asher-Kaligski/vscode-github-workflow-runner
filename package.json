@@ -4,7 +4,7 @@
   "description": "Run, monitor, and manage GitHub Actions workflows directly from VS Code. Dispatch workflows with inputs, track runs in real-time, filter by PR/branch, view logs, download artifacts, and more.",
   "publisher": "asher-kaligski",
   "icon": "media/icon.png",
-  "version": "1.0.2",
+  "version": "1.1.0",
   "engines": {
     "vscode": "^1.93.0"
   },
@@ -184,6 +184,16 @@
           "type": "boolean",
           "default": true,
           "description": "Show notification when workflow fails"
+        },
+        "githubWorkflowRunner.notifications.showWorkflowToastNotifications": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show toast notifications in the top-right corner when workflows start, complete, or fail"
+        },
+        "githubWorkflowRunner.notifications.showProgressIndicators": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show inline job progress for running workflows (e.g., '2/5 jobs completed')"
         },
         "githubWorkflowRunner.workflows.excludePatterns": {
           "type": "array",

@@ -5,7 +5,7 @@
  */
 import * as vscode from 'vscode';
 import { parseLogURI } from '../utils/log-uri-scheme';
-import { parseJobLogs } from '../utils/log-parser';
+import { extractStepLogs, parseJobLogs } from '../utils/log-parser';
 import { TokenManager } from '../utils/token-manager';
 
 export class LogDocumentProvider implements vscode.TextDocumentContentProvider {
@@ -21,7 +21,7 @@ export class LogDocumentProvider implements vscode.TextDocumentContentProvider {
    */
   async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
     try {
-      const { owner, repo, jobName, jobId } = parseLogURI(uri);
+      const { owner, repo, jobName, jobId, stepNumber, stepName } = parseLogURI(uri);
 
       const cfg = vscode.workspace.getConfiguration('githubWorkflowRunner');
       const debug = cfg.get<boolean>('logs.debug', false);
@@ -88,6 +88,19 @@ export class LogDocumentProvider implements vscode.TextDocumentContentProvider {
 
       if (!logText || logText.trim().length === 0) {
         return `No logs available for job "${jobName}".`;
+      }
+
+      // If step number is specified, extract only that step's logs
+      if (stepNumber !== undefined) {
+        const stepLog = extractStepLogs(logText, stepNumber, stepName);
+        if (stepLog) {
+          return stepLog.content;
+        }
+        // If step extraction failed, return a helpful message
+        const stepIdentifier = stepName
+          ? `"${stepName}" (step ${stepNumber})`
+          : `step ${stepNumber}`;
+        return `Could not extract logs for ${stepIdentifier} from job "${jobName}".\n\nThis may happen if:\n- The step has not started yet\n- The step number is invalid\n- The log format is unexpected\n\nFull job logs are available by viewing the job logs directly.`;
       }
 
       // Parse logs (keeps ANSI codes intact)
