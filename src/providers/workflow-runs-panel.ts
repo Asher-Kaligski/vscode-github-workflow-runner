@@ -34,7 +34,9 @@ import { buildLogURI } from '../utils/log-uri-scheme';
 import { Storage } from '../utils/storage';
 
 const AUTO_REFRESH_SECONDS_OPTIONS: number[] = [0, 15, 30, 45, 60, 90, 120, 180];
-const DEFAULT_AUTO_REFRESH_SECONDS = 30;
+// Default to 15 seconds - aligns with sidebar provider and provides
+// responsive monitoring without excessive API usage (~5% of rate limit)
+const DEFAULT_AUTO_REFRESH_SECONDS = 15;
 
 export class WorkflowRunsPanel {
   /**
