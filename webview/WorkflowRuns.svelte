@@ -1338,6 +1338,10 @@
    * View job logs
    */
   function viewJobLogs(jobId: number, jobName: string, runId: number) {
+    // Track loading state
+    loadingJobLogs.add(jobId);
+    loadingJobLogs = loadingJobLogs; // Trigger reactivity
+
     // Pause auto-refresh briefly to avoid disruptive refresh when a new tab opens
     autoRefreshPaused = true;
     stopAutoRefresh();
@@ -2928,6 +2932,13 @@
         loadingJobLogs = loadingJobLogs; // Trigger reactivity
       }
       // The actual log viewing is handled by the extension
+    } else if (message.type === 'viewJobLogsResponse') {
+      // Handle response for viewing job logs - clear loading state
+      const jobId = message.data?.jobId;
+      if (jobId) {
+        loadingJobLogs.delete(jobId);
+        loadingJobLogs = loadingJobLogs; // Trigger reactivity
+      }
     } else if (message.type === 'viewStepLogsResponse') {
       // Handle response for viewing step logs
       const jobId = message.data?.jobId;
@@ -6645,6 +6656,8 @@
         }
       : undefined}
     loadingStepLogs={getStepLogsLoadingSet(selectedJobForStepsModal.jobId)}
+    loadingLogs={selectedJobForStepsModal.jobId != null &&
+      loadingJobLogs.has(selectedJobForStepsModal.jobId)}
   />
 {/if}
 

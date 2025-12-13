@@ -13,6 +13,7 @@
   export let onViewStepLogs: ((stepNumber: number, stepName: string) => void) | undefined =
     undefined;
   export let loadingStepLogs: Set<number> = new Set();
+  export let loadingLogs: boolean = false;
 
   $: steps = job.steps || [];
   $: hasSteps = steps.length > 0;
@@ -149,9 +150,14 @@
 
     <div class="modal-footer">
       {#if onViewLogs}
-        <button class="secondary-button" on:click={onViewLogs} type="button">
-          <span class="codicon codicon-output"></span>
-          View Logs
+        <button class="secondary-button" on:click={onViewLogs} disabled={loadingLogs} type="button">
+          {#if loadingLogs}
+            <span class="codicon codicon-sync spinning"></span>
+            Loading...
+          {:else}
+            <span class="codicon codicon-output"></span>
+            View Logs
+          {/if}
         </button>
       {/if}
       <button class="primary-button" on:click={onClose} type="button">Close</button>
@@ -362,7 +368,14 @@
     background: var(--vscode-button-secondaryBackground);
     color: var(--vscode-button-secondaryForeground);
   }
-  .secondary-button:hover {
+  .secondary-button:hover:not(:disabled) {
     background: var(--vscode-button-secondaryHoverBackground);
+  }
+  .secondary-button:disabled {
+    opacity: 0.7;
+    cursor: default;
+  }
+  .secondary-button .spinning {
+    animation: spin 1.5s linear infinite;
   }
 </style>
