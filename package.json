@@ -106,6 +106,12 @@
         "category": "GitHub Actions Runner",
         "title": "Run Last Workflow",
         "icon": "$(debug-restart)"
+      },
+      {
+        "command": "github-workflow-runner.reload-extension-data",
+        "category": "GitHub Actions Runner",
+        "title": "Reload Extension Data",
+        "icon": "$(refresh)"
       }
     ],
     "configuration": {

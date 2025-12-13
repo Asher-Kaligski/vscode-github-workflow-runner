@@ -329,6 +329,13 @@ function registerCommands(
       );
     })
   );
+
+  // Reload extension data command (re-detect Git context and refresh all data)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('github-workflow-runner.reload-extension-data', async () => {
+      await sidebarProvider.reloadExtensionData();
+    })
+  );
 }
 
 /**

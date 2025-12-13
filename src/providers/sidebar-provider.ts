@@ -400,6 +400,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    * Reload all extension data after repository/branch change.
    * Re-detects the current repository and branch, refreshes Git context,
    * and reloads all sidebar data (workflows, repository config, branches, etc.)
+   *
+   * This is a public wrapper for _reloadExtensionData that can be called from
+   * commands or other parts of the extension.
+   */
+  public async reloadExtensionData(): Promise<void> {
+    return this._reloadExtensionData();
+  }
+
+  /**
+   * Reload all extension data after repository/branch change.
+   * Re-detects the current repository and branch, refreshes Git context,
+   * and reloads all sidebar data (workflows, repository config, branches, etc.)
    */
   private async _reloadExtensionData() {
     try {
