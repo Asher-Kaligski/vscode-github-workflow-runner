@@ -617,7 +617,7 @@
 
 <h4>Common Use Cases</h4>
 <ul>
-  <li><strong>Default:</strong> <code>build-parameters-*</code> - Standard naming convention</li>
+  <li><strong>Default:</strong> <code>*parameter*</code> - Matches any artifact containing "parameter"</li>
   <li><strong>Branch-specific:</strong> <code>params-{branch}-*</code> - Different params per branch</li>
   <li><strong>Environment-specific:</strong> <code>*-{env}-params</code> - prod-params, dev-params, etc.</li>
 </ul>
@@ -2207,7 +2207,7 @@
                       id="artifact-pattern"
                       type="text"
                       bind:value={artifactPattern}
-                      placeholder="build-parameters-*"
+                      placeholder="*parameter*"
                       disabled={loading}
                       on:input={() => {
                         // mark dirty on change
@@ -2247,7 +2247,7 @@
                     </button>
                   </div>
                   <p class="hint">
-                    Default: <code>build-parameters-*</code>. Use <code>*</code>
+                    Default: <code>*parameter*</code>. Use <code>*</code>
                     as wildcard (e.g., <code>my-params-*</code>) or full regex (e.g.,
                     <code>^workflow-inputs-.*$</code>). Pattern auto-saves after you stop typing.
                   </p>

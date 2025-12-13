@@ -32,16 +32,22 @@ export async function activate(context: vscode.ExtensionContext) {
     vscode.workspace.registerTextDocumentContentProvider(LOG_SCHEME, logDocumentProvider)
   );
 
-  // Register sidebar webview provider
+  // Register sidebar webview provider with state preservation
   const sidebarProvider = new SidebarProvider(context.extensionUri);
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('github-workflow-runner-sidebar', sidebarProvider)
+    vscode.window.registerWebviewViewProvider('github-workflow-runner-sidebar', sidebarProvider, {
+      // Preserve webview state when hidden (scroll position, expanded sections, etc.)
+      webviewOptions: { retainContextWhenHidden: true },
+    })
   );
 
-  // Register workflow runs webview provider
+  // Register workflow runs webview provider with state preservation
   const workflowRunsProvider = new WorkflowRunsProvider(context.extensionUri);
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('github-workflow-runner-runs', workflowRunsProvider)
+    vscode.window.registerWebviewViewProvider('github-workflow-runner-runs', workflowRunsProvider, {
+      // Preserve webview state when hidden (scroll position, expanded sections, etc.)
+      webviewOptions: { retainContextWhenHidden: true },
+    })
   );
 
   // Connect providers for cross-communication
@@ -321,6 +327,13 @@ function registerCommands(
           `History: ${stats.historyCount}\n` +
           `Last Workflow: ${stats.hasLastWorkflow ? 'Yes' : 'No'}`
       );
+    })
+  );
+
+  // Reload extension data command (re-detect Git context and refresh all data)
+  context.subscriptions.push(
+    vscode.commands.registerCommand('github-workflow-runner.reload-extension-data', async () => {
+      await sidebarProvider.reloadExtensionData();
     })
   );
 }

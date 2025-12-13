@@ -5,7 +5,12 @@ import * as vscode from 'vscode';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as yaml from 'js-yaml';
-import type { WorkflowDefinition, WorkflowInput, WorkflowInputType } from '../types/workflow-types';
+import type {
+  WorkflowDefinition,
+  WorkflowInput,
+  WorkflowInputType,
+  WorkflowJobDefinition,
+} from '../types/workflow-types';
 
 /**
  * Parse a single workflow file
@@ -377,4 +382,103 @@ export async function getAllWorkflowDefinitionsIncludingNonDispatch(
     console.error('Failed to get all workflow definitions (including non-dispatch):', error);
     return [];
   }
+}
+
+/**
+ * Parse job dependencies from a workflow YAML file
+ * Extracts job keys, names, and 'needs' dependencies
+ */
+export async function parseJobDependencies(workflowPath: string): Promise<WorkflowJobDefinition[]> {
+  try {
+    const workspaceFolders = vscode.workspace.workspaceFolders;
+    if (!workspaceFolders || workspaceFolders.length === 0) {
+      return [];
+    }
+
+    // Handle both absolute and relative paths
+    let filepath = workflowPath;
+    if (!path.isAbsolute(workflowPath)) {
+      filepath = path.join(workspaceFolders[0].uri.fsPath, workflowPath);
+    }
+
+    // Also check if the path starts with .github/workflows
+    if (!fs.existsSync(filepath) && !workflowPath.startsWith('.github')) {
+      filepath = path.join(workspaceFolders[0].uri.fsPath, '.github', 'workflows', workflowPath);
+    }
+
+    if (!fs.existsSync(filepath)) {
+      console.warn(`Workflow file not found: ${filepath}`);
+      return [];
+    }
+
+    // Prefer unsaved in-memory content when the workflow file is open
+    const openDoc = vscode.workspace.textDocuments.find((doc) => doc.uri.fsPath === filepath);
+    const content = openDoc ? openDoc.getText() : fs.readFileSync(filepath, 'utf8');
+
+    const doc = yaml.load(content) as Record<string, unknown>;
+    if (!doc || !doc.jobs) {
+      return [];
+    }
+
+    const jobs = doc.jobs as Record<string, Record<string, unknown>>;
+    const jobDefinitions: WorkflowJobDefinition[] = [];
+
+    for (const [jobKey, jobConfig] of Object.entries(jobs)) {
+      if (!jobConfig || typeof jobConfig !== 'object') {
+        continue;
+      }
+
+      const jobDef: WorkflowJobDefinition = {
+        key: jobKey,
+        name: (jobConfig.name as string) || jobKey,
+      };
+
+      // Extract 'needs' dependencies
+      if (jobConfig.needs !== undefined) {
+        // 'needs' can be a single string or an array of strings
+        if (typeof jobConfig.needs === 'string') {
+          jobDef.needs = [jobConfig.needs];
+        } else if (Array.isArray(jobConfig.needs)) {
+          jobDef.needs = jobConfig.needs.filter((n): n is string => typeof n === 'string');
+        }
+      }
+
+      // Extract matrix strategy if present
+      if (jobConfig.strategy && typeof jobConfig.strategy === 'object') {
+        const strategy = jobConfig.strategy as Record<string, unknown>;
+        if (strategy.matrix && typeof strategy.matrix === 'object') {
+          jobDef.matrix = strategy.matrix as WorkflowJobDefinition['matrix'];
+        }
+      }
+
+      // Extract 'uses' for reusable workflows (helps identify matrix job grouping)
+      if (jobConfig.uses && typeof jobConfig.uses === 'string') {
+        jobDef.uses = jobConfig.uses;
+      }
+
+      jobDefinitions.push(jobDef);
+    }
+
+    return jobDefinitions;
+  } catch (error) {
+    console.error(`Failed to parse job dependencies from ${workflowPath}:`, error);
+    return [];
+  }
+}
+
+/**
+ * Get job dependencies map from workflow path
+ * Returns a map of jobKey -> array of dependency jobKeys
+ */
+export async function getJobDependenciesMap(workflowPath: string): Promise<Map<string, string[]>> {
+  const jobDefinitions = await parseJobDependencies(workflowPath);
+  const dependenciesMap = new Map<string, string[]>();
+
+  for (const job of jobDefinitions) {
+    // Normalize needs to always be an array
+    const needs = job.needs ? (Array.isArray(job.needs) ? job.needs : [job.needs]) : [];
+    dependenciesMap.set(job.key, needs);
+  }
+
+  return dependenciesMap;
 }

@@ -156,15 +156,21 @@ export async function ensureGitContextValidOrWarn(source?: string): Promise<bool
     case 'no-git-repo':
       message =
         'GitHub Workflow Runner: No Git repository detected in the current workspace. Open a folder with a Git repository before using workflow features.';
+      void vscode.window.showWarningMessage(message);
       break;
     case 'repository-mismatch':
     case 'branch-mismatch':
     default:
       message =
-        'GitHub Workflow Runner: The active Git repository or branch has changed since the extension was last reloaded. Press the "Reload" button in the sidebar to refresh workflows, runs, and configuration to match your current Git context.';
+        'GitHub Workflow Runner: The active Git repository or branch has changed since the extension was last reloaded. Click "Reload" to refresh workflows, runs, and configuration to match your current Git context.';
+      // Show warning with a "Reload" action button
+      void vscode.window.showWarningMessage(message, 'Reload').then((selection) => {
+        if (selection === 'Reload') {
+          vscode.commands.executeCommand('github-workflow-runner.reload-extension-data');
+        }
+      });
       break;
   }
 
-  void vscode.window.showWarningMessage(message);
   return false;
 }

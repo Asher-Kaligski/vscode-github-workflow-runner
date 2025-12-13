@@ -5,7 +5,7 @@
  */
 import * as vscode from 'vscode';
 import { parseLogURI } from '../utils/log-uri-scheme';
-import { parseJobLogs } from '../utils/log-parser';
+import { extractStepLogs, parseJobLogs } from '../utils/log-parser';
 import { TokenManager } from '../utils/token-manager';
 
 export class LogDocumentProvider implements vscode.TextDocumentContentProvider {
@@ -17,11 +17,80 @@ export class LogDocumentProvider implements vscode.TextDocumentContentProvider {
   );
 
   /**
+   * Fetch logs from a URL with manual redirect handling
+   * GitHub API returns 302 redirect to Azure Storage URL for logs
+   */
+  private async fetchLogs(
+    url: string,
+    headers: Record<string, string>,
+    debug: boolean
+  ): Promise<{ ok: boolean; status: number; statusText: string; text?: string; error?: string }> {
+    try {
+      const response = await fetch(url, {
+        headers,
+        // Manual redirect handling to get better error messages
+        redirect: 'manual',
+      });
+
+      // GitHub API returns 302 redirect to Azure Storage URL
+      if (response.status === 302) {
+        const redirectUrl = response.headers.get('location');
+        if (!redirectUrl) {
+          return {
+            ok: false,
+            status: 302,
+            statusText: 'Redirect without location',
+            error: 'Received redirect response without location header',
+          };
+        }
+
+        if (debug) {
+          this.outputChannel.appendLine(`[Job Logs] Following redirect to: ${redirectUrl}`);
+        }
+
+        // Fetch from the redirect URL (Azure Storage) - no auth header needed
+        const logResponse = await fetch(redirectUrl);
+        if (!logResponse.ok) {
+          return {
+            ok: false,
+            status: logResponse.status,
+            statusText: logResponse.statusText,
+            error: `Failed to fetch logs from storage: ${logResponse.status}`,
+          };
+        }
+
+        const text = await logResponse.text();
+        return { ok: true, status: 200, statusText: 'OK', text };
+      }
+
+      // Handle non-redirect responses (errors)
+      if (!response.ok) {
+        return {
+          ok: false,
+          status: response.status,
+          statusText: response.statusText,
+        };
+      }
+
+      // Unexpected success without redirect - try to read content anyway
+      const text = await response.text();
+      return { ok: true, status: response.status, statusText: response.statusText, text };
+    } catch (error) {
+      return {
+        ok: false,
+        status: 0,
+        statusText: 'Network Error',
+        error: error instanceof Error ? error.message : 'Unknown network error',
+      };
+    }
+  }
+
+  /**
    * Provide text document content for a log URI
    */
   async provideTextDocumentContent(uri: vscode.Uri): Promise<string> {
     try {
-      const { owner, repo, jobName, jobId } = parseLogURI(uri);
+      const { owner, repo, jobName, jobId, stepNumber, stepName } = parseLogURI(uri);
 
       const cfg = vscode.workspace.getConfiguration('githubWorkflowRunner');
       const debug = cfg.get<boolean>('logs.debug', false);
@@ -52,31 +121,34 @@ export class LogDocumentProvider implements vscode.TextDocumentContentProvider {
         );
       }
 
-      const response = await fetch(url, {
-        headers: {
+      const result = await this.fetchLogs(
+        url,
+        {
           Accept: 'application/vnd.github+json',
           Authorization: `Bearer ${token}`,
           'X-GitHub-Api-Version': '2022-11-28',
         },
-      });
+        debug
+      );
 
-      if (!response.ok) {
+      if (!result.ok) {
         if (debug) {
           this.outputChannel.appendLine(
-            `[Job Logs] Fetch failed: status=${response.status} ${response.statusText} url=${url}`
+            `[Job Logs] Fetch failed: status=${result.status} ${result.statusText} error=${result.error || 'none'} url=${url}`
           );
         }
-        if (response.status === 410) {
+        if (result.status === 410) {
           return `Logs for job "${jobName}" have expired and are no longer available.`;
         }
-        if (response.status === 404) {
+        if (result.status === 404) {
           return `Logs not found for job "${jobName}" (404). This can happen if logs are not yet generated, the job ID is from a different repository, or the logs have been pruned. Try again shortly or open the run in GitHub to confirm.`;
         }
-        return `Error: Failed to fetch logs for job "${jobName}". Status: ${response.status} ${response.statusText}`;
+        const errorDetail = result.error ? ` (${result.error})` : '';
+        return `Error: Failed to fetch logs for job "${jobName}". Status: ${result.status} ${result.statusText}${errorDetail}`;
       }
 
       // Get log content as text
-      const logText = await response.text();
+      const logText = result.text || '';
 
       if (debug) {
         this.outputChannel.appendLine(
@@ -88,6 +160,19 @@ export class LogDocumentProvider implements vscode.TextDocumentContentProvider {
 
       if (!logText || logText.trim().length === 0) {
         return `No logs available for job "${jobName}".`;
+      }
+
+      // If step number is specified, extract only that step's logs
+      if (stepNumber !== undefined) {
+        const stepLog = extractStepLogs(logText, stepNumber, stepName);
+        if (stepLog) {
+          return stepLog.content;
+        }
+        // If step extraction failed, return a helpful message
+        const stepIdentifier = stepName
+          ? `"${stepName}" (step ${stepNumber})`
+          : `step ${stepNumber}`;
+        return `Could not extract logs for ${stepIdentifier} from job "${jobName}".\n\nThis may happen if:\n- The step has not started yet\n- The step number is invalid\n- The log format is unexpected\n\nFull job logs are available by viewing the job logs directly.`;
       }
 
       // Parse logs (keeps ANSI codes intact)
