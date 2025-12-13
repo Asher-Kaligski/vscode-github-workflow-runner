@@ -70,7 +70,7 @@ static async getHistoryForWorkflow(workflowFilename: string, limit?: number): Pr
 **How it works**:
 
 - The extension looks for artifacts with names matching a configurable pattern
-- **Default pattern**: `build-parameters-*`
+- **Default pattern**: `*parameter*`
 - **Custom patterns**: Can be configured per workflow or per preset
 - Downloads the artifact (ZIP file) and extracts JSON files
 - Parses the JSON to extract the input parameters
@@ -79,27 +79,17 @@ static async getHistoryForWorkflow(workflowFilename: string, limit?: number): Pr
 
 1. Check latest template/preset for this workflow (if `artifactPattern` is set)
 2. Check workflow-specific configuration (if set in Advanced Configuration)
-3. Use default pattern: `build-parameters-*`
+3. Use default pattern: `*parameter*`
 
 **Code Location**: `src/providers/workflow-runs-panel.ts` (lines 1004-1061)
 
 ```typescript
-// Priority 2: Artifact-based recovery (build-parameters-*)
-const artifacts = await getWorkflowRunArtifacts(
-  repoInfo.owner,
-  repoInfo.name,
-  runId
-);
-const paramArtifact = (artifacts || []).find(
-  (a) => /^build-parameters-/i.test(a.name) && !a.expired
-);
+// Priority 2: Artifact-based recovery (*parameter*)
+const artifacts = await getWorkflowRunArtifacts(repoInfo.owner, repoInfo.name, runId);
+const paramArtifact = (artifacts || []).find((a) => /parameter/i.test(a.name) && !a.expired);
 
 if (paramArtifact) {
-  const buf = await downloadArtifact(
-    repoInfo.owner,
-    repoInfo.name,
-    paramArtifact.id
-  );
+  const buf = await downloadArtifact(repoInfo.owner, repoInfo.name, paramArtifact.id);
   if (buf) {
     const zip = new AdmZip(Buffer.from(buf));
     const entries = zip.getEntries();
@@ -119,14 +109,11 @@ if (paramArtifact) {
 
     if (parsedInputs) {
       // Pre-fill the dispatch form with these inputs
-      await vscode.commands.executeCommand(
-        'github-workflow-runner.prefillDispatch',
-        {
-          workflowFilename,
-          branch,
-          inputs: parsedInputs,
-        }
-      );
+      await vscode.commands.executeCommand('github-workflow-runner.prefillDispatch', {
+        workflowFilename,
+        branch,
+        inputs: parsedInputs,
+      });
       return;
     }
   }
@@ -146,12 +133,12 @@ if (paramArtifact) {
 
 **Limitations**:
 
-- ❌ Requires workflows to upload a `build-parameters-*` artifact
+- ❌ Requires workflows to upload a `*parameter*` artifact
 - ❌ Artifacts expire after retention period (default 90 days, configurable)
 - ❌ Requires API calls to download artifacts
 
 **Artifact Naming Convention**:
-The extension looks for artifacts with names matching the configured pattern (default: `build-parameters-*`, case-insensitive).
+The extension looks for artifacts with names matching the configured pattern (default: `*parameter*`, case-insensitive).
 
 **Configuring Custom Patterns**:
 
@@ -171,7 +158,7 @@ The extension looks for artifacts with names matching the configured pattern (de
 - name: Upload build parameters
   uses: actions/upload-artifact@v4
   with:
-    name: build-parameters # ✅ Matches default pattern 'build-parameters-*'
+    name: build-parameters # ✅ Matches default pattern '*parameter*'
     path: build-parameters.json
     retention-days: ${{ fromJSON(inputs.artifact_retention_days) }}
 
@@ -258,7 +245,7 @@ User clicks "Rerun" button
          ↓
     Fetch artifacts from GitHub API
          ↓
-    Find "build-parameters-*" artifact?
+    Find "*parameter*" artifact?
          ↓ YES
     Download & extract JSON
          ↓
@@ -280,25 +267,21 @@ User clicks "Rerun" button
 ### Used for Parameter Retrieval:
 
 1. **Get Workflow Run Details**
-
    - Endpoint: `GET /repos/{owner}/{repo}/actions/runs/{run_id}`
    - Purpose: Get workflow_id, branch, and basic run information
    - Returns: `WorkflowRun` object (does NOT include input parameters)
 
 2. **Get Workflow Metadata**
-
    - Endpoint: `GET /repos/{owner}/{repo}/actions/workflows/{workflow_id}`
    - Purpose: Get workflow file path from workflow_id
    - Returns: `{ id, name, path }`
 
 3. **List Workflow Run Artifacts**
-
    - Endpoint: `GET /repos/{owner}/{repo}/actions/runs/{run_id}/artifacts`
-   - Purpose: Find `build-parameters-*` artifacts
+   - Purpose: Find `*parameter*` artifacts
    - Returns: Array of artifact metadata
 
 4. **Download Artifact**
-
    - Endpoint: `GET /repos/{owner}/{repo}/actions/artifacts/{artifact_id}/zip`
    - Purpose: Download artifact ZIP file
    - Returns: Binary ZIP data
@@ -380,7 +363,7 @@ To ensure the best rerun experience, workflows should:
              retention-days: 90
    ```
 
-2. **Use the naming pattern** `build-parameters-*` for the artifact name
+2. **Use the naming pattern** `*parameter*` for the artifact name
 
 3. **Store inputs as a flat JSON object** (not nested under an `inputs` key)
 
@@ -399,7 +382,6 @@ To ensure the best rerun experience, workflows should:
 Your test workflows already implement the artifact pattern correctly:
 
 1. **✅ test-success-with-artifacts.yml**
-
    - Has `save-build-parameters` job
    - Uploads `build-parameters` artifact
    - Includes all inputs in the JSON
@@ -443,7 +425,7 @@ The extension supports two pattern types with **auto-detection**:
 
 Use `*` as a wildcard character:
 
-- `build-parameters-*` → Matches `build-parameters-123`, `build-parameters-test`, etc.
+- `*parameter*` → Matches any artifact containing "parameter" in its name
 - `my-params-*` → Matches `my-params-dev`, `my-params-prod`, etc.
 - `workflow-inputs-*` → Matches `workflow-inputs-v1`, `workflow-inputs-v2`, etc.
 
@@ -463,7 +445,7 @@ When rerunning a workflow, the extension resolves the artifact pattern in this o
 
 1. **Latest Template/Preset** (if `artifactPattern` is set)
 2. **Workflow-Specific Configuration** (set in Advanced Configuration)
-3. **Default Pattern**: `build-parameters-*`
+3. **Default Pattern**: `*parameter*`
 
 ### Example Use Cases
 
@@ -528,5 +510,5 @@ You have different presets for dev, staging, and prod:
 ✅ **Fully backward compatible**:
 
 - Existing templates without `artifactPattern` continue to work
-- Default pattern `build-parameters-*` is used when no custom pattern is set
+- Default pattern `*parameter*` is used when no custom pattern is set
 - No breaking changes to existing workflows or configurations

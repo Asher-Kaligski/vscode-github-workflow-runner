@@ -5449,52 +5449,77 @@
         </div>
       </div>
       <div class="filter-box checkbox-filter">
-        <label>
+        <label
+          title={showWatchedOnly
+            ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
+            : 'Include runs triggered by bot accounts (e.g., dependabot, github-actions). Enabling this automatically switches Actor filter to "All Users".'}
+          aria-label="Show Bot Runs filter"
+        >
           <input
             type="checkbox"
             bind:checked={showBotRuns}
             on:change={handleShowBotRunsChange}
             disabled={loading || showWatchedOnly}
-            title={showWatchedOnly
-              ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
-              : "Include runs triggered by bot accounts. Checking this automatically switches to 'All Users'."}
+            aria-describedby="show-bot-runs-description"
           />
           Show Bot Runs
         </label>
+        <span id="show-bot-runs-description" class="sr-only">
+          When enabled, includes workflow runs triggered by bot accounts such as dependabot or
+          github-actions. Enabling this filter automatically switches the Actor filter to All Users.
+        </span>
       </div>
 
       <div class="filter-box checkbox-filter">
-        <label>
+        <label
+          title={watchedRuns.size === 0
+            ? 'No runs are currently watched. Click the eye icon on any run to start watching it.'
+            : 'Show only the runs you have explicitly marked as watched. This overrides all other filters (status, actor, workflow, date, search).'}
+          aria-label="Watched Runs Only filter"
+        >
           <input
             type="checkbox"
             bind:checked={showWatchedOnly}
             on:change={handleShowWatchedOnlyChange}
             disabled={loading || watchedRuns.size === 0}
-            title="Show only runs you have marked as watched; ignores all other filters"
+            aria-describedby="watched-runs-description"
           />
           Watched Runs Only
           {#if watchedRuns.size > 0}
             ({watchedRuns.size})
           {/if}
         </label>
+        <span id="watched-runs-description" class="sr-only">
+          When enabled, shows only runs you have marked as watched and ignores all other filters.
+          Watch runs by clicking the eye icon on individual runs.
+        </span>
       </div>
 
       <div class="filter-box checkbox-filter">
-        <label>
+        <label
+          title={showWatchedOnly
+            ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
+            : availableMarkedWorkflowsCount === 0
+              ? 'No favorite workflows yet. Click the star icon (★/☆) next to workflows in the dropdown to add favorites.'
+              : 'Show only runs from workflows you have marked as favorites. Mark workflows as favorites using the star icon (★/☆) in the workflow dropdown.'}
+          aria-label="Favorites Only filter"
+        >
           <input
             type="checkbox"
             bind:checked={showFavoritesOnly}
             on:change={filterRuns}
             disabled={loading || availableMarkedWorkflowsCount === 0 || showWatchedOnly}
-            title={showWatchedOnly
-              ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
-              : 'Show only runs from workflows you have marked as favorite'}
+            aria-describedby="favorites-only-description"
           />
           Favorites Only
           {#if availableMarkedWorkflowsCount > 0}
             ({availableMarkedWorkflowsCount})
           {/if}
         </label>
+        <span id="favorites-only-description" class="sr-only">
+          When enabled, shows only runs from workflows you have marked as favorites. Add favorites
+          by clicking the star icon next to workflows in the dropdown.
+        </span>
       </div>
 
       {#if !showWatchedOnly}
@@ -6084,10 +6109,16 @@
                       <button
                         class="job-logs-button"
                         on:click|stopPropagation={() => viewJobLogs(job.id, job.name, run.id)}
+                        disabled={loadingJobLogs.has(job.id)}
                         title="View logs for this job"
                       >
-                        <span class="codicon codicon-file-text"></span>
-                        <span>View Logs</span>
+                        {#if loadingJobLogs.has(job.id)}
+                          <span class="codicon codicon-sync spinning-icon"></span>
+                          <span>Loading...</span>
+                        {:else}
+                          <span class="codicon codicon-file-text"></span>
+                          <span>View Logs</span>
+                        {/if}
                       </button>
                     </div>
                   </div>
@@ -9220,5 +9251,18 @@
 
   .toast-info {
     border-left-color: #58a6ff;
+  }
+
+  /* Screen reader only - visually hidden but accessible to assistive technologies */
+  .sr-only {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    padding: 0;
+    margin: -1px;
+    overflow: hidden;
+    clip: rect(0, 0, 0, 0);
+    white-space: nowrap;
+    border: 0;
   }
 </style>

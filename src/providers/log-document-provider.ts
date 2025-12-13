@@ -17,100 +17,72 @@ export class LogDocumentProvider implements vscode.TextDocumentContentProvider {
   );
 
   /**
-   * Fetch logs from a URL with retry logic
-   * Handles both the initial GitHub API call and the redirect to Azure Storage
+   * Fetch logs from a URL with manual redirect handling
+   * GitHub API returns 302 redirect to Azure Storage URL for logs
    */
-  private async fetchLogsWithRetry(
+  private async fetchLogs(
     url: string,
     headers: Record<string, string>,
-    debug: boolean,
-    retries: number = 1
+    debug: boolean
   ): Promise<{ ok: boolean; status: number; statusText: string; text?: string; error?: string }> {
-    for (let attempt = 0; attempt <= retries; attempt++) {
-      try {
-        if (debug && attempt > 0) {
-          this.outputChannel.appendLine(`[Job Logs] Retry attempt ${attempt} for ${url}`);
-        }
+    try {
+      const response = await fetch(url, {
+        headers,
+        // Manual redirect handling to get better error messages
+        redirect: 'manual',
+      });
 
-        const response = await fetch(url, {
-          headers,
-          // Manual redirect handling to get better error messages
-          redirect: 'manual',
-        });
-
-        // GitHub API returns 302 redirect to Azure Storage URL
-        if (response.status === 302) {
-          const redirectUrl = response.headers.get('location');
-          if (!redirectUrl) {
-            return {
-              ok: false,
-              status: 302,
-              statusText: 'Redirect without location',
-              error: 'Received redirect response without location header',
-            };
-          }
-
-          if (debug) {
-            this.outputChannel.appendLine(`[Job Logs] Following redirect to: ${redirectUrl}`);
-          }
-
-          // Fetch from the redirect URL (Azure Storage) - no auth header needed
-          const logResponse = await fetch(redirectUrl);
-          if (!logResponse.ok) {
-            if (attempt < retries) {
-              // Wait before retry (exponential backoff)
-              await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
-              continue;
-            }
-            return {
-              ok: false,
-              status: logResponse.status,
-              statusText: logResponse.statusText,
-              error: `Failed to fetch logs from storage: ${logResponse.status}`,
-            };
-          }
-
-          const text = await logResponse.text();
-          return { ok: true, status: 200, statusText: 'OK', text };
-        }
-
-        // Handle non-redirect responses (errors)
-        if (!response.ok) {
+      // GitHub API returns 302 redirect to Azure Storage URL
+      if (response.status === 302) {
+        const redirectUrl = response.headers.get('location');
+        if (!redirectUrl) {
           return {
             ok: false,
-            status: response.status,
-            statusText: response.statusText,
+            status: 302,
+            statusText: 'Redirect without location',
+            error: 'Received redirect response without location header',
           };
         }
 
-        // Unexpected success without redirect - try to read content anyway
-        const text = await response.text();
-        return { ok: true, status: response.status, statusText: response.statusText, text };
-      } catch (error) {
-        if (attempt < retries) {
-          if (debug) {
-            this.outputChannel.appendLine(
-              `[Job Logs] Fetch error on attempt ${attempt + 1}: ${error instanceof Error ? error.message : String(error)}`
-            );
-          }
-          // Wait before retry (exponential backoff)
-          await new Promise((resolve) => setTimeout(resolve, 1000 * (attempt + 1)));
-          continue;
+        if (debug) {
+          this.outputChannel.appendLine(`[Job Logs] Following redirect to: ${redirectUrl}`);
         }
+
+        // Fetch from the redirect URL (Azure Storage) - no auth header needed
+        const logResponse = await fetch(redirectUrl);
+        if (!logResponse.ok) {
+          return {
+            ok: false,
+            status: logResponse.status,
+            statusText: logResponse.statusText,
+            error: `Failed to fetch logs from storage: ${logResponse.status}`,
+          };
+        }
+
+        const text = await logResponse.text();
+        return { ok: true, status: 200, statusText: 'OK', text };
+      }
+
+      // Handle non-redirect responses (errors)
+      if (!response.ok) {
         return {
           ok: false,
-          status: 0,
-          statusText: 'Network Error',
-          error: error instanceof Error ? error.message : 'Unknown network error',
+          status: response.status,
+          statusText: response.statusText,
         };
       }
+
+      // Unexpected success without redirect - try to read content anyway
+      const text = await response.text();
+      return { ok: true, status: response.status, statusText: response.statusText, text };
+    } catch (error) {
+      return {
+        ok: false,
+        status: 0,
+        statusText: 'Network Error',
+        error: error instanceof Error ? error.message : 'Unknown network error',
+      };
     }
-    return {
-      ok: false,
-      status: 0,
-      statusText: 'Max retries exceeded',
-      error: 'Failed to fetch logs after multiple attempts',
-    };
   }
 
   /**
@@ -149,7 +121,7 @@ export class LogDocumentProvider implements vscode.TextDocumentContentProvider {
         );
       }
 
-      const result = await this.fetchLogsWithRetry(
+      const result = await this.fetchLogs(
         url,
         {
           Accept: 'application/vnd.github+json',

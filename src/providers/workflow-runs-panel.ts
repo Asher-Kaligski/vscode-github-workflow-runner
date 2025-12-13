@@ -3679,7 +3679,7 @@ export class WorkflowRunsPanel {
     }
 
     // Priority 2: Default pattern
-    return 'build-parameters-*';
+    return '*parameter*';
   }
 
   /**
