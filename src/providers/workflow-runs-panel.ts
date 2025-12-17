@@ -893,41 +893,44 @@ export class WorkflowRunsPanel {
         await this._viewJobLogs(message.data as { jobId: number; jobName: string; runId: number });
         break;
 
-      case 'viewJobLogsInteractive':
-        await this._viewJobLogsInteractive(
-          message.data as { jobId: number; jobName: string; runId: number }
-        );
-        break;
+      // DISABLED: Interactive log viewer - temporarily disabled in v1.2.0
+      // case 'viewJobLogsInteractive':
+      //   await this._viewJobLogsInteractive(
+      //     message.data as { jobId: number; jobName: string; runId: number }
+      //   );
+      //   break;
 
-      case 'compareJobLogs':
-        await this._compareJobLogs(
-          message.data as {
-            sourceJobId: number;
-            sourceJobName: string;
-            sourceRunId: number;
-            targetJobId: number;
-            targetJobName: string;
-            targetRunId: number;
-          }
-        );
-        break;
+      // DISABLED: Log comparison - temporarily disabled in v1.2.0
+      // case 'compareJobLogs':
+      //   await this._compareJobLogs(
+      //     message.data as {
+      //       sourceJobId: number;
+      //       sourceJobName: string;
+      //       sourceRunId: number;
+      //       targetJobId: number;
+      //       targetJobName: string;
+      //       targetRunId: number;
+      //     }
+      //   );
+      //   break;
 
-      case 'compareStepLogs':
-        await this._compareStepLogs(
-          message.data as {
-            sourceJobId: number;
-            sourceJobName: string;
-            sourceRunId: number;
-            sourceStepNumber: number;
-            sourceStepName: string;
-            targetJobId: number;
-            targetJobName: string;
-            targetRunId: number;
-            targetStepNumber: number;
-            targetStepName: string;
-          }
-        );
-        break;
+      // DISABLED: Step log comparison - temporarily disabled in v1.2.0
+      // case 'compareStepLogs':
+      //   await this._compareStepLogs(
+      //     message.data as {
+      //       sourceJobId: number;
+      //       sourceJobName: string;
+      //       sourceRunId: number;
+      //       sourceStepNumber: number;
+      //       sourceStepName: string;
+      //       targetJobId: number;
+      //       targetJobName: string;
+      //       targetRunId: number;
+      //       targetStepNumber: number;
+      //       targetStepName: string;
+      //     }
+      //   );
+      //   break;
 
       case 'checkJobLogsAvailability':
         await this._checkJobLogsAvailability(
@@ -939,17 +942,18 @@ export class WorkflowRunsPanel {
         await this._getJobDetails(message.data as { jobId: number; runId: number });
         break;
 
-      case 'viewStepLogs':
-        await this._viewStepLogs(
-          message.data as {
-            jobId: number;
-            jobName: string;
-            runId: number;
-            stepNumber: number;
-            stepName: string;
-          }
-        );
-        break;
+      // DISABLED: Step log viewing - temporarily disabled in v1.2.0
+      // case 'viewStepLogs':
+      //   await this._viewStepLogs(
+      //     message.data as {
+      //       jobId: number;
+      //       jobName: string;
+      //       runId: number;
+      //       stepNumber: number;
+      //       stepName: string;
+      //     }
+      //   );
+      //   break;
 
       case 'getWorkflowRunArtifacts':
         await this._getWorkflowRunArtifacts(message.data as { runId: number });

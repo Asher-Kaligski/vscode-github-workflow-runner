@@ -217,6 +217,7 @@
               <span class="step-name" title={step.name}>{step.name}</span>
               {#if getStepDuration(step)}<span class="step-duration">{getStepDuration(step)}</span
                 >{/if}
+              <!-- DISABLED: Step log viewing - temporarily disabled in v1.2.0
               {#if onViewStepLogs && canViewStepLogs(step)}
                 <button
                   class="step-logs-button"
@@ -232,9 +233,10 @@
                   {/if}
                 </button>
               {/if}
+              -->
+              <!-- DISABLED: Step comparison - temporarily disabled in v1.2.0
               {#if onCompareStepLogs && canViewStepLogs(step) && job.jobId !== undefined}
                 {#if isCompareSource(step)}
-                  <!-- This step is the comparison source - click to cancel -->
                   <button
                     class="step-logs-button compare-btn compare-source cancel-compare"
                     on:click|stopPropagation={() => handleCompareStepLogs(step)}
@@ -250,7 +252,6 @@
                     {/if}
                   </button>
                 {:else if compareSourceStep && canCompareWithStep(step)}
-                  <!-- Can compare with this step -->
                   <button
                     class="step-logs-button compare-btn"
                     on:click|stopPropagation={() => handleCompareStepLogs(step)}
@@ -261,7 +262,6 @@
                     <span class="codicon codicon-diff"></span>
                   </button>
                 {:else if compareSourceStep && !canCompareWithStep(step)}
-                  <!-- Cannot compare - step/job/workflow doesn't match -->
                   <button
                     class="step-logs-button compare-btn disabled-compare"
                     disabled
@@ -271,7 +271,6 @@
                     <span class="codicon codicon-diff"></span>
                   </button>
                 {:else}
-                  <!-- No comparison in progress - select this step -->
                   <button
                     class="step-logs-button compare-btn"
                     on:click|stopPropagation={() => handleCompareStepLogs(step)}
@@ -282,6 +281,7 @@
                   </button>
                 {/if}
               {/if}
+              -->
             </div>
           {/each}
         </div>
@@ -317,11 +317,12 @@
             <span class="codicon codicon-sync spinning"></span>
             Loading...
           {:else}
-            <span class="codicon codicon-output"></span>
+            <span class="codicon codicon-file-code"></span>
             View Logs
           {/if}
         </button>
       {/if}
+      <!-- DISABLED: Separate View Raw Logs button - now using onViewLogs with raw logs (v1.2.0)
       {#if onViewRawLogs}
         <button
           class="secondary-button"
@@ -338,6 +339,7 @@
           {/if}
         </button>
       {/if}
+      -->
       <button class="primary-button" on:click={onClose} type="button">Close</button>
     </div>
   </div>

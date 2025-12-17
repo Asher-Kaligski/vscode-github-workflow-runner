@@ -1368,11 +1368,12 @@
 
   /**
    * Handle click on a job node in the dependency graph
-   * Opens the interactive job logs webview
+   * Opens the raw job logs in text editor
+   * NOTE: Changed from viewJobLogsInteractive to viewRawJobLogs (interactive viewer disabled in v1.2.0)
    */
   function handleGraphJobClick(node: JobGraphNode, runId: number) {
     if (node.jobId) {
-      viewJobLogsInteractive(node.jobId, node.name, runId);
+      viewRawJobLogs(node.jobId, node.name, runId);
     }
   }
 
@@ -6017,7 +6018,7 @@
     </div>
   {/if}
 
-  <!-- Log Comparison Mode Banner -->
+  <!-- DISABLED: Log Comparison Mode Banner - temporarily disabled in v1.2.0
   {#if compareSourceJob}
     <div class="comparison-banner" transition:fade={{ duration: 150 }}>
       <span class="codicon codicon-diff comparison-banner-icon"></span>
@@ -6035,8 +6036,9 @@
       </button>
     </div>
   {/if}
+  -->
 
-  <!-- Step Log Comparison Mode Banner -->
+  <!-- DISABLED: Step Log Comparison Mode Banner - temporarily disabled in v1.2.0
   {#if compareSourceStep}
     <div class="comparison-banner step-comparison" transition:fade={{ duration: 150 }}>
       <span class="codicon codicon-diff comparison-banner-icon"></span>
@@ -6055,6 +6057,7 @@
       </button>
     </div>
   {/if}
+  -->
 
   {#if loading || refreshing || loadingMore || fetchingDateFilteredRuns}
     <div class="loading-container">
@@ -6549,6 +6552,7 @@
                           {/if}
                         </button>
                       {/if}
+                      <!-- DISABLED: Interactive log viewer - temporarily disabled in v1.2.0
                       <button
                         class="job-logs-button"
                         on:click|stopPropagation={() =>
@@ -6564,18 +6568,19 @@
                           <span>View Logs</span>
                         {/if}
                       </button>
+                      -->
                       <button
-                        class="job-logs-button raw-logs"
+                        class="job-logs-button"
                         on:click|stopPropagation={() => viewRawJobLogs(job.id, job.name, run.id)}
                         disabled={loadingRawJobLogs.has(job.id)}
-                        title="View raw logs in text editor"
+                        title="View job logs in text editor"
                       >
                         {#if loadingRawJobLogs.has(job.id)}
                           <span class="codicon codicon-sync spinning-icon"></span>
                           <span>Loading...</span>
                         {:else}
                           <span class="codicon codicon-file-code"></span>
-                          <span>View Raw Logs</span>
+                          <span>View Logs</span>
                         {/if}
                       </button>
                       <button
@@ -6592,6 +6597,7 @@
                           <span>Summary</span>
                         {/if}
                       </button>
+                      <!-- DISABLED: Log comparison functionality - temporarily disabled in v1.2.0
                       {#if compareSourceJob && !isCompareSource(job.id)}
                         {#if canCompareWithJob(job.name, run.workflow_id)}
                           <button
@@ -6639,6 +6645,7 @@
                           <span>Cancel</span>
                         </button>
                       {/if}
+                      -->
                     </div>
                   </div>
                 {/each}
@@ -7204,52 +7211,17 @@
           const jobId = selectedJobForStepsModal?.jobId;
           const runId = selectedJobRunIdForSteps;
           if (jobId != null && runId != null) {
-            viewJobLogsInteractive(jobId, selectedJobForStepsModal?.name || 'Job', runId);
-          }
-        }
-      : undefined}
-    onViewRawLogs={selectedJobForStepsModal.jobId != null && selectedJobRunIdForSteps != null
-      ? () => {
-          const jobId = selectedJobForStepsModal?.jobId;
-          const runId = selectedJobRunIdForSteps;
-          if (jobId != null && runId != null) {
             viewRawJobLogs(jobId, selectedJobForStepsModal?.name || 'Job', runId);
           }
         }
       : undefined}
-    onViewStepLogs={selectedJobForStepsModal.jobId != null && selectedJobRunIdForSteps != null
-      ? (stepNumber, stepName) => {
-          const jobId = selectedJobForStepsModal?.jobId;
-          const runId = selectedJobRunIdForSteps;
-          if (jobId != null && runId != null) {
-            viewStepLogs(
-              jobId,
-              selectedJobForStepsModal?.name || 'Job',
-              runId,
-              stepNumber,
-              stepName
-            );
-          }
-        }
-      : undefined}
-    loadingStepLogs={getStepLogsLoadingSet(selectedJobForStepsModal.jobId)}
     loadingLogs={selectedJobForStepsModal.jobId != null &&
-      loadingJobLogs.has(selectedJobForStepsModal.jobId)}
-    loadingRawLogs={selectedJobForStepsModal.jobId != null &&
       loadingRawJobLogs.has(selectedJobForStepsModal.jobId)}
     loadingSummary={selectedJobForStepsModal.jobId != null &&
       loadingJobSummary.has(selectedJobForStepsModal.jobId)}
     runId={selectedJobRunIdForSteps ?? undefined}
     workflowId={selectedJobWorkflowIdForSteps ?? undefined}
     workflowName={selectedJobWorkflowNameForSteps ?? undefined}
-    onCompareStepLogs={selectedJobForStepsModal.jobId != null &&
-    selectedJobRunIdForSteps != null &&
-    selectedJobWorkflowIdForSteps != null &&
-    selectedJobWorkflowNameForSteps != null
-      ? handleStepComparison
-      : undefined}
-    {compareSourceStep}
-    {loadingStepComparison}
   />
 {/if}
 
@@ -7304,8 +7276,9 @@
         selectedJobWorkflowIdForSteps = modalRun?.workflow_id ?? null;
         selectedJobWorkflowNameForSteps = modalRun?.name ?? null;
       } else if (node.jobId && jobGraphModalRunId) {
-        // Fall back to viewing logs for jobs without steps data
-        viewJobLogsInteractive(node.jobId, node.name, jobGraphModalRunId);
+        // Fall back to viewing raw logs for jobs without steps data
+        // NOTE: Changed from viewJobLogsInteractive to viewRawJobLogs (interactive viewer disabled in v1.2.0)
+        viewRawJobLogs(node.jobId, node.name, jobGraphModalRunId);
       }
     }}
   />
