@@ -319,7 +319,9 @@ export function buildCollapsedJobDependencyGraph(
       }
       const group = jobGroups.get(baseKey)!;
       group.jobs.push(job);
-      if (isMatrix) group.isMatrix = true;
+      if (isMatrix) {
+        group.isMatrix = true;
+      }
     }
 
     // Create one node per job group
@@ -730,9 +732,15 @@ function computeTimeBasedAssignments(
 
   // Sort jobs by start time
   const jobsByStartTime = [...jobs].sort((a, b) => {
-    if (!a.started_at && !b.started_at) return a.id - b.id;
-    if (!a.started_at) return 1;
-    if (!b.started_at) return -1;
+    if (!a.started_at && !b.started_at) {
+      return a.id - b.id;
+    }
+    if (!a.started_at) {
+      return 1;
+    }
+    if (!b.started_at) {
+      return -1;
+    }
     return new Date(a.started_at).getTime() - new Date(b.started_at).getTime();
   });
 
@@ -795,8 +803,12 @@ function computeTimeBasedAssignments(
  * Returns an array of job arrays, where each array is a cluster.
  */
 function findTimeClusters(jobsByStartTime: JobData[], numCallers: number): JobData[][] {
-  if (jobsByStartTime.length === 0) return [];
-  if (numCallers <= 1) return [jobsByStartTime];
+  if (jobsByStartTime.length === 0) {
+    return [];
+  }
+  if (numCallers <= 1) {
+    return [jobsByStartTime];
+  }
 
   // Calculate time gaps between consecutive jobs
   const gaps: Array<{ afterIndex: number; gapMs: number }> = [];
@@ -862,8 +874,12 @@ function sortCallersByDependencyChain(callers: WorkflowJobDefinition[]): Workflo
     // Check if B depends on A (B comes after A)
     const bDependsOnA = bDeps.some((dep) => dep === a.key || callerKeys.has(dep));
 
-    if (aDependsOnB && !bDependsOnA) return 1; // A comes after B
-    if (bDependsOnA && !aDependsOnB) return -1; // B comes after A
+    if (aDependsOnB && !bDependsOnA) {
+      return 1;
+    } // A comes after B
+    if (bDependsOnA && !aDependsOnB) {
+      return -1;
+    } // B comes after A
 
     // Secondary sort: fewer dependencies = earlier
     return aDeps.length - bDeps.length;
@@ -971,7 +987,9 @@ function findTimeBoundaries(jobs: JobData[], numCallers: number): number[] {
 
   for (let i = 0; i < jobs.length; i++) {
     const job = jobs[i];
-    if (!job.started_at) continue;
+    if (!job.started_at) {
+      continue;
+    }
 
     const startTime = new Date(job.started_at).getTime();
 
@@ -1004,7 +1022,9 @@ function findTimeBoundaries(jobs: JobData[], numCallers: number): number[] {
  * Normalize the 'needs' field to an array of strings
  */
 function normalizeNeeds(needs: string | string[] | undefined): string[] {
-  if (!needs) return [];
+  if (!needs) {
+    return [];
+  }
   return Array.isArray(needs) ? needs : [needs];
 }
 
@@ -1024,7 +1044,9 @@ function normalizeNeeds(needs: string | string[] | undefined): string[] {
  * @returns Reduced set of edges with transitive edges removed
  */
 function computeTransitiveReduction(nodes: JobGraphNode[], edges: JobGraphEdge[]): JobGraphEdge[] {
-  if (edges.length === 0) return edges;
+  if (edges.length === 0) {
+    return edges;
+  }
 
   // Build adjacency list for efficient traversal
   const adjacencyList = new Map<string, Set<string>>();
@@ -1045,7 +1067,9 @@ function computeTransitiveReduction(nodes: JobGraphNode[], edges: JobGraphEdge[]
 
     // Start BFS from all neighbors of source EXCEPT the target
     const neighbors = adjacencyList.get(source);
-    if (!neighbors) return false;
+    if (!neighbors) {
+      return false;
+    }
 
     for (const neighbor of neighbors) {
       if (neighbor !== target) {
@@ -1144,7 +1168,9 @@ function calculateLevels(
     const currentLevel: JobGraphNode[] = [];
 
     for (const node of nodes) {
-      if (assigned.has(node.id)) continue;
+      if (assigned.has(node.id)) {
+        continue;
+      }
 
       const deg = inDegree.get(node.id) || 0;
       if (deg === 0) {
@@ -1253,10 +1279,14 @@ export function getFocusedNodes(graph: JobDependencyGraph): JobGraphNode[] {
     focusJobId = firstIncomplete?.id || nodes[0]?.id;
   }
 
-  if (!focusJobId) return nodes;
+  if (!focusJobId) {
+    return nodes;
+  }
 
   const focusNode = nodes.find((n) => n.id === focusJobId);
-  if (!focusNode) return nodes;
+  if (!focusNode) {
+    return nodes;
+  }
 
   const focusedIds = new Set<string>();
   focusedIds.add(focusJobId);
@@ -1328,9 +1358,13 @@ export function calculateGraphDimensions(nodes: JobGraphNode[]): {
  * Format duration in milliseconds to human readable string
  */
 export function formatDuration(ms: number): string {
-  if (ms < 1000) return '<1s';
+  if (ms < 1000) {
+    return '<1s';
+  }
   const seconds = Math.floor(ms / 1000);
-  if (seconds < 60) return `${seconds}s`;
+  if (seconds < 60) {
+    return `${seconds}s`;
+  }
   const minutes = Math.floor(seconds / 60);
   const remainingSeconds = seconds % 60;
   if (minutes < 60) {
@@ -1409,7 +1443,9 @@ export function groupMatrixJobs(nodes: JobGraphNode[]): MatrixJobGroup[] {
   const groups = new Map<string, MatrixJobGroup>();
 
   for (const node of nodes) {
-    if (!node.isMatrix) continue;
+    if (!node.isMatrix) {
+      continue;
+    }
 
     const baseKey = (node as any)._baseJobKey || extractBaseNameFromDisplay(node.name);
 
@@ -1466,7 +1502,9 @@ export function calculateConnectorPaths(
   offsetX: number,
   offsetY: number
 ): { d: string; from: string; to: string; isHighlight?: boolean }[] {
-  if (!edges || edges.length === 0 || !nodes || nodes.length === 0) return [];
+  if (!edges || edges.length === 0 || !nodes || nodes.length === 0) {
+    return [];
+  }
 
   const { NODE_WIDTH, NODE_HEIGHT } = GRAPH_CONSTANTS;
   const nodeMap = new Map(nodes.map((n) => [n.id, n]));
@@ -1478,7 +1516,9 @@ export function calculateConnectorPaths(
   for (const edge of edges) {
     const fromNode = nodeMap.get(edge.from);
     const toNode = nodeMap.get(edge.to);
-    if (!fromNode || !toNode) continue;
+    if (!fromNode || !toNode) {
+      continue;
+    }
 
     // Calculate connection points (right edge of source, left edge of target)
     const fromX = fromNode.position.x + NODE_WIDTH - offsetX;
@@ -1514,7 +1554,9 @@ export function calculateConnectorPaths(
  * Returns nodes grouped by their level (stage)
  */
 export function getStages(graph: JobDependencyGraph): JobGraphNode[][] {
-  if (!graph || !graph.levels) return [];
+  if (!graph || !graph.levels) {
+    return [];
+  }
   return graph.levels;
 }
 

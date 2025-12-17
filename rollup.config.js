@@ -65,4 +65,5 @@ function createConfig(input, output) {
 export default [
   createConfig('webview/sidebar-wrapper.js', 'dist/sidebar.js'),
   createConfig('webview/workflow-runs-wrapper.js', 'dist/workflow-runs.js'),
+  createConfig('webview/log-viewer-wrapper.js', 'dist/log-viewer.js'),
 ];

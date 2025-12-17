@@ -11,6 +11,9 @@ import {
   downloadArtifact,
   downloadWorkflowArtifacts,
   getCurrentPullRequest,
+  getGitHubSummaryFromLogs,
+  getJobLogs,
+  getJobSummaryFromLogs,
   getWorkflowById,
   getWorkflowJob,
   getWorkflowRun,
@@ -890,6 +893,42 @@ export class WorkflowRunsPanel {
         await this._viewJobLogs(message.data as { jobId: number; jobName: string; runId: number });
         break;
 
+      case 'viewJobLogsInteractive':
+        await this._viewJobLogsInteractive(
+          message.data as { jobId: number; jobName: string; runId: number }
+        );
+        break;
+
+      case 'compareJobLogs':
+        await this._compareJobLogs(
+          message.data as {
+            sourceJobId: number;
+            sourceJobName: string;
+            sourceRunId: number;
+            targetJobId: number;
+            targetJobName: string;
+            targetRunId: number;
+          }
+        );
+        break;
+
+      case 'compareStepLogs':
+        await this._compareStepLogs(
+          message.data as {
+            sourceJobId: number;
+            sourceJobName: string;
+            sourceRunId: number;
+            sourceStepNumber: number;
+            sourceStepName: string;
+            targetJobId: number;
+            targetJobName: string;
+            targetRunId: number;
+            targetStepNumber: number;
+            targetStepName: string;
+          }
+        );
+        break;
+
       case 'checkJobLogsAvailability':
         await this._checkJobLogsAvailability(
           message.data as { jobId: number; jobName: string; runId: number }
@@ -900,18 +939,17 @@ export class WorkflowRunsPanel {
         await this._getJobDetails(message.data as { jobId: number; runId: number });
         break;
 
-      // TODO: Step logs temporarily disabled due to extraction issues
-      // case 'viewStepLogs':
-      //   await this._viewStepLogs(
-      //     message.data as {
-      //       jobId: number;
-      //       jobName: string;
-      //       runId: number;
-      //       stepNumber: number;
-      //       stepName: string;
-      //     }
-      //   );
-      //   break;
+      case 'viewStepLogs':
+        await this._viewStepLogs(
+          message.data as {
+            jobId: number;
+            jobName: string;
+            runId: number;
+            stepNumber: number;
+            stepName: string;
+          }
+        );
+        break;
 
       case 'getWorkflowRunArtifacts':
         await this._getWorkflowRunArtifacts(message.data as { runId: number });
@@ -1250,6 +1288,49 @@ export class WorkflowRunsPanel {
         };
         if (workflowFilename) {
           await this._sendWorkflowId(workflowFilename);
+        }
+        break;
+      }
+
+      // Disabled: GitHub API doesn't provide job summary content via REST API.
+      // The button now opens the browser directly instead of using this modal flow.
+      case 'getGitHubSummary': {
+        await this._getGitHubSummary(message.data as { runId: number });
+        break;
+      }
+
+      // Get summary for a single job
+      case 'getJobSummary': {
+        await this._getJobSummary(message.data as { jobId: number; jobName: string });
+        break;
+      }
+
+      case 'openGitHubSummaryInTab': {
+        await this._openGitHubSummaryInTab(
+          message.data as {
+            runId: number;
+            runName: string;
+            markdownContent: string;
+            htmlContent: string;
+            htmlUrl?: string;
+          }
+        );
+        break;
+      }
+
+      case 'openInBrowser': {
+        const { url } = (message.data || {}) as { url: string };
+        if (url) {
+          vscode.env.openExternal(vscode.Uri.parse(url));
+        }
+        break;
+      }
+
+      // Handle external URL clicks from markdown content
+      case 'openExternalUrl': {
+        const { url } = (message.data || {}) as { url: string };
+        if (url) {
+          vscode.env.openExternal(vscode.Uri.parse(url));
         }
         break;
       }
@@ -2537,6 +2618,12 @@ export class WorkflowRunsPanel {
       const repoInfo = await getRepositoryInfo();
       if (!repoInfo) {
         vscode.window.showErrorMessage('Could not get repository information');
+        this._panel.webview.postMessage({
+          type: 'viewJobLogsResponse',
+          success: false,
+          error: 'Could not get repository information',
+          data: { jobId: data.jobId },
+        });
         return;
       }
 
@@ -2591,6 +2678,321 @@ export class WorkflowRunsPanel {
         error: error instanceof Error ? error.message : 'Failed to view logs',
       });
     }
+  }
+
+  /**
+   * View job logs in interactive webview panel with collapsible groups
+   * Opens logs in a custom webview that mimics GitHub's log viewer UI
+   */
+  private async _viewJobLogsInteractive(data: { jobId: number; jobName: string; runId: number }) {
+    try {
+      const { LogViewerPanel } = await import('./log-viewer-panel');
+      await LogViewerPanel.createOrShow(this._extensionUri, {
+        jobId: data.jobId,
+        jobName: data.jobName,
+        runId: data.runId,
+      });
+
+      this._panel.webview.postMessage({
+        type: 'viewJobLogsInteractiveResponse',
+        success: true,
+        data: { jobId: data.jobId, opened: true },
+      });
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Failed to open log viewer: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      this._panel.webview.postMessage({
+        type: 'viewJobLogsInteractiveResponse',
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to open log viewer',
+        data: { jobId: data.jobId },
+      });
+    }
+  }
+
+  /**
+   * Compare logs from two different jobs using VS Code's diff editor
+   * Fetches logs for both jobs and opens them in a side-by-side diff view
+   */
+  /**
+   * Strip timestamps from log lines to enable meaningful diff comparison.
+   * GitHub Actions logs typically have ISO 8601 timestamps at the start of each line
+   * (e.g., "2024-01-15T10:30:45.1234567Z Some log message")
+   */
+  private _stripTimestampsFromLogs(logs: string): string {
+    // Match ISO 8601 timestamps at the start of lines
+    // Format: YYYY-MM-DDTHH:MM:SS.nnnnnnnZ (with variable precision on milliseconds)
+    const timestampRegex = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z\s*/gm;
+    return logs.replace(timestampRegex, '');
+  }
+
+  private async _compareJobLogs(data: {
+    sourceJobId: number;
+    sourceJobName: string;
+    sourceRunId: number;
+    targetJobId: number;
+    targetJobName: string;
+    targetRunId: number;
+  }) {
+    try {
+      const repoInfo = await getRepositoryInfo();
+      if (!repoInfo) {
+        throw new Error('Could not get repository information');
+      }
+
+      // Fetch logs for both jobs in parallel
+      const [sourceLogs, targetLogs] = await Promise.all([
+        getJobLogs(repoInfo.owner, repoInfo.name, data.sourceJobId),
+        getJobLogs(repoInfo.owner, repoInfo.name, data.targetJobId),
+      ]);
+
+      // Strip timestamps from logs to enable meaningful diff comparison
+      const sourceLogsClean = this._stripTimestampsFromLogs(sourceLogs);
+      const targetLogsClean = this._stripTimestampsFromLogs(targetLogs);
+
+      // Create unique URIs with timestamp to avoid caching issues
+      const timestamp = Date.now();
+      const sourceUri = vscode.Uri.parse(
+        `github-workflow-log:/${timestamp}/source/${data.sourceJobName.replace(/[/\\?%*:|"<>]/g, '-')}-run-${data.sourceRunId}.log`
+      );
+      const targetUri = vscode.Uri.parse(
+        `github-workflow-log:/${timestamp}/target/${data.targetJobName.replace(/[/\\?%*:|"<>]/g, '-')}-run-${data.targetRunId}.log`
+      );
+
+      // Use a Map to store content by URI path
+      const contentMap = new Map<string, string>();
+      contentMap.set(sourceUri.path, sourceLogsClean);
+      contentMap.set(targetUri.path, targetLogsClean);
+
+      // Create a single provider that serves content based on URI
+      const provider: vscode.TextDocumentContentProvider = {
+        provideTextDocumentContent: (uri: vscode.Uri): string => {
+          return contentMap.get(uri.path) || '';
+        },
+      };
+
+      // Register a single provider for both documents
+      const disposable = vscode.workspace.registerTextDocumentContentProvider(
+        'github-workflow-log',
+        provider
+      );
+
+      // Open the diff editor
+      const diffTitle = `Log Comparison: ${data.sourceJobName} (Run #${data.sourceRunId}) ↔ ${data.targetJobName} (Run #${data.targetRunId})`;
+      await vscode.commands.executeCommand('vscode.diff', sourceUri, targetUri, diffTitle);
+
+      // Clean up provider after a delay (to ensure the diff editor has loaded)
+      setTimeout(() => {
+        disposable.dispose();
+        contentMap.clear();
+      }, 5000);
+
+      this._panel.webview.postMessage({
+        type: 'compareJobLogsResponse',
+        success: true,
+      });
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Failed to compare logs: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      this._panel.webview.postMessage({
+        type: 'compareJobLogsResponse',
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to compare logs',
+      });
+    }
+  }
+
+  /**
+   * Compare logs from two different steps using VS Code's diff editor
+   * Fetches logs for both steps and opens them in a side-by-side diff view
+   */
+  private async _compareStepLogs(data: {
+    sourceJobId: number;
+    sourceJobName: string;
+    sourceRunId: number;
+    sourceStepNumber: number;
+    sourceStepName: string;
+    targetJobId: number;
+    targetJobName: string;
+    targetRunId: number;
+    targetStepNumber: number;
+    targetStepName: string;
+  }) {
+    try {
+      const repoInfo = await getRepositoryInfo();
+      if (!repoInfo) {
+        throw new Error('Could not get repository information');
+      }
+
+      // Fetch logs for both jobs
+      const [sourceLogs, targetLogs] = await Promise.all([
+        getJobLogs(repoInfo.owner, repoInfo.name, data.sourceJobId),
+        getJobLogs(repoInfo.owner, repoInfo.name, data.targetJobId),
+      ]);
+
+      // Extract step-specific logs from the full job logs
+      const sourceStepLogs = this._extractStepLogs(
+        sourceLogs,
+        data.sourceStepNumber,
+        data.sourceStepName
+      );
+      const targetStepLogs = this._extractStepLogs(
+        targetLogs,
+        data.targetStepNumber,
+        data.targetStepName
+      );
+
+      // Strip timestamps from step logs to enable meaningful diff comparison
+      const sourceStepLogsClean = this._stripTimestampsFromLogs(sourceStepLogs);
+      const targetStepLogsClean = this._stripTimestampsFromLogs(targetStepLogs);
+
+      // Create unique URIs with timestamp to avoid caching issues
+      const timestamp = Date.now();
+      const sourceUri = vscode.Uri.parse(
+        `github-workflow-log:/${timestamp}/source/step-${data.sourceJobId}-${data.sourceStepNumber}.log`
+      );
+      const targetUri = vscode.Uri.parse(
+        `github-workflow-log:/${timestamp}/target/step-${data.targetJobId}-${data.targetStepNumber}.log`
+      );
+
+      // Use a Map to store content by URI path
+      const contentMap = new Map<string, string>();
+      contentMap.set(sourceUri.path, sourceStepLogsClean);
+      contentMap.set(targetUri.path, targetStepLogsClean);
+
+      // Create a single provider that serves content based on URI
+      const provider: vscode.TextDocumentContentProvider = {
+        provideTextDocumentContent: (uri: vscode.Uri): string => {
+          return contentMap.get(uri.path) || '';
+        },
+      };
+
+      // Register a single provider for both documents
+      const disposable = vscode.workspace.registerTextDocumentContentProvider(
+        'github-workflow-log',
+        provider
+      );
+
+      // Open the diff editor
+      const diffTitle = `Step Comparison: ${data.sourceStepName} (${data.sourceJobName}) ↔ ${data.targetStepName} (${data.targetJobName})`;
+      await vscode.commands.executeCommand('vscode.diff', sourceUri, targetUri, diffTitle);
+
+      // Clean up provider after a delay (to ensure the diff editor has loaded)
+      setTimeout(() => {
+        disposable.dispose();
+        contentMap.clear();
+      }, 5000);
+
+      this._panel.webview.postMessage({
+        type: 'compareStepLogsResponse',
+        success: true,
+      });
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Failed to compare step logs: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+      this._panel.webview.postMessage({
+        type: 'compareStepLogsResponse',
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to compare step logs',
+      });
+    }
+  }
+
+  /**
+   * Extract logs for a specific step from the full job logs
+   * GitHub logs use ##[group]StepName and ##[endgroup] to mark step boundaries.
+   * Steps are numbered starting from 1 (matching the API step.number field).
+   */
+  private _extractStepLogs(fullLogs: string, stepNumber: number, stepName: string): string {
+    const lines = fullLogs.split('\n');
+
+    // First, parse all step sections from the logs
+    const stepSections: Array<{ name: string; startLine: number; endLine: number }> = [];
+    let currentStepStart = -1;
+    let currentStepName = '';
+    let nestingLevel = 0;
+
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+
+      // Check for group start marker: ##[group]StepName
+      const groupMatch = line.match(/##\[group\](.+)/);
+      if (groupMatch) {
+        if (nestingLevel === 0) {
+          // Top-level group = new step
+          currentStepStart = i;
+          currentStepName = groupMatch[1].trim();
+        }
+        nestingLevel++;
+        continue;
+      }
+
+      // Check for group end marker: ##[endgroup]
+      if (line.includes('##[endgroup]')) {
+        nestingLevel = Math.max(0, nestingLevel - 1);
+        if (nestingLevel === 0 && currentStepStart >= 0) {
+          // End of top-level step
+          stepSections.push({
+            name: currentStepName,
+            startLine: currentStepStart,
+            endLine: i,
+          });
+          currentStepStart = -1;
+          currentStepName = '';
+        }
+        continue;
+      }
+    }
+
+    // Handle unclosed step at end of logs
+    if (currentStepStart >= 0) {
+      stepSections.push({
+        name: currentStepName,
+        startLine: currentStepStart,
+        endLine: lines.length - 1,
+      });
+    }
+
+    // Try to find the step by number first (most reliable)
+    // Step numbers are 1-based, array is 0-based
+    if (stepNumber > 0 && stepNumber <= stepSections.length) {
+      const section = stepSections[stepNumber - 1];
+      return lines.slice(section.startLine, section.endLine + 1).join('\n');
+    }
+
+    // Fallback: try to find by name (fuzzy match)
+    const normalizedStepName = stepName.toLowerCase().replace(/[^a-z0-9]/g, '');
+    for (const section of stepSections) {
+      const normalizedSectionName = section.name.toLowerCase().replace(/[^a-z0-9]/g, '');
+      if (
+        normalizedSectionName.includes(normalizedStepName) ||
+        normalizedStepName.includes(normalizedSectionName)
+      ) {
+        return lines.slice(section.startLine, section.endLine + 1).join('\n');
+      }
+    }
+
+    // Last resort: search for the step name anywhere in the logs
+    for (let i = 0; i < lines.length; i++) {
+      const line = lines[i];
+      if (line.toLowerCase().includes(stepName.toLowerCase())) {
+        // Include context around the match
+        const start = Math.max(0, i - 5);
+        const end = Math.min(lines.length, i + 50);
+        return lines.slice(start, end).join('\n');
+      }
+    }
+
+    // Provide debugging info when no step found
+    const stepInfo =
+      stepSections.length > 0
+        ? `\n\nFound ${stepSections.length} steps in logs:\n${stepSections.map((s, idx) => `  ${idx + 1}. ${s.name}`).join('\n')}`
+        : '\n\nNo step sections (##[group]...##[endgroup]) found in logs.';
+
+    return `No logs found for step "${stepName}" (step #${stepNumber}).${stepInfo}`;
   }
 
   /**
@@ -2717,27 +3119,14 @@ export class WorkflowRunsPanel {
         return;
       }
 
-      // Build log URI with step number and step name as query parameters
-      // The log document provider will handle extracting the step-specific logs
-      // Step name is crucial for accurate log extraction since GitHub Actions logs
-      // contain internal groups that are NOT user-defined steps
-      const logUri = buildLogURI(
-        `${data.jobName} - Step ${data.stepNumber}: ${data.stepName}`,
-        repoInfo.owner,
-        repoInfo.name,
-        data.jobId,
-        data.runId,
-        data.stepNumber,
-        data.stepName
-      );
-
-      // Open the log document in VSCode's text editor
-      const doc = await vscode.workspace.openTextDocument(logUri);
-
-      await vscode.window.showTextDocument(doc, {
-        preview: true,
-        preserveFocus: false,
-        viewColumn: vscode.ViewColumn.One,
+      // Open interactive log viewer with step info for auto-expand and scroll
+      const { LogViewerPanel } = await import('./log-viewer-panel');
+      await LogViewerPanel.createOrShow(this._extensionUri, {
+        jobId: data.jobId,
+        jobName: data.jobName,
+        runId: data.runId,
+        stepNumber: data.stepNumber,
+        stepName: data.stepName,
       });
 
       this._panel.webview.postMessage({
@@ -3710,5 +4099,263 @@ export class WorkflowRunsPanel {
     // Replace * with .*
     const regexPattern = '^' + wildcardPattern.replace(/\*/g, '.*') + '$';
     return new RegExp(regexPattern, 'i');
+  }
+
+  /**
+   * Get GitHub summary content for a workflow run.
+   * Fetches job logs and parses summary content written to $GITHUB_STEP_SUMMARY.
+   */
+  private async _getGitHubSummary(data: { runId: number }) {
+    const { runId } = data;
+
+    try {
+      const repoConfig = await getRepositoryConfig();
+      if (!repoConfig) {
+        this._panel.webview.postMessage({
+          type: 'getGitHubSummaryResponse',
+          success: false,
+          error: 'Repository not configured',
+        });
+        return;
+      }
+
+      // Get jobs for this run to fetch their summaries from logs
+      const jobs = await getWorkflowRunJobs(repoConfig.owner, repoConfig.name, runId);
+
+      // Fetch the GitHub summary by parsing job logs
+      const result = await getGitHubSummaryFromLogs(repoConfig.owner, repoConfig.name, runId, jobs);
+
+      this._panel.webview.postMessage({
+        type: 'getGitHubSummaryResponse',
+        success: result.success,
+        data: {
+          runId,
+          markdownContent: result.markdownContent,
+          htmlUrl: result.htmlUrl,
+        },
+        error: result.error,
+      });
+    } catch (error) {
+      this._panel.webview.postMessage({
+        type: 'getGitHubSummaryResponse',
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to fetch GitHub summary',
+      });
+    }
+  }
+
+  /**
+   * Get GitHub summary content for a single job.
+   * Fetches job logs and parses summary content written to $GITHUB_STEP_SUMMARY.
+   */
+  private async _getJobSummary(data: { jobId: number; jobName: string; runId?: number }) {
+    const { jobId, jobName, runId } = data;
+
+    try {
+      const repoConfig = await getRepositoryConfig();
+      if (!repoConfig) {
+        this._panel.webview.postMessage({
+          type: 'getJobSummaryResponse',
+          success: false,
+          data: { jobId }, // Include jobId so loading state can be cleared
+          error: 'Repository not configured',
+        });
+        return;
+      }
+
+      // Fetch the job summary by parsing its logs
+      const result = await getJobSummaryFromLogs(
+        repoConfig.owner,
+        repoConfig.name,
+        jobId,
+        jobName,
+        runId
+      );
+
+      this._panel.webview.postMessage({
+        type: 'getJobSummaryResponse',
+        success: result.success,
+        data: {
+          jobId,
+          jobName,
+          markdownContent: result.markdownContent,
+          htmlUrl: result.htmlUrl,
+        },
+        error: result.error,
+      });
+    } catch (error) {
+      this._panel.webview.postMessage({
+        type: 'getJobSummaryResponse',
+        success: false,
+        data: { jobId }, // Include jobId so loading state can be cleared
+        error: error instanceof Error ? error.message : 'Failed to fetch job summary',
+      });
+    }
+  }
+
+  /**
+   * Open GitHub summary content in a new editor tab.
+   * Creates a webview panel with rendered HTML content (same as modal).
+   */
+  private async _openGitHubSummaryInTab(data: {
+    runId: number;
+    runName: string;
+    markdownContent: string;
+    htmlContent: string;
+    htmlUrl?: string;
+  }) {
+    const { runId, runName, htmlContent, htmlUrl } = data;
+
+    try {
+      const title = `GitHub Summary - ${runName || `Run #${runId}`}`;
+
+      // Create a new webview panel
+      const panel = vscode.window.createWebviewPanel(
+        'github-summary-tab',
+        title,
+        vscode.ViewColumn.Beside,
+        {
+          enableScripts: true,
+          localResourceRoots: [this._extensionUri],
+        }
+      );
+
+      // Get the codicons CSS for the webview
+      const codiconsUri = panel.webview.asWebviewUri(
+        vscode.Uri.joinPath(
+          this._extensionUri,
+          'node_modules',
+          '@vscode/codicons',
+          'dist',
+          'codicon.css'
+        )
+      );
+
+      // Set the HTML content
+      panel.webview.html = this._getSummaryTabHtml(htmlContent, htmlUrl || '', codiconsUri);
+
+      // Handle messages from the webview
+      panel.webview.onDidReceiveMessage((message) => {
+        if (message.type === 'openExternalUrl' && message.url) {
+          vscode.env.openExternal(vscode.Uri.parse(message.url));
+        }
+      });
+
+      // Notify webview of success
+      this._panel.webview.postMessage({
+        type: 'openGitHubSummaryInTabResponse',
+        success: true,
+        data: { runId, fileName: title },
+      });
+    } catch (error) {
+      this._panel.webview.postMessage({
+        type: 'openGitHubSummaryInTabResponse',
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to open summary in tab',
+      });
+    }
+  }
+
+  /**
+   * Generate HTML for the summary tab webview.
+   */
+  private _getSummaryTabHtml(content: string, htmlUrl: string, codiconsUri: vscode.Uri): string {
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link href="${codiconsUri}" rel="stylesheet" />
+  <title>GitHub Summary</title>
+  <style>
+    body {
+      font-family: var(--vscode-font-family);
+      font-size: 13px;
+      line-height: 1.6;
+      color: var(--vscode-foreground);
+      background: var(--vscode-editor-background);
+      padding: 20px;
+      margin: 0;
+    }
+    .content {
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    h1, h2, h3, h4 { margin-top: 1.2em; margin-bottom: 0.5em; }
+    h1 { font-size: 1.5em; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 0.3em; }
+    h2 { font-size: 1.3em; }
+    h3 { font-size: 1.1em; }
+    p { margin: 0.8em 0; }
+    a { color: var(--vscode-textLink-foreground); text-decoration: none; }
+    a:hover { text-decoration: underline; }
+    code {
+      background: var(--vscode-textCodeBlock-background);
+      padding: 2px 6px;
+      border-radius: 3px;
+      font-family: var(--vscode-editor-font-family);
+      font-size: 0.9em;
+    }
+    pre {
+      background: var(--vscode-textCodeBlock-background);
+      padding: 12px;
+      border-radius: 4px;
+      overflow-x: auto;
+    }
+    pre code { padding: 0; background: none; }
+    ul, ol { margin: 0.5em 0; padding-left: 1.5em; }
+    li { margin: 0.3em 0; }
+    hr {
+      border: none;
+      border-top: 1px solid var(--vscode-panel-border);
+      margin: 1.5em 0;
+    }
+    .job-section {
+      margin: 16px 0;
+      padding: 12px;
+      background: var(--vscode-sideBar-background);
+      border-left: 3px solid var(--vscode-button-background);
+      border-radius: 4px;
+    }
+    .footer {
+      margin-top: 24px;
+      padding-top: 12px;
+      border-top: 1px solid var(--vscode-panel-border);
+      font-size: 11px;
+      color: var(--vscode-descriptionForeground);
+    }
+    .footer a { color: var(--vscode-descriptionForeground); }
+  </style>
+</head>
+<body>
+  <div class="content">
+    ${content}
+    ${
+      htmlUrl
+        ? `<div class="footer">
+        <a href="#" onclick="openUrl('${htmlUrl}')">View on GitHub</a>
+      </div>`
+        : ''
+    }
+  </div>
+  <script>
+    const vscode = acquireVsCodeApi();
+
+    function openUrl(url) {
+      vscode.postMessage({ type: 'openExternalUrl', url: url });
+    }
+
+    document.addEventListener('click', function(e) {
+      const anchor = e.target.closest('a');
+      if (anchor) {
+        e.preventDefault();
+        const url = anchor.dataset.href || anchor.getAttribute('href');
+        if (url && url !== '#') {
+          openUrl(url);
+        }
+      }
+    });
+  </script>
+</body>
+</html>`;
   }
 }

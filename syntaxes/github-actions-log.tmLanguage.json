@@ -1,0 +1,80 @@
+{
+  "$schema": "https://raw.githubusercontent.com/martinring/tmlanguage/master/tmlanguage.json",
+  "name": "GitHub Actions Log",
+  "scopeName": "source.github-actions-log",
+  "patterns": [{ "include": "#log-line" }],
+  "repository": {
+    "log-line": {
+      "patterns": [
+        {
+          "comment": "Line with timestamp followed by error marker",
+          "match": "^(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+Z\\s?)(##\\[error\\].*)$",
+          "captures": {
+            "1": { "name": "comment.line.timestamp.github-actions-log" },
+            "2": { "name": "invalid.illegal.error.github-actions-log" }
+          }
+        },
+        {
+          "comment": "Line with timestamp followed by warning marker",
+          "match": "^(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+Z\\s?)(##\\[warning\\].*)$",
+          "captures": {
+            "1": { "name": "comment.line.timestamp.github-actions-log" },
+            "2": { "name": "markup.changed.warning.github-actions-log" }
+          }
+        },
+        {
+          "comment": "Line with timestamp followed by group start",
+          "match": "^(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+Z\\s?)(##\\[group\\])(.*)$",
+          "captures": {
+            "1": { "name": "comment.line.timestamp.github-actions-log" },
+            "2": { "name": "punctuation.definition.tag.github-actions-log" },
+            "3": { "name": "entity.name.section.github-actions-log" }
+          }
+        },
+        {
+          "comment": "Line with timestamp followed by group end",
+          "match": "^(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+Z\\s?)(##\\[endgroup\\])(.*)$",
+          "captures": {
+            "1": { "name": "comment.line.timestamp.github-actions-log" },
+            "2": { "name": "punctuation.definition.tag.github-actions-log" },
+            "3": { "name": "comment.line.github-actions-log" }
+          }
+        },
+        {
+          "comment": "Line with timestamp - general case",
+          "match": "^(\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d+Z)(\\s?)(.*)$",
+          "captures": {
+            "1": { "name": "comment.line.timestamp.github-actions-log" },
+            "2": { "name": "comment.line.timestamp.github-actions-log" },
+            "3": { "patterns": [{ "include": "#inline-patterns" }] }
+          }
+        }
+      ]
+    },
+    "inline-patterns": {
+      "patterns": [
+        {
+          "comment": "Error keywords",
+          "name": "invalid.illegal.error.github-actions-log",
+          "match": "\\b(Error|ERROR|Failed|FAILED|Failure|FAILURE)\\b"
+        },
+        {
+          "comment": "Warning keywords",
+          "name": "markup.changed.warning.github-actions-log",
+          "match": "\\b(Warning|WARNING|WARN)\\b"
+        },
+        {
+          "comment": "Success keywords and emoji",
+          "name": "markup.inserted.success.github-actions-log",
+          "match": "\\b(Success|SUCCESS|Passed|PASSED|Done|DONE)\\b"
+        },
+        {
+          "comment": "URLs",
+          "name": "markup.underline.link.github-actions-log",
+          "match": "https?://[^\\s]+"
+        }
+      ]
+    }
+  }
+}
+

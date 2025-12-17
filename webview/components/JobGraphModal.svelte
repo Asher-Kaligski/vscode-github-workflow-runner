@@ -88,7 +88,9 @@
     const levelMap = new Map<number, JobGraphNode[]>();
     for (const node of nodes) {
       const level = node.level || 0;
-      if (!levelMap.has(level)) levelMap.set(level, []);
+      if (!levelMap.has(level)) {
+        levelMap.set(level, []);
+      }
       levelMap.get(level)!.push(node);
     }
 

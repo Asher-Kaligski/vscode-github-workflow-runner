@@ -14,7 +14,10 @@
   import JobDependencyGraph from './components/JobDependencyGraph.svelte';
   import JobStepsModal from './components/JobStepsModal.svelte';
   import JobGraphModal from './components/JobGraphModal.svelte';
+  // GitHub summary modal - now uses log-based parsing to extract summary content
+  import GitHubSummaryModal from './components/GitHubSummaryModal.svelte';
   import { formatDuration as formatMs } from './utils/graph-utils';
+  import { markdownToHtml } from './utils/markdown-utils';
 
   // Debug: Log immediately when script runs
   console.log('[WorkflowRuns] Script block executing...');
@@ -554,13 +557,50 @@
   // Job steps modal state (for jobs list view)
   let selectedJobForStepsModal: JobGraphNode | null = null;
   let selectedJobRunIdForSteps: number | null = null;
+  let selectedJobWorkflowIdForSteps: number | null = null; // Workflow ID for step comparison
+  let selectedJobWorkflowNameForSteps: string | null = null; // Workflow name for step comparison
   let loadingJobSteps: Set<number> = new Set(); // Track jobs currently loading steps
-  let loadingJobLogs: Set<number> = new Set(); // Track jobs currently checking logs availability
+  let loadingJobLogs: Set<number> = new Set(); // Track jobs currently loading interactive logs
+  let loadingRawJobLogs: Set<number> = new Set(); // Track jobs currently loading raw logs
   let loadingStepLogs: Map<string, boolean> = new Map(); // Track steps currently loading logs (key: jobId-stepNumber)
+  let loadingJobSummary: Set<number> = new Set(); // Track jobs currently loading summary
+
+  // Log comparison state
+  let compareSourceJob: {
+    jobId: number;
+    jobName: string;
+    runId: number;
+    workflowId: number;
+    workflowName: string;
+  } | null = null;
+  let loadingComparison: boolean = false;
+
+  // Step log comparison state
+  let compareSourceStep: {
+    stepNumber: number;
+    stepName: string;
+    jobId: number;
+    jobName: string;
+    runId: number;
+    workflowId: number;
+    workflowName: string;
+  } | null = null;
+  let loadingStepComparison: boolean = false;
 
   // Job graph modal state (full screen view)
   let showJobGraphModal = false;
   let jobGraphModalRunId: number | null = null;
+
+  // GitHub summary modal state
+  // Note: GitHub API doesn't provide job summary content via REST API.
+  // The button now opens the browser directly instead of this modal.
+  let showGitHubSummaryModal = false;
+  let gitHubSummaryModalRunId: number | null = null;
+  let gitHubSummaryContent: string = ''; // HTML content for modal display
+  let gitHubSummaryMarkdown: string = ''; // Raw markdown content for tab view
+  let gitHubSummaryHtmlUrl: string = '';
+  let gitHubSummaryLoading: boolean = false;
+  let gitHubSummaryError: string = '';
 
   function formatParameterValue(value: unknown): string {
     if (value === null || value === undefined) {
@@ -1328,21 +1368,45 @@
 
   /**
    * Handle click on a job node in the dependency graph
-   * Opens the job logs
+   * Opens the interactive job logs webview
    */
   function handleGraphJobClick(node: JobGraphNode, runId: number) {
     if (node.jobId) {
-      viewJobLogs(node.jobId, node.name, runId);
+      viewJobLogsInteractive(node.jobId, node.name, runId);
     }
   }
 
   /**
-   * View job logs
+   * View job logs in interactive webview with collapsible groups
    */
-  function viewJobLogs(jobId: number, jobName: string, runId: number) {
+  function viewJobLogsInteractive(jobId: number, jobName: string, runId: number) {
     // Track loading state
     loadingJobLogs.add(jobId);
     loadingJobLogs = loadingJobLogs; // Trigger reactivity
+
+    // Pause auto-refresh briefly
+    autoRefreshPaused = true;
+    stopAutoRefresh();
+    window.setTimeout(() => {
+      autoRefreshPaused = false;
+      if (autoRefreshSeconds > 0) {
+        startAutoRefresh();
+      }
+    }, 30_000);
+
+    vscode.postMessage({
+      type: 'viewJobLogsInteractive',
+      data: { jobId, jobName, runId },
+    });
+  }
+
+  /**
+   * View raw job logs in text editor (plain text)
+   */
+  function viewRawJobLogs(jobId: number, jobName: string, runId: number) {
+    // Track loading state for raw logs button
+    loadingRawJobLogs.add(jobId);
+    loadingRawJobLogs = loadingRawJobLogs; // Trigger reactivity
 
     // Pause auto-refresh briefly to avoid disruptive refresh when a new tab opens
     autoRefreshPaused = true;
@@ -1395,7 +1459,9 @@
    * Get loading state for a specific step's logs
    */
   function getStepLogsLoadingSet(jobId: number | undefined): Set<number> {
-    if (jobId === undefined) return new Set();
+    if (jobId === undefined) {
+      return new Set();
+    }
     const result = new Set<number>();
     loadingStepLogs.forEach((_, key) => {
       const [keyJobId, stepNum] = key.split('-').map(Number);
@@ -1407,11 +1473,146 @@
   }
 
   /**
+   * Start log comparison mode by selecting a job as the comparison source
+   */
+  function startLogComparison(
+    jobId: number,
+    jobName: string,
+    runId: number,
+    workflowId: number,
+    workflowName: string
+  ) {
+    compareSourceJob = { jobId, jobName, runId, workflowId, workflowName };
+  }
+
+  /**
+   * Clear comparison mode
+   */
+  function clearComparisonMode() {
+    compareSourceJob = null;
+  }
+
+  /**
+   * Check if a job can be compared with the current comparison source
+   * Jobs can only be compared if they have the same job name AND workflow name
+   */
+  function canCompareWithJob(jobName: string, workflowId: number): boolean {
+    if (!compareSourceJob) return false;
+    return compareSourceJob.jobName === jobName && compareSourceJob.workflowId === workflowId;
+  }
+
+  /**
+   * Complete log comparison by selecting the target job
+   * Sends request to backend to fetch and diff the logs
+   */
+  function compareWithJob(targetJobId: number, targetJobName: string, targetRunId: number) {
+    if (!compareSourceJob) {
+      return;
+    }
+
+    loadingComparison = true;
+
+    vscode.postMessage({
+      type: 'compareJobLogs',
+      data: {
+        sourceJobId: compareSourceJob.jobId,
+        sourceJobName: compareSourceJob.jobName,
+        sourceRunId: compareSourceJob.runId,
+        targetJobId,
+        targetJobName,
+        targetRunId,
+      },
+    });
+
+    // Clear comparison mode after initiating
+    compareSourceJob = null;
+  }
+
+  /**
+   * Check if a job is the current comparison source
+   */
+  function isCompareSource(jobId: number): boolean {
+    return compareSourceJob?.jobId === jobId;
+  }
+
+  /**
+   * Handle step comparison - either set source, cancel, or compare with target
+   */
+  function handleStepComparison(
+    stepNumber: number,
+    stepName: string,
+    jobId: number,
+    jobName: string,
+    runId: number,
+    workflowId: number,
+    workflowName: string
+  ) {
+    if (compareSourceStep === null) {
+      // Set this step as the comparison source
+      compareSourceStep = { stepNumber, stepName, jobId, jobName, runId, workflowId, workflowName };
+    } else if (
+      compareSourceStep.stepNumber === stepNumber &&
+      compareSourceStep.jobId === jobId &&
+      compareSourceStep.runId === runId
+    ) {
+      // Clicking on the same source step - cancel comparison mode
+      compareSourceStep = null;
+    } else {
+      // Compare with this step as the target
+      loadingStepComparison = true;
+
+      vscode.postMessage({
+        type: 'compareStepLogs',
+        data: {
+          sourceJobId: compareSourceStep.jobId,
+          sourceJobName: compareSourceStep.jobName,
+          sourceRunId: compareSourceStep.runId,
+          sourceStepNumber: compareSourceStep.stepNumber,
+          sourceStepName: compareSourceStep.stepName,
+          targetJobId: jobId,
+          targetJobName: jobName,
+          targetRunId: runId,
+          targetStepNumber: stepNumber,
+          targetStepName: stepName,
+        },
+      });
+
+      // Clear comparison mode after initiating
+      compareSourceStep = null;
+    }
+  }
+
+  /**
+   * Check if a step can be compared with the current comparison source
+   * Steps can only be compared if they have the same step name, job name, AND workflow
+   */
+  function canCompareWithStep(stepName: string, jobName: string, workflowId: number): boolean {
+    if (!compareSourceStep) return false;
+    return (
+      compareSourceStep.stepName === stepName &&
+      compareSourceStep.jobName === jobName &&
+      compareSourceStep.workflowId === workflowId
+    );
+  }
+
+  /**
+   * Clear step comparison mode
+   */
+  function clearStepComparisonMode() {
+    compareSourceStep = null;
+  }
+
+  /**
    * Open job steps modal from jobs list
    * Converts WorkflowJob to JobGraphNode format for the modal
    * For running jobs, fetches the latest steps from the API
    */
-  function openJobStepsModal(job: WorkflowJob, runId: number) {
+  function openJobStepsModal(
+    job: WorkflowJob,
+    runId: number,
+    workflowId: number,
+    workflowName: string
+  ) {
     // Don't show steps for queued jobs (they haven't started yet)
     if (job.status === 'queued') {
       return;
@@ -1419,7 +1620,7 @@
 
     // For completed jobs with steps, show immediately
     if (job.status === 'completed' && job.steps && job.steps.length > 0) {
-      showJobStepsModalWithData(job, runId);
+      showJobStepsModalWithData(job, runId, workflowId, workflowName);
       return;
     }
 
@@ -1428,8 +1629,10 @@
       loadingJobSteps.add(job.id);
       loadingJobSteps = loadingJobSteps; // Trigger reactivity
 
-      // Set the runId so the response handler knows which run this is for
+      // Set the runId and workflow info so the response handler knows which run this is for
       selectedJobRunIdForSteps = runId;
+      selectedJobWorkflowIdForSteps = workflowId;
+      selectedJobWorkflowNameForSteps = workflowName;
 
       vscode.postMessage({
         type: 'getJobDetails',
@@ -1439,19 +1642,42 @@
     }
 
     // Fallback: show with available data
-    showJobStepsModalWithData(job, runId);
+    showJobStepsModalWithData(job, runId, workflowId, workflowName);
   }
 
   /**
    * Helper to display job steps modal with job data
+   * Converts WorkflowJob steps to JobNodeStep format with calculated durations
    */
-  function showJobStepsModalWithData(job: WorkflowJob, runId: number) {
+  function showJobStepsModalWithData(
+    job: WorkflowJob,
+    runId: number,
+    workflowId?: number,
+    workflowName?: string
+  ) {
     const duration =
       job.started_at && job.completed_at
         ? new Date(job.completed_at).getTime() - new Date(job.started_at).getTime()
         : job.started_at
           ? Date.now() - new Date(job.started_at).getTime()
           : undefined;
+
+    // Convert WorkflowJob steps to JobNodeStep format with calculated durations
+    const steps = (job.steps || []).map((step) => ({
+      name: step.name,
+      status: step.status,
+      conclusion: step.conclusion,
+      number: step.number,
+      startedAt: step.started_at,
+      completedAt: step.completed_at,
+      // Calculate duration: for completed steps use actual time, for running steps calculate from now
+      duration:
+        step.started_at && step.completed_at
+          ? new Date(step.completed_at).getTime() - new Date(step.started_at).getTime()
+          : step.started_at
+            ? Date.now() - new Date(step.started_at).getTime()
+            : undefined,
+    }));
 
     selectedJobForStepsModal = {
       id: job.name,
@@ -1461,10 +1687,17 @@
       position: { x: 0, y: 0 },
       dependencies: [],
       jobId: job.id,
-      steps: job.steps || [],
+      steps,
       duration,
     };
     selectedJobRunIdForSteps = runId;
+    // Use provided workflow info or keep existing (for async responses)
+    if (workflowId !== undefined) {
+      selectedJobWorkflowIdForSteps = workflowId;
+    }
+    if (workflowName !== undefined) {
+      selectedJobWorkflowNameForSteps = workflowName;
+    }
   }
 
   /**
@@ -1473,6 +1706,24 @@
   function closeJobStepsModal() {
     selectedJobForStepsModal = null;
     selectedJobRunIdForSteps = null;
+    selectedJobWorkflowIdForSteps = null;
+    selectedJobWorkflowNameForSteps = null;
+  }
+
+  /**
+   * View job summary - fetches and displays summary from job logs.
+   * Opens the GitHub summary modal with content from a single job.
+   */
+  function viewJobSummary(jobId: number, jobName: string, runId?: number) {
+    // Set loading state
+    loadingJobSummary.add(jobId);
+    loadingJobSummary = loadingJobSummary;
+
+    // Request job summary from extension
+    vscode.postMessage({
+      type: 'getJobSummary',
+      data: { jobId, jobName, runId },
+    });
   }
 
   /**
@@ -1489,6 +1740,87 @@
   function closeJobGraphModal() {
     showJobGraphModal = false;
     jobGraphModalRunId = null;
+  }
+
+  /**
+   * Open GitHub summary page in browser for a specific run.
+   * Note: GitHub API doesn't provide job summary content via REST API,
+   * so this function opens the browser directly instead of using the modal.
+   */
+  function openGitHubSummaryInBrowser(runId: number) {
+    const run = runs.find((r) => r.id === runId);
+    if (run?.html_url) {
+      vscode.postMessage({
+        type: 'openInBrowser',
+        data: { url: run.html_url },
+      });
+    }
+  }
+
+  /**
+   * Open GitHub summary modal for a specific run.
+   * Note: This modal is currently not used - the button opens browser directly.
+   */
+  function openGitHubSummaryModal(runId: number) {
+    const run = runs.find((r) => r.id === runId);
+    gitHubSummaryModalRunId = runId;
+    gitHubSummaryContent = '';
+    gitHubSummaryHtmlUrl = run?.html_url || '';
+    gitHubSummaryError = '';
+    gitHubSummaryLoading = true;
+    showGitHubSummaryModal = true;
+
+    // Request the GitHub summary from the extension
+    vscode.postMessage({
+      type: 'getGitHubSummary',
+      data: { runId },
+    });
+  }
+
+  /**
+   * Close GitHub summary modal
+   */
+  function closeGitHubSummaryModal() {
+    showGitHubSummaryModal = false;
+    gitHubSummaryModalRunId = null;
+    gitHubSummaryContent = '';
+    gitHubSummaryMarkdown = '';
+    gitHubSummaryHtmlUrl = '';
+    gitHubSummaryError = '';
+    gitHubSummaryLoading = false;
+  }
+
+  /**
+   * Open GitHub summary in a new editor tab
+   */
+  function openGitHubSummaryInTab() {
+    if (!gitHubSummaryContent) {
+      return;
+    }
+
+    const run = gitHubSummaryModalRunId ? runs.find((r) => r.id === gitHubSummaryModalRunId) : null;
+    vscode.postMessage({
+      type: 'openGitHubSummaryInTab',
+      data: {
+        runId: gitHubSummaryModalRunId || 0,
+        runName: run?.display_title || run?.name || 'Job Summary',
+        markdownContent: gitHubSummaryMarkdown,
+        htmlContent: gitHubSummaryContent, // Send HTML for the tab view
+        htmlUrl: gitHubSummaryHtmlUrl,
+      },
+    });
+  }
+
+  /**
+   * Open GitHub summary URL in browser (from modal)
+   */
+  function openGitHubSummaryInBrowserFromModal() {
+    if (gitHubSummaryHtmlUrl) {
+      vscode.postMessage({
+        type: 'openInBrowser',
+        data: { url: gitHubSummaryHtmlUrl },
+      });
+    }
   }
 
   /**
@@ -1613,8 +1945,8 @@
       showSummary.delete(runId);
       showSummary = showSummary; // Trigger reactivity
     } else {
-      // When opening summary, close jobs and artifacts for this run so that
-      // only one section (Jobs, Artifacts, or Summary) is expanded at a time.
+      // When opening summary, close jobs, artifacts, and graph for this run so that
+      // only one section (Jobs, Artifacts, Graph, or Summary) is expanded at a time.
       if (expandedRuns.has(runId)) {
         expandedRuns.delete(runId);
         expandedRuns = expandedRuns; // Trigger reactivity
@@ -1622,6 +1954,10 @@
       if (showArtifacts.has(runId)) {
         showArtifacts.delete(runId);
         showArtifacts = showArtifacts; // Trigger reactivity
+      }
+      if (showDependencyGraph.has(runId)) {
+        showDependencyGraph.delete(runId);
+        showDependencyGraph = showDependencyGraph; // Trigger reactivity
       }
 
       showSummary.add(runId);
@@ -2935,7 +3271,14 @@
       }
       // The actual log viewing is handled by the extension
     } else if (message.type === 'viewJobLogsResponse') {
-      // Handle response for viewing job logs - clear loading state
+      // Handle response for viewing raw job logs - clear loading state
+      const jobId = message.data?.jobId;
+      if (jobId) {
+        loadingRawJobLogs.delete(jobId);
+        loadingRawJobLogs = loadingRawJobLogs; // Trigger reactivity
+      }
+    } else if (message.type === 'viewJobLogsInteractiveResponse') {
+      // Handle response for viewing interactive job logs - clear loading state
       const jobId = message.data?.jobId;
       if (jobId) {
         loadingJobLogs.delete(jobId);
@@ -2950,6 +3293,12 @@
         loadingStepLogs.delete(key);
         loadingStepLogs = loadingStepLogs; // Trigger reactivity
       }
+    } else if (message.type === 'compareJobLogsResponse') {
+      // Handle response for log comparison - clear loading state
+      loadingComparison = false;
+    } else if (message.type === 'compareStepLogsResponse') {
+      // Handle response for step log comparison - clear loading state
+      loadingStepComparison = false;
     } else if (message.type === 'promptRerunWorkflowComplete') {
       const responseRunId: number | undefined = message.data?.runId;
       if (responseRunId) {
@@ -3698,6 +4047,56 @@
       // Keep workflow filter as is and re-apply filters with the relaxed
       // state so any newly-dispatched or rerun workflow becomes visible.
       filterRuns();
+    } else if (message.type === 'getGitHubSummaryResponse') {
+      // Handle GitHub summary response - convert markdown to HTML for display
+      gitHubSummaryLoading = false;
+
+      if (message.success && message.data) {
+        // Store both raw markdown (for tab view) and HTML (for modal)
+        const markdownContent = message.data.markdownContent || '';
+        gitHubSummaryMarkdown = markdownContent;
+        gitHubSummaryContent = markdownContent ? markdownToHtml(markdownContent) : '';
+        gitHubSummaryHtmlUrl = message.data.htmlUrl || '';
+        gitHubSummaryError = '';
+      } else {
+        gitHubSummaryError = message.error || 'Failed to load GitHub summary';
+        gitHubSummaryContent = '';
+        gitHubSummaryMarkdown = '';
+      }
+    } else if (message.type === 'getJobSummaryResponse') {
+      // Handle job summary response - show in GitHub summary modal
+      const jobId = message.data?.jobId;
+      if (jobId) {
+        loadingJobSummary.delete(jobId);
+        loadingJobSummary = loadingJobSummary;
+      }
+
+      if (message.success && message.data) {
+        // Close the JobStepsModal if it's open (so summary modal can be shown)
+        if (selectedJobForStepsModal) {
+          selectedJobForStepsModal = null;
+          selectedJobRunIdForSteps = null;
+        }
+
+        // Store both raw markdown (for tab view) and HTML (for modal)
+        const markdownContent = message.data.markdownContent || '';
+        gitHubSummaryMarkdown = markdownContent;
+        gitHubSummaryContent = markdownContent ? markdownToHtml(markdownContent) : '';
+        gitHubSummaryHtmlUrl = message.data.htmlUrl || '';
+        gitHubSummaryError = '';
+        gitHubSummaryModalRunId = null; // Job summary, not run summary
+        showGitHubSummaryModal = true;
+        gitHubSummaryLoading = false;
+      } else {
+        showToast(message.error || 'Failed to load job summary', 'error', 3000);
+      }
+    } else if (message.type === 'openGitHubSummaryInTabResponse') {
+      // Handle response from opening summary in tab
+      if (message.success) {
+        showToast('Summary opened in new tab', 'info', 2000);
+      } else {
+        showToast(message.error || 'Failed to open summary in tab', 'error', 3000);
+      }
     }
   }
 
@@ -5618,6 +6017,45 @@
     </div>
   {/if}
 
+  <!-- Log Comparison Mode Banner -->
+  {#if compareSourceJob}
+    <div class="comparison-banner" transition:fade={{ duration: 150 }}>
+      <span class="codicon codicon-diff comparison-banner-icon"></span>
+      <span class="comparison-banner-text">
+        Comparing logs: Select another <strong>{compareSourceJob.jobName}</strong> job from
+        <em>{compareSourceJob.workflowName}</em> workflow to compare
+      </span>
+      <button
+        class="comparison-banner-cancel"
+        on:click={clearComparisonMode}
+        title="Cancel comparison"
+      >
+        <span class="codicon codicon-close"></span>
+        Cancel
+      </button>
+    </div>
+  {/if}
+
+  <!-- Step Log Comparison Mode Banner -->
+  {#if compareSourceStep}
+    <div class="comparison-banner step-comparison" transition:fade={{ duration: 150 }}>
+      <span class="codicon codicon-diff comparison-banner-icon"></span>
+      <span class="comparison-banner-text">
+        Comparing step logs: Open the <strong>{compareSourceStep.jobName}</strong> job from another
+        <em>{compareSourceStep.workflowName}</em> run and select the
+        <strong>{compareSourceStep.stepName}</strong> step
+      </span>
+      <button
+        class="comparison-banner-cancel"
+        on:click={clearStepComparisonMode}
+        title="Cancel comparison"
+      >
+        <span class="codicon codicon-close"></span>
+        Cancel
+      </button>
+    </div>
+  {/if}
+
   {#if loading || refreshing || loadingMore || fetchingDateFilteredRuns}
     <div class="loading-container">
       <div class="loading-spinner-large">
@@ -6042,6 +6480,8 @@
                   on:showSteps={(e) => {
                     selectedJobForStepsModal = e.detail;
                     selectedJobRunIdForSteps = run.id;
+                    selectedJobWorkflowIdForSteps = run.workflow_id;
+                    selectedJobWorkflowNameForSteps = run.name;
                   }}
                   on:openModal={() => openJobGraphModal(run.id)}
                 />
@@ -6091,7 +6531,8 @@
                       {#if job.status !== 'queued'}
                         <button
                           class="job-steps-button"
-                          on:click|stopPropagation={() => openJobStepsModal(job, run.id)}
+                          on:click|stopPropagation={() =>
+                            openJobStepsModal(job, run.id, run.workflow_id, run.name)}
                           disabled={loadingJobSteps.has(job.id)}
                           title={job.status === 'completed' && job.steps && job.steps.length > 0
                             ? `View ${job.steps.length} step${job.steps.length !== 1 ? 's' : ''}`
@@ -6110,18 +6551,94 @@
                       {/if}
                       <button
                         class="job-logs-button"
-                        on:click|stopPropagation={() => viewJobLogs(job.id, job.name, run.id)}
+                        on:click|stopPropagation={() =>
+                          viewJobLogsInteractive(job.id, job.name, run.id)}
                         disabled={loadingJobLogs.has(job.id)}
-                        title="View logs for this job"
+                        title="View interactive logs (beta - grouping may have minor inaccuracies)"
                       >
                         {#if loadingJobLogs.has(job.id)}
                           <span class="codicon codicon-sync spinning-icon"></span>
                           <span>Loading...</span>
                         {:else}
-                          <span class="codicon codicon-file-text"></span>
+                          <span class="codicon codicon-output"></span>
                           <span>View Logs</span>
                         {/if}
                       </button>
+                      <button
+                        class="job-logs-button raw-logs"
+                        on:click|stopPropagation={() => viewRawJobLogs(job.id, job.name, run.id)}
+                        disabled={loadingRawJobLogs.has(job.id)}
+                        title="View raw logs in text editor"
+                      >
+                        {#if loadingRawJobLogs.has(job.id)}
+                          <span class="codicon codicon-sync spinning-icon"></span>
+                          <span>Loading...</span>
+                        {:else}
+                          <span class="codicon codicon-file-code"></span>
+                          <span>View Raw Logs</span>
+                        {/if}
+                      </button>
+                      <button
+                        class="job-logs-button summary-btn"
+                        on:click|stopPropagation={() => viewJobSummary(job.id, job.name, run.id)}
+                        disabled={loadingJobSummary.has(job.id)}
+                        title="View job summary"
+                      >
+                        {#if loadingJobSummary.has(job.id)}
+                          <span class="codicon codicon-sync spinning-icon"></span>
+                          <span>Loading...</span>
+                        {:else}
+                          <span class="codicon codicon-note"></span>
+                          <span>Summary</span>
+                        {/if}
+                      </button>
+                      {#if compareSourceJob && !isCompareSource(job.id)}
+                        {#if canCompareWithJob(job.name, run.workflow_id)}
+                          <button
+                            class="job-logs-button compare-btn"
+                            on:click|stopPropagation={() =>
+                              compareWithJob(job.id, job.name, run.id)}
+                            disabled={loadingComparison}
+                            title="Compare logs with {compareSourceJob.jobName}"
+                          >
+                            {#if loadingComparison}
+                              <span class="codicon codicon-sync spinning-icon"></span>
+                              <span>Comparing...</span>
+                            {:else}
+                              <span class="codicon codicon-diff"></span>
+                              <span>Compare</span>
+                            {/if}
+                          </button>
+                        {:else}
+                          <button
+                            class="job-logs-button compare-btn disabled-compare"
+                            disabled
+                            title="Cannot compare: job name or workflow must match '{compareSourceJob.jobName}' in '{compareSourceJob.workflowName}'"
+                          >
+                            <span class="codicon codicon-diff"></span>
+                            <span>Compare</span>
+                          </button>
+                        {/if}
+                      {:else if !compareSourceJob}
+                        <button
+                          class="job-logs-button compare-btn"
+                          on:click|stopPropagation={() =>
+                            startLogComparison(job.id, job.name, run.id, run.workflow_id, run.name)}
+                          title="Select this job for log comparison"
+                        >
+                          <span class="codicon codicon-diff"></span>
+                          <span>Compare</span>
+                        </button>
+                      {:else}
+                        <button
+                          class="job-logs-button compare-btn selected"
+                          on:click|stopPropagation={clearComparisonMode}
+                          title="Cancel comparison (this job is selected)"
+                        >
+                          <span class="codicon codicon-close"></span>
+                          <span>Cancel</span>
+                        </button>
+                      {/if}
                     </div>
                   </div>
                 {/each}
@@ -6206,6 +6723,14 @@
                       <span class="codicon codicon-graph-line"></span>
                       <span>Run Summary</span>
                     </h4>
+                    <button
+                      class="github-summary-button"
+                      on:click|stopPropagation={() => openGitHubSummaryModal(run.id)}
+                      title="View GitHub Summary (parsed from job logs)"
+                    >
+                      <span class="codicon codicon-github"></span>
+                      <span>View GitHub Summary</span>
+                    </button>
                   </div>
 
                   <div class="summary-grid">
@@ -6664,12 +7189,31 @@
   <JobStepsModal
     job={selectedJobForStepsModal}
     onClose={closeJobStepsModal}
+    onViewSummary={selectedJobForStepsModal.jobId != null
+      ? () => {
+          const jobId = selectedJobForStepsModal?.jobId;
+          const jobName = selectedJobForStepsModal?.name || 'Job';
+          const runId = selectedJobRunIdForSteps;
+          if (jobId != null) {
+            viewJobSummary(jobId, jobName, runId ?? undefined);
+          }
+        }
+      : undefined}
     onViewLogs={selectedJobForStepsModal.jobId != null && selectedJobRunIdForSteps != null
       ? () => {
           const jobId = selectedJobForStepsModal?.jobId;
           const runId = selectedJobRunIdForSteps;
           if (jobId != null && runId != null) {
-            viewJobLogs(jobId, selectedJobForStepsModal?.name || 'Job', runId);
+            viewJobLogsInteractive(jobId, selectedJobForStepsModal?.name || 'Job', runId);
+          }
+        }
+      : undefined}
+    onViewRawLogs={selectedJobForStepsModal.jobId != null && selectedJobRunIdForSteps != null
+      ? () => {
+          const jobId = selectedJobForStepsModal?.jobId;
+          const runId = selectedJobRunIdForSteps;
+          if (jobId != null && runId != null) {
+            viewRawJobLogs(jobId, selectedJobForStepsModal?.name || 'Job', runId);
           }
         }
       : undefined}
@@ -6691,6 +7235,21 @@
     loadingStepLogs={getStepLogsLoadingSet(selectedJobForStepsModal.jobId)}
     loadingLogs={selectedJobForStepsModal.jobId != null &&
       loadingJobLogs.has(selectedJobForStepsModal.jobId)}
+    loadingRawLogs={selectedJobForStepsModal.jobId != null &&
+      loadingRawJobLogs.has(selectedJobForStepsModal.jobId)}
+    loadingSummary={selectedJobForStepsModal.jobId != null &&
+      loadingJobSummary.has(selectedJobForStepsModal.jobId)}
+    runId={selectedJobRunIdForSteps ?? undefined}
+    workflowId={selectedJobWorkflowIdForSteps ?? undefined}
+    workflowName={selectedJobWorkflowNameForSteps ?? undefined}
+    onCompareStepLogs={selectedJobForStepsModal.jobId != null &&
+    selectedJobRunIdForSteps != null &&
+    selectedJobWorkflowIdForSteps != null &&
+    selectedJobWorkflowNameForSteps != null
+      ? handleStepComparison
+      : undefined}
+    {compareSourceStep}
+    {loadingStepComparison}
   />
 {/if}
 
@@ -6714,6 +7273,8 @@
       if (node.status === 'completed' && node.steps && node.steps.length > 0) {
         selectedJobForStepsModal = node;
         selectedJobRunIdForSteps = jobGraphModalRunId;
+        selectedJobWorkflowIdForSteps = modalRun?.workflow_id ?? null;
+        selectedJobWorkflowNameForSteps = modalRun?.name ?? null;
         return;
       }
 
@@ -6726,6 +7287,8 @@
         loadingJobSteps.add(node.jobId);
         loadingJobSteps = loadingJobSteps; // Trigger reactivity
         selectedJobRunIdForSteps = jobGraphModalRunId;
+        selectedJobWorkflowIdForSteps = modalRun?.workflow_id ?? null;
+        selectedJobWorkflowNameForSteps = modalRun?.name ?? null;
 
         vscode.postMessage({
           type: 'getJobDetails',
@@ -6738,11 +7301,33 @@
       if (node.steps && node.steps.length > 0) {
         selectedJobForStepsModal = node;
         selectedJobRunIdForSteps = jobGraphModalRunId;
+        selectedJobWorkflowIdForSteps = modalRun?.workflow_id ?? null;
+        selectedJobWorkflowNameForSteps = modalRun?.name ?? null;
       } else if (node.jobId && jobGraphModalRunId) {
         // Fall back to viewing logs for jobs without steps data
-        viewJobLogs(node.jobId, node.name, jobGraphModalRunId);
+        viewJobLogsInteractive(node.jobId, node.name, jobGraphModalRunId);
       }
     }}
+  />
+{/if}
+
+<!-- GitHub Summary Modal -->
+<!-- Note: Modal shows summaries parsed from job logs via $GITHUB_STEP_SUMMARY -->
+<!-- gitHubSummaryModalRunId is set for run summaries, null for individual job summaries -->
+{#if showGitHubSummaryModal}
+  {@const modalRun = gitHubSummaryModalRunId
+    ? runs.find((r) => r.id === gitHubSummaryModalRunId)
+    : null}
+  <GitHubSummaryModal
+    runId={gitHubSummaryModalRunId ?? 0}
+    runName={modalRun?.display_title || modalRun?.name || ''}
+    htmlUrl={gitHubSummaryHtmlUrl}
+    summaryContent={gitHubSummaryContent}
+    isLoading={gitHubSummaryLoading}
+    error={gitHubSummaryError}
+    onClose={closeGitHubSummaryModal}
+    onOpenInTab={openGitHubSummaryInTab}
+    onOpenInBrowser={openGitHubSummaryInBrowserFromModal}
   />
 {/if}
 
@@ -8345,6 +8930,78 @@
     transform: translateY(-1px);
   }
 
+  .job-logs-button.compare-btn {
+    background: var(--vscode-button-secondaryBackground);
+    border-color: var(--vscode-inputOption-activeBorder, var(--vscode-focusBorder));
+  }
+
+  .job-logs-button.compare-btn:hover {
+    background: var(--vscode-inputOption-activeBackground, var(--vscode-button-background));
+    color: var(--vscode-inputOption-activeForeground, var(--vscode-button-foreground));
+  }
+
+  .job-logs-button.compare-btn.selected {
+    background: var(--vscode-inputOption-activeBackground, var(--vscode-button-background));
+    color: var(--vscode-inputOption-activeForeground, var(--vscode-button-foreground));
+    border-color: var(--vscode-inputOption-activeBorder, var(--vscode-focusBorder));
+  }
+
+  /* Log Comparison Banner */
+  .comparison-banner {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 10px 16px;
+    background: var(--vscode-inputOption-activeBackground, var(--vscode-button-background));
+    color: var(--vscode-inputOption-activeForeground, var(--vscode-button-foreground));
+    border-bottom: 1px solid var(--vscode-panel-border);
+    font-size: 13px;
+    position: sticky;
+    top: 0;
+    z-index: 100;
+  }
+
+  .comparison-banner-icon {
+    font-size: 16px;
+  }
+
+  .comparison-banner-text {
+    flex: 1;
+  }
+
+  .comparison-banner-cancel {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 10px;
+    background: transparent;
+    color: inherit;
+    border: 1px solid currentColor;
+    border-radius: 3px;
+    cursor: pointer;
+    font-size: 12px;
+    opacity: 0.9;
+    transition: opacity 0.15s ease;
+  }
+
+  .comparison-banner-cancel:hover {
+    opacity: 1;
+    background: rgba(255, 255, 255, 0.1);
+  }
+
+  /* Disabled compare button styling */
+  .job-logs-button.compare-btn.disabled-compare {
+    opacity: 0.4;
+    cursor: not-allowed;
+    background: var(--vscode-button-secondaryBackground);
+    border-color: var(--vscode-widget-border);
+  }
+
+  .job-logs-button.compare-btn.disabled-compare:hover {
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+  }
+
   .expand-button {
     background: var(--vscode-button-secondaryBackground);
     color: var(--vscode-button-secondaryForeground);
@@ -8494,11 +9151,49 @@
     padding: 12px;
   }
 
+  .summary-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+
   .summary-header h4 {
-    margin: 0 0 12px 0;
+    margin: 0;
     font-size: 14px;
     font-weight: 600;
     color: var(--vscode-foreground);
+    display: flex;
+    align-items: center;
+    gap: 6px;
+  }
+
+  .github-summary-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 8px 16px;
+    font-size: 12px;
+    font-weight: 500;
+    color: var(--vscode-button-foreground);
+    background: var(--vscode-button-background);
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+
+  .github-summary-button:hover {
+    background: var(--vscode-button-hoverBackground);
+  }
+
+  .github-summary-button:focus {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 1px;
+  }
+
+  .github-summary-button .codicon {
+    font-size: 14px;
   }
 
   .summary-grid {

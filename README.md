@@ -91,11 +91,12 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 ### 5️⃣ **Save Presets for Quick Access**
 
 1. Fill in workflow inputs
-2. Click the **💾 quick save icon** or **"Save preset"**
-3. Give it a name (e.g., "Production Deploy")
+2. Click the **"Presets ▼"** button in the workflow actions bar (the labeled button with chevron indicator)
+3. Click **"Save preset"** and give it a name (e.g., "Production Deploy")
 4. Load it anytime from the preset dropdown
+5. Click the **ℹ️ info icon** next to "Presets" for detailed help
 
-**Pro Tip**: Use **Export/Import** to share presets with your team!
+**Pro Tip**: Use **Export/Import** to share presets with your team! The chevron (▼/▶) shows whether the presets panel is expanded or collapsed.
 
 ---
 

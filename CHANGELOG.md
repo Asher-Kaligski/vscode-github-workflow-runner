@@ -2,6 +2,84 @@
 
 All notable changes to the "github-workflow-runner" extension will be documented in this file.
 
+## [1.2.0] - 2025-12-16
+
+### ✨ New Features
+
+- **Interactive Log Viewer:** A brand new GitHub-inspired log viewer for workflow jobs.
+  - Collapsible log groups that mimic GitHub's native log viewing UI
+  - Expand/collapse sections to focus on relevant log output
+  - Syntax highlighting for GitHub Actions logs via TextMate grammar
+  - Search functionality within logs with match navigation
+  - Toggle timestamps visibility
+  - Download logs as raw text files
+  - Auto-scroll and expand to specific step when viewing step logs
+  - ⚠️ **Beta:** The log parsing and grouping functionality is experimental. Logs from one step may occasionally appear in another step's section due to limitations in the current parsing algorithm. For accurate, ungrouped log viewing, use the "Raw" log viewer as an alternative.
+
+- **Step-Level Log Navigation:** Click on individual job steps to view their specific logs.
+  - Re-enabled step log viewing from the Job Steps Modal
+  - Clicking a step automatically opens the interactive log viewer and scrolls to that step
+  - Step logs are highlighted and auto-expanded for immediate visibility
+
+- **GitHub Summary Integration:** Quick access to GitHub workflow run summaries.
+  - New "View GitHub Summary" button in the Run Summary section
+  - Opens the GitHub Actions run page directly in your browser
+
+- **Syntax Highlighting for Logs:** GitHub Actions logs now have proper syntax highlighting.
+  - New TextMate grammar for `github-actions-log` language
+  - Highlights group markers, timestamps, error/warning messages, and more
+
+### 🎨 Changed
+
+- **Presets UI Redesign:** Presets have been moved from Advanced Configuration to a dedicated section.
+  - New **"Presets"** labeled button in the workflow actions toolbar (next to Reload and Open File)
+  - **Enhanced button design** with text label, bookmark icon, and chevron indicator (▼/▶) showing expand/collapse state
+  - **Visual prominence** — the Presets button is now visually distinct from icon-only buttons, making it immediately obvious it controls an expandable section
+  - **Chevron rotation** — chevron points right (▶) when collapsed, down (▼) when expanded
+  - **Active state highlighting** — button uses primary color when the presets panel is open
+  - Expandable presets panel with all preset management options
+  - New **ℹ️ help icon** in the presets section header with comprehensive documentation modal
+  - Cleaner, more accessible preset workflow
+  - Pro Tips section updated to reflect the new presets location
+
+- **Dual Log Viewing Options:** Choose between interactive and raw log viewing.
+  - "View Logs" button now opens the interactive log viewer with collapsible groups
+  - New "Raw" button for viewing plain text logs in VSCode's text editor
+  - Job Steps Modal now includes both "View Logs" and "View Raw Logs" buttons
+
+- **Step Duration Display:** Improved step duration formatting in Job Steps Modal.
+  - Shows `<1s` for completed steps that executed in under a second
+  - Fixed step numbering to use sequential display index (1, 2, 3...) instead of internal step numbers
+
+### 🐛 Fixed
+
+- **Step Logs Re-enabled:** Fixed and re-enabled step-level log viewing that was previously disabled.
+  - Step logs now open in the interactive log viewer instead of attempting text extraction
+  - Resolved issues with step log extraction by leveraging the new collapsible log groups
+
+- **Job Logs Error Handling:** Improved error feedback when job logs cannot be loaded.
+  - Extension now properly sends error responses back to the webview
+  - Better user feedback when repository information cannot be retrieved
+
+### 📖 Documentation
+
+- **Updated README:** Revised preset instructions to reflect the new labeled button design with chevron indicator.
+- **New Presets Help Modal:** Added comprehensive help documentation for the presets feature, including:
+  - Step-by-step instructions for saving, loading, and managing presets
+  - Guide for sharing presets with team members via export/import
+  - Best practices and tips for organizing presets
+
+### 🔧 Internal
+
+- New `LogViewerPanel` class for managing the interactive log viewer webview
+- New `LogViewer.svelte` component with full-featured log parsing and display
+- Added `GitHubSummaryModal.svelte` component for summary display
+- New `log-viewer-wrapper.js` entry point for Rollup bundling
+- TextMate grammar file at `syntaxes/github-actions-log.tmLanguage.json`
+- Added `github-actions-log` language contribution to `package.json`
+- Extended `WebviewMessageType` with new message types for log viewer and summary features
+- New `getGitHubSummary` API function for fetching workflow run summaries
+
 ## [1.1.0] - 2025-12-11
 
 ### ✨ New Features

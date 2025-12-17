@@ -57,6 +57,9 @@
   let templates: WorkflowTemplate[] = [];
   let selectedTemplateId: string = '';
 
+  // Presets section state
+  let showPresets: boolean = false;
+
   // Advanced configuration state
   let artifactPattern: string = '';
   let showAdvancedConfig: boolean = false;
@@ -540,11 +543,11 @@
 
 <h4>💡 Pro Tips</h4>
 <ul>
-  <li>Use the <span class="codicon codicon-save"></span> <strong>Save preset</strong> button to save your workflow configurations for quick reuse</li>
+  <li>Click the <span class="codicon codicon-bookmark"></span> <strong>Presets</strong> button to save and load workflow configurations for quick reuse</li>
   <li>Click on branch names in the Workflow Runs panel to open them on GitHub</li>
   <li>Use the <span class="codicon codicon-go-to-file"></span> <strong>View File</strong> button to open workflow YAML files in the editor</li>
   <li>Export presets to share configurations with your team</li>
-  <li>Use artifact patterns to automatically recover parameters from previous runs</li>
+  <li>Use artifact patterns (in Advanced Configuration) to automatically recover parameters from previous runs</li>
 </ul>
 
 <h4>📚 Documentation</h4>
@@ -631,6 +634,59 @@
     `.trim();
 
     showInfoModal_func('Artifact Pattern for Parameter Recovery', content);
+  }
+
+  /**
+   * Show presets help modal
+   */
+  function showPresetsHelp() {
+    const content = `
+<h4>What are Presets?</h4>
+<p>Presets allow you to save and quickly load workflow configurations. Instead of manually filling in inputs every time, you can save your commonly used configurations and load them with a single click.</p>
+
+<h4>📝 Saving a Preset</h4>
+<ol>
+  <li>Select a workflow and fill in the inputs you want to save</li>
+  <li>Click the <strong>💾 Save preset</strong> button</li>
+  <li>Enter a descriptive name (e.g., "Production Deploy", "Staging Test")</li>
+  <li>The preset is saved and automatically selected</li>
+</ol>
+
+<h4>📂 Loading a Preset</h4>
+<ol>
+  <li>Click the <strong>📑 Presets</strong> button to open the presets section</li>
+  <li>Select a preset from the <strong>Load preset...</strong> dropdown</li>
+  <li>All saved inputs and the branch will be restored</li>
+</ol>
+
+<h4>🔧 Managing Presets</h4>
+<p>When a preset is selected, additional management buttons appear:</p>
+<ul>
+  <li><strong>📝 Rename</strong> - Change the preset name</li>
+  <li><strong>↗️ Export</strong> - Save the preset to a JSON file</li>
+  <li><strong>🗑️ Delete</strong> - Remove the preset permanently</li>
+</ul>
+
+<h4>📤 Sharing Presets with Your Team</h4>
+<ol>
+  <li><strong>Export:</strong> Select a preset and click <strong>Export</strong> to save it as a JSON file</li>
+  <li><strong>Share:</strong> Send the JSON file to your teammates via Slack, email, or your repository</li>
+  <li><strong>Import:</strong> Team members click <strong>Import from File</strong> and select the JSON file</li>
+</ol>
+
+<h4>💾 Storage Info</h4>
+<p>Click <strong>Storage Info</strong> to see where presets are stored on your system. Presets are stored per-workflow, so each workflow has its own set of presets.</p>
+
+<h4>💡 Tips</h4>
+<ul>
+  <li>Use descriptive names that indicate environment, purpose, or context</li>
+  <li>Create presets for each environment (dev, staging, production)</li>
+  <li>Export your presets to back them up or share with new team members</li>
+  <li>Presets include both inputs and the selected branch</li>
+</ul>
+    `.trim();
+
+    showInfoModal_func('About Presets', content);
   }
 
   /**
@@ -1591,6 +1647,8 @@
     selectedWorkflow = null;
     inputs = {};
     artifactPattern = '';
+    // Collapse preset section when clearing workflow selection
+    showPresets = false;
     filePickerStates.clear();
     filePickerStates = filePickerStates;
     filterWorkflows();
@@ -1625,6 +1683,8 @@
   function selectWorkflowFromDropdown(workflow: WorkflowDefinition) {
     searchQuery = workflow.name;
     dropdownOpen = false;
+    // Collapse preset section when switching workflows for a clean view
+    showPresets = false;
     vscode.postMessage({ type: 'getWorkflowSchema', data: workflow.filename });
     // Request current branch when workflow is selected
     vscode.postMessage({ type: 'getCurrentBranch' });
@@ -1999,6 +2059,112 @@
           >
             <span class="codicon codicon-go-to-file"></span>
           </button>
+          <button
+            type="button"
+            class="presets-toggle-button"
+            class:expanded={showPresets}
+            on:click={() => (showPresets = !showPresets)}
+            disabled={loading}
+            title={showPresets ? 'Hide presets' : 'Show presets'}
+            aria-label={showPresets ? 'Hide presets' : 'Show presets'}
+            aria-expanded={showPresets}
+          >
+            <span class="codicon codicon-bookmark"></span>
+            <span class="presets-button-label">Presets</span>
+            <span
+              class="codicon presets-chevron"
+              class:codicon-chevron-down={showPresets}
+              class:codicon-chevron-right={!showPresets}
+            ></span>
+          </button>
+        </div>
+      {/if}
+
+      <!-- Presets Section (expandable) -->
+      {#if selectedWorkflow && showPresets}
+        <div class="presets-expandable-section" transition:slide>
+          <div class="presets-header">
+            <h4>Presets</h4>
+            <button
+              type="button"
+              class="info-icon clickable"
+              on:click={showPresetsHelp}
+              title="Learn about presets"
+            >
+              <span class="codicon codicon-info"></span>
+            </button>
+          </div>
+          <div class="presets-content">
+            <!-- Row 1: Load dropdown + Save button -->
+            <div class="presets-actions">
+              <select
+                aria-label="Load preset"
+                bind:value={selectedTemplateId}
+                on:change={onSelectTemplate}
+              >
+                <option value="">Load preset...</option>
+                {#each templates as t (t.id)}
+                  <option value={t.id}>{t.name}</option>
+                {/each}
+              </select>
+              <button
+                type="button"
+                class="secondary"
+                on:click={saveCurrentAsTemplate}
+                title="Save current inputs as a preset"
+              >
+                <span class="codicon codicon-save"></span>
+                <span>Save preset</span>
+              </button>
+            </div>
+            <!-- Row 2: Manage buttons (only when preset is selected) -->
+            {#if selectedTemplateId}
+              <div class="preset-manage">
+                <button
+                  type="button"
+                  class="secondary"
+                  on:click={renameSelectedTemplate}
+                  title="Rename selected preset">📝 Rename</button
+                >
+                <button
+                  type="button"
+                  class="secondary"
+                  on:click={exportSelectedPreset}
+                  title="Export selected preset to JSON file"
+                >
+                  <span class="codicon codicon-export"></span>
+                  <span>Export</span>
+                </button>
+                <button
+                  type="button"
+                  class="danger"
+                  on:click={deleteSelectedTemplate}
+                  title="Delete selected preset">🗑️ Delete</button
+                >
+              </div>
+            {/if}
+            <!-- Row 3: Import + Storage Info -->
+            <div class="preset-import-section">
+              <button
+                type="button"
+                class="secondary"
+                on:click={importPresetFromFile}
+                title="Import preset from JSON file"
+              >
+                <span class="codicon codicon-cloud-download"></span>
+                <span>Import from File</span>
+              </button>
+              <button
+                type="button"
+                class="secondary"
+                on:click={showStorageInfo}
+                title="Show where presets are stored"
+              >
+                <span class="codicon codicon-info"></span>
+                <span>Storage Info</span>
+              </button>
+            </div>
+          </div>
         </div>
       {/if}
 
@@ -2252,77 +2418,6 @@
                     <code>^workflow-inputs-.*$</code>). Pattern auto-saves after you stop typing.
                   </p>
                 </div>
-
-                <!-- Presets (Templates) -->
-                <div class="presets-section">
-                  <h4>Presets</h4>
-                  <div class="presets-actions">
-                    <select
-                      aria-label="Load preset"
-                      bind:value={selectedTemplateId}
-                      on:change={onSelectTemplate}
-                    >
-                      <option value="">Load preset...</option>
-                      {#each templates as t (t.id)}
-                        <option value={t.id}>{t.name}</option>
-                      {/each}
-                    </select>
-                    <button
-                      type="button"
-                      class="secondary"
-                      on:click={saveCurrentAsTemplate}
-                      title="Save current inputs as a preset"
-                    >
-                      <span class="codicon codicon-save"></span>
-                      <span>Save preset</span>
-                    </button>
-                  </div>
-                  {#if selectedTemplateId}
-                    <div class="preset-manage">
-                      <button
-                        type="button"
-                        class="secondary"
-                        on:click={renameSelectedTemplate}
-                        title="Rename selected preset">📝 Rename</button
-                      >
-                      <button
-                        type="button"
-                        class="secondary"
-                        on:click={exportSelectedPreset}
-                        title="Export selected preset to JSON file"
-                      >
-                        <span class="codicon codicon-export"></span>
-                        <span>Export</span>
-                      </button>
-                      <button
-                        type="button"
-                        class="danger"
-                        on:click={deleteSelectedTemplate}
-                        title="Delete selected preset">🗑️ Delete</button
-                      >
-                    </div>
-                  {/if}
-                  <div class="preset-import-section">
-                    <button
-                      type="button"
-                      class="secondary"
-                      on:click={importPresetFromFile}
-                      title="Import preset from JSON file"
-                    >
-                      <span class="codicon codicon-cloud-download"></span>
-                      <span>Import from File</span>
-                    </button>
-                    <button
-                      type="button"
-                      class="secondary"
-                      on:click={showStorageInfo}
-                      title="Show where presets are stored"
-                    >
-                      <span class="codicon codicon-info"></span>
-                      <span>Storage Info</span>
-                    </button>
-                  </div>
-                </div>
               </div>
             {/if}
           </div>
@@ -2533,7 +2628,7 @@
     height: 100vh;
     overflow-y: auto;
     overflow-x: hidden;
-    min-width: 380px;
+    min-width: 228px;
   }
   .auth-section,
   .workflow-section {
@@ -3740,6 +3835,146 @@
 
   .workflow-actions .icon-button .codicon {
     font-size: 16px;
+  }
+
+  .workflow-actions .icon-button.active {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+  }
+
+  .workflow-actions .icon-button.active:hover:not(:disabled) {
+    background: var(--vscode-button-hoverBackground);
+  }
+
+  /* Presets Toggle Button - More prominent expandable control */
+  .workflow-actions .presets-toggle-button {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 10px;
+    height: 32px;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 12px;
+    font-weight: 500;
+    transition: all 0.2s ease;
+  }
+
+  .workflow-actions .presets-toggle-button:hover:not(:disabled) {
+    background: var(--vscode-button-secondaryHoverBackground);
+    border-color: var(--vscode-focusBorder);
+  }
+
+  .workflow-actions .presets-toggle-button:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .workflow-actions .presets-toggle-button .codicon {
+    font-size: 14px;
+  }
+
+  .workflow-actions .presets-toggle-button .presets-button-label {
+    font-weight: 500;
+  }
+
+  .workflow-actions .presets-toggle-button .presets-chevron {
+    font-size: 12px;
+    opacity: 0.8;
+    transition: transform 0.2s ease;
+  }
+
+  .workflow-actions .presets-toggle-button.expanded {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+    border-color: var(--vscode-button-background);
+  }
+
+  .workflow-actions .presets-toggle-button.expanded:hover:not(:disabled) {
+    background: var(--vscode-button-hoverBackground);
+    border-color: var(--vscode-button-hoverBackground);
+  }
+
+  .workflow-actions .presets-toggle-button.expanded .presets-chevron {
+    transform: rotate(0deg);
+  }
+
+  .workflow-actions .presets-toggle-button:not(.expanded) .presets-chevron {
+    transform: rotate(0deg);
+  }
+
+  /* Presets Expandable Section */
+  .presets-expandable-section {
+    margin-bottom: 16px;
+    padding: 12px;
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+  }
+
+  .presets-header {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .presets-header h4 {
+    margin: 0;
+    font-size: 13px;
+    font-weight: 600;
+  }
+
+  .presets-content {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  .presets-content .presets-actions {
+    display: flex;
+    gap: 8px;
+    align-items: center;
+  }
+
+  .presets-content .presets-actions select {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .presets-content .presets-actions button {
+    height: 28px;
+    padding: 4px 12px;
+    font-size: 12px;
+    white-space: nowrap;
+    flex-shrink: 0;
+  }
+
+  .presets-content .preset-manage {
+    display: flex;
+    gap: 8px;
+  }
+
+  .presets-content .preset-manage button {
+    height: 28px;
+    padding: 4px 12px;
+    font-size: 12px;
+    flex: 1;
+  }
+
+  .presets-content .preset-import-section {
+    display: flex;
+    gap: 8px;
+  }
+
+  .presets-content .preset-import-section button {
+    height: 28px;
+    padding: 4px 12px;
+    font-size: 12px;
+    flex: 1;
   }
 
   /* Toast notifications */
