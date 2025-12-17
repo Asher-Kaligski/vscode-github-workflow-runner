@@ -8,12 +8,40 @@
   import { fade, scale } from 'svelte/transition';
 
   export let job: JobGraphNode;
+  export let runId: number | undefined = undefined;
+  export let workflowId: number | undefined = undefined;
+  export let workflowName: string | undefined = undefined;
   export let onClose: () => void;
   export let onViewLogs: (() => void) | undefined = undefined;
+  export let onViewRawLogs: (() => void) | undefined = undefined;
+  export let onViewSummary: (() => void) | undefined = undefined;
   export let onViewStepLogs: ((stepNumber: number, stepName: string) => void) | undefined =
     undefined;
+  export let onCompareStepLogs:
+    | ((
+        stepNumber: number,
+        stepName: string,
+        jobId: number,
+        jobName: string,
+        runId: number,
+        workflowId: number,
+        workflowName: string
+      ) => void)
+    | undefined = undefined;
+  export let compareSourceStep: {
+    stepNumber: number;
+    stepName: string;
+    jobId: number;
+    jobName: string;
+    runId: number;
+    workflowId: number;
+    workflowName: string;
+  } | null = null;
   export let loadingStepLogs: Set<number> = new Set();
+  export let loadingStepComparison: boolean = false;
   export let loadingLogs: boolean = false;
+  export let loadingRawLogs: boolean = false;
+  export let loadingSummary: boolean = false;
 
   $: steps = job.steps || [];
   $: hasSteps = steps.length > 0;
@@ -23,23 +51,44 @@
   $: failedSteps = steps.filter((s) => s.conclusion === 'failure').length;
 
   function getStepStatusIcon(step: JobNodeStep): string {
-    if (step.status === 'completed') return getStatusIcon('completed', step.conclusion || null);
-    if (step.status === 'in_progress') return getStatusIcon('in_progress', null);
+    if (step.status === 'completed') {
+      return getStatusIcon('completed', step.conclusion || null);
+    }
+    if (step.status === 'in_progress') {
+      return getStatusIcon('in_progress', null);
+    }
     return getStatusIcon('queued', null);
   }
 
   function getStepStatusColor(step: JobNodeStep): string {
-    if (step.status === 'completed') return getStatusColor('completed', step.conclusion || null);
-    if (step.status === 'in_progress') return getStatusColor('in_progress', null);
+    if (step.status === 'completed') {
+      return getStatusColor('completed', step.conclusion || null);
+    }
+    if (step.status === 'in_progress') {
+      return getStatusColor('in_progress', null);
+    }
     return getStatusColor('queued', null);
   }
 
+  /**
+   * Get formatted duration for a step
+   * Shows '<1s' for completed steps with 0 or missing duration
+   */
   function getStepDuration(step: JobNodeStep): string {
-    return step.duration ? formatDuration(step.duration) : '';
+    if (step.duration && step.duration > 0) {
+      return formatDuration(step.duration);
+    }
+    // Show '<1s' for completed steps with no duration (sub-second execution)
+    if (step.status === 'completed') {
+      return '<1s';
+    }
+    return '';
   }
 
   function handleOverlayClick(event: MouseEvent) {
-    if (event.target === event.currentTarget) onClose();
+    if (event.target === event.currentTarget) {
+      onClose();
+    }
   }
 
   /**
@@ -56,6 +105,54 @@
     if (onViewStepLogs && canViewStepLogs(step)) {
       onViewStepLogs(step.number, step.name);
     }
+  }
+
+  /**
+   * Handle click on compare step logs button
+   */
+  function handleCompareStepLogs(step: JobNodeStep) {
+    if (
+      onCompareStepLogs &&
+      canViewStepLogs(step) &&
+      runId !== undefined &&
+      job.jobId !== undefined &&
+      workflowId !== undefined &&
+      workflowName !== undefined
+    ) {
+      onCompareStepLogs(
+        step.number,
+        step.name,
+        job.jobId,
+        job.name,
+        runId,
+        workflowId,
+        workflowName
+      );
+    }
+  }
+
+  /**
+   * Check if this step is the comparison source
+   */
+  function isCompareSource(step: JobNodeStep): boolean {
+    return (
+      compareSourceStep !== null &&
+      compareSourceStep.stepNumber === step.number &&
+      compareSourceStep.jobId === job.jobId
+    );
+  }
+
+  /**
+   * Check if a step can be compared with the current comparison source
+   * Steps can only be compared if they have same step name, job name, and workflow
+   */
+  function canCompareWithStep(step: JobNodeStep): boolean {
+    if (!compareSourceStep || workflowId === undefined) return false;
+    return (
+      compareSourceStep.stepName === step.name &&
+      compareSourceStep.jobName === job.name &&
+      compareSourceStep.workflowId === workflowId
+    );
   }
 </script>
 
@@ -108,9 +205,9 @@
           {/if}
         </div>
         <div class="steps-list">
-          {#each steps as step (step.number)}
+          {#each steps as step, displayIndex (step.number)}
             <div class="step-item" class:failed={step.conclusion === 'failure'}>
-              <span class="step-number">{step.number}</span>
+              <span class="step-number">{displayIndex + 1}</span>
               <span class="step-icon" style="color: {getStepStatusColor(step)}">
                 <i
                   class="codicon codicon-{getStepStatusIcon(step)}"
@@ -120,7 +217,7 @@
               <span class="step-name" title={step.name}>{step.name}</span>
               {#if getStepDuration(step)}<span class="step-duration">{getStepDuration(step)}</span
                 >{/if}
-              <!-- TODO: Step logs button temporarily disabled due to extraction issues
+              <!-- DISABLED: Step log viewing - temporarily disabled in v1.2.0
               {#if onViewStepLogs && canViewStepLogs(step)}
                 <button
                   class="step-logs-button"
@@ -137,6 +234,54 @@
                 </button>
               {/if}
               -->
+              <!-- DISABLED: Step comparison - temporarily disabled in v1.2.0
+              {#if onCompareStepLogs && canViewStepLogs(step) && job.jobId !== undefined}
+                {#if isCompareSource(step)}
+                  <button
+                    class="step-logs-button compare-btn compare-source cancel-compare"
+                    on:click|stopPropagation={() => handleCompareStepLogs(step)}
+                    disabled={loadingStepComparison}
+                    title="Cancel step comparison"
+                    type="button"
+                  >
+                    {#if loadingStepComparison}
+                      <span class="codicon codicon-sync spinning"></span>
+                    {:else}
+                      <span class="codicon codicon-close"></span>
+                      <span class="cancel-text">Cancel</span>
+                    {/if}
+                  </button>
+                {:else if compareSourceStep && canCompareWithStep(step)}
+                  <button
+                    class="step-logs-button compare-btn"
+                    on:click|stopPropagation={() => handleCompareStepLogs(step)}
+                    disabled={loadingStepComparison}
+                    title={`Compare with "${compareSourceStep.stepName}"`}
+                    type="button"
+                  >
+                    <span class="codicon codicon-diff"></span>
+                  </button>
+                {:else if compareSourceStep && !canCompareWithStep(step)}
+                  <button
+                    class="step-logs-button compare-btn disabled-compare"
+                    disabled
+                    title={`Cannot compare: step must be "${compareSourceStep.stepName}" in job "${compareSourceStep.jobName}" from workflow "${compareSourceStep.workflowName}"`}
+                    type="button"
+                  >
+                    <span class="codicon codicon-diff"></span>
+                  </button>
+                {:else}
+                  <button
+                    class="step-logs-button compare-btn"
+                    on:click|stopPropagation={() => handleCompareStepLogs(step)}
+                    title="Select this step for comparison"
+                    type="button"
+                  >
+                    <span class="codicon codicon-diff"></span>
+                  </button>
+                {/if}
+              {/if}
+              -->
             </div>
           {/each}
         </div>
@@ -149,17 +294,52 @@
     </div>
 
     <div class="modal-footer">
+      {#if onViewSummary}
+        <button
+          class="secondary-button"
+          on:click={onViewSummary}
+          disabled={loadingSummary}
+          type="button"
+          title="View job summary (parsed from $GITHUB_STEP_SUMMARY)"
+        >
+          {#if loadingSummary}
+            <span class="codicon codicon-sync spinning"></span>
+            Loading...
+          {:else}
+            <span class="codicon codicon-book"></span>
+            Summary
+          {/if}
+        </button>
+      {/if}
       {#if onViewLogs}
         <button class="secondary-button" on:click={onViewLogs} disabled={loadingLogs} type="button">
           {#if loadingLogs}
             <span class="codicon codicon-sync spinning"></span>
             Loading...
           {:else}
-            <span class="codicon codicon-output"></span>
+            <span class="codicon codicon-file-code"></span>
             View Logs
           {/if}
         </button>
       {/if}
+      <!-- DISABLED: Separate View Raw Logs button - now using onViewLogs with raw logs (v1.2.0)
+      {#if onViewRawLogs}
+        <button
+          class="secondary-button"
+          on:click={onViewRawLogs}
+          disabled={loadingRawLogs}
+          type="button"
+        >
+          {#if loadingRawLogs}
+            <span class="codicon codicon-sync spinning"></span>
+            Loading...
+          {:else}
+            <span class="codicon codicon-file-code"></span>
+            View Raw Logs
+          {/if}
+        </button>
+      {/if}
+      -->
       <button class="primary-button" on:click={onClose} type="button">Close</button>
     </div>
   </div>
@@ -329,6 +509,43 @@
   }
   .step-logs-button .spinning {
     animation: spin 1.5s linear infinite;
+  }
+  .step-logs-button.compare-btn {
+    color: var(--vscode-textLink-foreground);
+  }
+  .step-logs-button.compare-btn:hover:not(:disabled) {
+    color: var(--vscode-textLink-activeForeground);
+  }
+  .step-logs-button.compare-btn.compare-source {
+    color: var(--vscode-charts-green);
+    opacity: 1;
+  }
+  .step-logs-button.compare-btn.compare-source.cancel-compare {
+    color: var(--vscode-errorForeground);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 2px 6px;
+    min-width: auto;
+    width: auto;
+    background: var(--vscode-inputValidation-errorBackground);
+    border-radius: 3px;
+  }
+  .step-logs-button.compare-btn.compare-source.cancel-compare:hover {
+    background: var(--vscode-inputValidation-errorBorder);
+  }
+  .step-logs-button.compare-btn.compare-source .cancel-text {
+    font-size: 11px;
+    font-weight: 500;
+  }
+  .step-logs-button.compare-btn.disabled-compare {
+    opacity: 0.35;
+    cursor: not-allowed;
+    color: var(--vscode-disabledForeground);
+  }
+  .step-logs-button.compare-btn.disabled-compare:hover {
+    background: transparent;
+    opacity: 0.35;
   }
   .no-steps {
     display: flex;

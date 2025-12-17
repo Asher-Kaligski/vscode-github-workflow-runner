@@ -10,6 +10,7 @@ import { SidebarProvider } from './providers/sidebar-provider';
 import { WorkflowRunsProvider } from './providers/workflow-runs-provider';
 import { WorkflowRunsPanel } from './providers/workflow-runs-panel';
 import { LogDocumentProvider } from './providers/log-document-provider';
+import { LogViewerPanel } from './providers/log-viewer-panel';
 import { LOG_SCHEME } from './utils/log-uri-scheme';
 import { authenticate, signOut } from './utils/authenticate';
 import { getAllWorkflowDefinitions } from './utils/workflow-parser';
@@ -30,6 +31,15 @@ export async function activate(context: vscode.ExtensionContext) {
   const logDocumentProvider = new LogDocumentProvider();
   context.subscriptions.push(
     vscode.workspace.registerTextDocumentContentProvider(LOG_SCHEME, logDocumentProvider)
+  );
+
+  // Set language for log documents when they are opened
+  context.subscriptions.push(
+    vscode.workspace.onDidOpenTextDocument((doc) => {
+      if (doc.uri.scheme === LOG_SCHEME) {
+        vscode.languages.setTextDocumentLanguage(doc, 'github-actions-log');
+      }
+    })
   );
 
   // Register sidebar webview provider with state preservation

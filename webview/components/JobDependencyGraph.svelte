@@ -111,7 +111,9 @@
     const levelMap = new Map<number, JobGraphNode[]>();
     for (const node of nodes) {
       const level = node.level || 0;
-      if (!levelMap.has(level)) levelMap.set(level, []);
+      if (!levelMap.has(level)) {
+        levelMap.set(level, []);
+      }
       levelMap.get(level)!.push(node);
     }
 
@@ -182,7 +184,9 @@
    * Get nodes to display based on current display mode
    */
   function getDisplayNodes(g: GraphType | null, mode: GraphDisplayMode): JobGraphNode[] {
-    if (!g || g.nodes.length === 0) return [];
+    if (!g || g.nodes.length === 0) {
+      return [];
+    }
 
     switch (mode) {
       case 'full':
@@ -191,7 +195,9 @@
         return getFocusedNodes(g);
       case 'minimal': {
         const activeNode = g.nodes.find((n) => n.isActive);
-        if (activeNode) return [activeNode];
+        if (activeNode) {
+          return [activeNode];
+        }
         const incompleteNode = g.nodes.find((n) => n.status !== 'completed');
         return incompleteNode ? [incompleteNode] : g.nodes.slice(0, 1);
       }

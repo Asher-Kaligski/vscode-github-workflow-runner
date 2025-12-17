@@ -4,7 +4,7 @@
   "description": "Run, monitor, and manage GitHub Actions workflows directly from VS Code. Dispatch workflows with inputs, track runs in real-time, filter by PR/branch, view logs, download artifacts, and more.",
   "publisher": "asher-kaligski",
   "icon": "media/icon.png",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "engines": {
     "vscode": "^1.93.0"
   },
@@ -80,6 +80,19 @@
           "**/.github/workflows/*.yml",
           "**/.github/workflows/*.yaml"
         ]
+      },
+      {
+        "id": "github-actions-log",
+        "aliases": [
+          "GitHub Actions Log"
+        ]
+      }
+    ],
+    "grammars": [
+      {
+        "language": "github-actions-log",
+        "scopeName": "source.github-actions-log",
+        "path": "./syntaxes/github-actions-log.tmLanguage.json"
       }
     ],
     "commands": [

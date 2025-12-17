@@ -64,14 +64,18 @@
     positions: Map<string, { x: number; y: number }> | null,
     heights: Map<string, number> | null
   ): EdgePath[] {
-    if (!edgeList || edgeList.length === 0) return [];
+    if (!edgeList || edgeList.length === 0) {
+      return [];
+    }
 
     return edgeList
       .map((edge) => {
         const fromNode = getNode(edge.from);
         const toNode = getNode(edge.to);
 
-        if (!fromNode || !toNode) return null;
+        if (!fromNode || !toNode) {
+          return null;
+        }
 
         // Get positions (use adjusted if available)
         const fromPos = getNodePosition(fromNode);

@@ -2,6 +2,7 @@
 .vscode-test/**
 src/**
 webview/**
+test-log-parser/**
 .gitignore
 .yarnrc
 webpack.config.js

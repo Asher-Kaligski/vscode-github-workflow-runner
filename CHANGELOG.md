@@ -2,6 +2,48 @@
 
 All notable changes to the "github-workflow-runner" extension will be documented in this file.
 
+## [1.2.0] - 2025-12-17
+
+### ✨ New Features
+
+- **GitHub Summary Integration:** View workflow run summaries directly in VS Code.
+  - New "View GitHub Summary" button in the Run Summary section
+  - Parses and displays `$GITHUB_STEP_SUMMARY` content from job logs in a modal
+  - Option to open summary in a new editor tab or view on GitHub
+
+- **Syntax Highlighting for Logs:** GitHub Actions logs now have proper syntax highlighting.
+  - New TextMate grammar for `github-actions-log` language
+  - Highlights group markers, timestamps, error/warning messages, and more
+
+### 🎨 Changed
+
+- **Presets UI Redesign:** Presets have been moved from Advanced Configuration to a dedicated section.
+  - New **"Presets"** labeled button in the workflow actions toolbar (next to Reload and Open File)
+  - **Enhanced button design** with text label, bookmark icon, and chevron indicator (▼/▶) showing expand/collapse state
+  - **Visual prominence** — the Presets button is now visually distinct from icon-only buttons
+  - **Chevron rotation** — chevron points right (▶) when collapsed, down (▼) when expanded
+  - **Active state highlighting** — button uses primary color when the presets panel is open
+  - Expandable presets panel with all preset management options
+  - New **ℹ️ help icon** in the presets section header with comprehensive documentation modal
+
+- **Step Duration Display:** Improved step duration formatting in Job Steps Modal.
+  - Shows `<1s` for completed steps that executed in under a second
+  - Fixed step numbering to use sequential display index (1, 2, 3...) instead of internal step numbers
+
+### 🐛 Fixed
+
+- **Job Logs Error Handling:** Improved error feedback when job logs cannot be loaded.
+  - Extension now properly sends error responses back to the webview
+  - Better user feedback when repository information cannot be retrieved
+
+### 📖 Documentation
+
+- **Updated README:** Revised preset instructions to reflect the new labeled button design with chevron indicator.
+- **New Presets Help Modal:** Added comprehensive help documentation for the presets feature, including:
+  - Step-by-step instructions for saving, loading, and managing presets
+  - Guide for sharing presets with team members via export/import
+  - Best practices and tips for organizing presets
+
 ## [1.1.0] - 2025-12-11
 
 ### ✨ New Features
