@@ -103,6 +103,19 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 
 ## 📸 Screenshots
 
+| Feature                                           | Description                                  |
+| ------------------------------------------------- | -------------------------------------------- |
+| [Workflow Dispatch](#workflow-dispatch)           | Select workflows, fill inputs, and dispatch  |
+| [Workflow Runs](#workflow-runs)                   | Monitor runs in real-time with filters       |
+| [Watched Runs](#watched-runs)                     | Track important runs across sessions         |
+| [Preset Management](#preset-management)           | Save and share reusable configurations       |
+| [Favorites](#favorites)                           | Quick access to frequent workflows           |
+| [Logs View](#logs-view)                           | View logs directly in VS Code                |
+| [Job Dependencies Graph](#job-dependencies-graph) | Visualize job execution stages               |
+| [Job Step Details](#job-step-details)             | Step-by-step execution details               |
+| [Workflow Summary](#workflow-summary)             | GitHub step summaries and annotations        |
+| [Settings Panel](#settings-panel)                 | Configure refresh, limits, and notifications |
+
 ### Workflow Dispatch
 
 ![Workflow Dispatch](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/hero-workflow-dispatch.png)
@@ -115,15 +128,17 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 
 > Monitor runs in real-time with powerful filters
 
+### Watched Runs
+
+![Watched Runs](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/marked-workflows.png)
+
+> Mark important runs as "watched" to track them across sessions regardless of filters
+
 ### Preset Management
 
-![Preset Management](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management.png)
+![Preset Management](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management-expanded.png)
 
-> Save and load workflow configurations as reusable presets
-
-![Preset Management Expanded](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management-expanded.png)
-
-> Full preset management with rename, export/import, and storage info — share configurations with your team
+> Save and load workflow configurations as reusable presets — share configurations with your team via export/import
 
 ### Favorites
 
@@ -153,7 +168,7 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 
 ![Workflow Summary](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-summary.png)
 
-> Get intelligent summaries parsed from job logs showing security scan results, build metadata, and error details — without scrolling through raw logs
+> View GitHub step summaries with security scan results, build metadata, and error details — rendered directly from workflow step annotations
 
 ### Settings Panel
 
@@ -172,12 +187,12 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 | **Job Dependencies Graph** | Visualize job dependencies with an interactive graph showing execution stages |
 | **Matrix Job Groups**      | Matrix jobs are intelligently grouped with collapsible views for each variant |
 | **Job Steps Details**      | Click on any job to view step-by-step breakdown with status and duration      |
+| **Workflow Summary**       | View GitHub step summaries with build metadata and error details              |
 | **View Logs**              | Open workflow run logs directly in VS Code editor                             |
 | **View Jobs & Steps**      | Expand any run to see individual jobs with status, duration, and step details |
 | **Download Artifacts**     | Download workflow artifacts as ZIP files                                      |
 | **Rerun Workflows**        | Rerun all jobs or only failed jobs                                            |
 | **Cancel Runs**            | Cancel in-progress workflows with loading states and error handling           |
-| **Enhanced Metadata**      | View branch, commit, actor, and duration information                          |
 
 ### 🔍 Advanced Filtering & Auto-Refresh
 
@@ -187,9 +202,11 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 | **Filter by Actor**      | "My Runs" or "All Users"                                 |
 | **Filter by Date Range** | Predefined (Today, Last 7/30 Days) or custom date ranges |
 | **Filter by Workflow**   | Focus on runs from a specific workflow                   |
-| **Filter by Branch/PR**  | Filter runs by branch name or pull request               |
-| **Pagination**           | Configure runs per page (20/50/100)                      |
-| **Progressive Loading**  | Fetches up to 1000 runs with smart caching               |
+| **Search by Text**       | Search runs by branch name, commit, or PR number         |
+| **Show Bot Runs**        | Include or exclude runs triggered by bot accounts        |
+| **Favorites Only**       | Show only runs from workflows marked as favorite         |
+| **Pagination**           | Configure runs per page (10/20/30/50/100)                |
+| **Progressive Loading**  | Fetches up to 10,000 runs with smart caching             |
 | **Auto-Refresh**         | Configurable interval (15s–3m) with smart pause          |
 
 ### 👁️ Watched Runs
