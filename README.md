@@ -117,13 +117,9 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 
 ### Preset Management
 
-![Preset Management](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management.png)
+![Preset Management](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management-expanded.png)
 
-> Save and load workflow configurations as reusable presets
-
-![Preset Management Expanded](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management-expanded.png)
-
-> Full preset management with rename, export/import, and storage info — share configurations with your team
+> Save and load workflow configurations as reusable presets — share configurations with your team via export/import
 
 ### Favorites
 
@@ -153,7 +149,7 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 
 ![Workflow Summary](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-summary.png)
 
-> Get intelligent summaries parsed from job logs showing security scan results, build metadata, and error details — without scrolling through raw logs
+> View GitHub step summaries with security scan results, build metadata, and error details — rendered directly from workflow step annotations
 
 ### Settings Panel
 
