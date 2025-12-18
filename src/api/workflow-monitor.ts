@@ -872,7 +872,7 @@ export async function getGitHubSummary(
     }
 
     message += `\n---\n\n`;
-    message += `👉 **Click "Open in Browser" below to view the full job summaries on GitHub.**`;
+    message += `👉 **Click "View on GitHub" below to view the full job summaries on GitHub.**`;
 
     return {
       success: true,
@@ -1994,7 +1994,7 @@ export async function getGitHubSummaryFromLogs(
     }
 
     message += `\n---\n\n`;
-    message += `👉 **Click "Open in Browser" to view the full workflow run on GitHub.**`;
+    message += `👉 **Click "View on GitHub" to view the full workflow run on GitHub.**`;
 
     return {
       success: true,
