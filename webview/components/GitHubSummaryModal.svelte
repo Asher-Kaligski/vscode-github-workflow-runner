@@ -151,7 +151,7 @@
         <div class="empty-state">
           <span class="codicon codicon-info"></span>
           <span
-            >No summary content found. This job may not write to <code>$GITHUB_STEP_SUMMARY</code
+            >No summary content found. This job may not write to <code>GITHUB_STEP_SUMMARY</code
             >.</span
           >
           {#if htmlUrl}

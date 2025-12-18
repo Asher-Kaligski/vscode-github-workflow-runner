@@ -91,12 +91,13 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 ### 5️⃣ **Save Presets for Quick Access**
 
 1. Fill in workflow inputs
-2. Click the **"Presets ▼"** button in the workflow actions bar (the labeled button with chevron indicator)
+2. Click the **"Presets"** button to expand the presets panel
 3. Click **"Save preset"** and give it a name (e.g., "Production Deploy")
-4. Load it anytime from the preset dropdown
-5. Click the **ℹ️ info icon** next to "Presets" for detailed help
+4. Load presets anytime from the dropdown selector
+5. Use **Rename**, **Export**, **Delete**, or **Import from File** to manage your presets
+6. Click **"Storage Info"** to see where presets are stored
 
-**Pro Tip**: Use **Export/Import** to share presets with your team! The chevron (▼/▶) shows whether the presets panel is expanded or collapsed.
+**Pro Tip**: Use **Export/Import** to share presets with your team!
 
 ---
 
@@ -120,17 +121,15 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 
 > Save and load workflow configurations as reusable presets
 
+![Preset Management Expanded](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management-expanded.png)
+
+> Full preset management with rename, export/import, and storage info — share configurations with your team
+
 ### Favorites
 
 ![Workflow Favorites](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-favorites.png)
 
 > Quick access to frequently used workflows
-
-### Marked Workflows
-
-![Marked Workflows](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/marked-workflows.png)
-
-> Pin workflows for easy filtering and quick access
 
 ### Logs View
 
@@ -142,7 +141,25 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 
 ![Job Dependencies Graph](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/job-dependencies-graph.png)
 
-> Visualize job dependencies with an interactive graph showing execution stages, matrix jobs, and real-time status updates
+> Visualize job dependencies with an interactive graph showing execution stages, matrix jobs, and real-time status updates. Click jobs to view step details.
+
+### Job Step Details
+
+![Job Step Details](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/job-step-details.png)
+
+> Click any job to view step-by-step execution details with status indicators and timing information
+
+### Workflow Summary
+
+![Workflow Summary](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-summary.png)
+
+> Get intelligent summaries parsed from job logs showing security scan results, build metadata, and error details — without scrolling through raw logs
+
+### Settings Panel
+
+![Settings Panel](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/settings-panel.png)
+
+> Configure refresh intervals, run limits, and date filters with intuitive in-panel settings. Toggle between General and Notifications tabs.
 
 ---
 

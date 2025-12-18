@@ -1988,7 +1988,7 @@ export async function getGitHubSummaryFromLogs(
       }
     } else {
       message += `ℹ️ **No summary content detected in job logs.**\n\n`;
-      message += `This workflow may not write to \`$GITHUB_STEP_SUMMARY\`,\n`;
+      message += 'This workflow may not write to GITHUB_STEP_SUMMARY,\n';
       message += `or the summary format is not recognized.\n\n`;
       message += `**Jobs checked:** ${completedJobs.length}\n`;
     }
@@ -2061,7 +2061,7 @@ export async function getJobSummaryFromLogs(
     if (!summaryContent.trim() && annotations.length === 0) {
       return {
         success: true,
-        markdownContent: `### 📋 Job: ${jobName}\n\nℹ️ **No summary content detected in job logs.**\n\nThis job may not write to \`$GITHUB_STEP_SUMMARY\`.`,
+        markdownContent: `### 📋 Job: ${jobName}\n\nℹ️ **No summary content detected in job logs.**\n\nThis job may not write to GITHUB_STEP_SUMMARY.`,
         htmlUrl,
       };
     }

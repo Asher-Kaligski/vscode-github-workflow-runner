@@ -16,6 +16,34 @@ function escapeHtml(text: string): string {
 }
 
 /**
+ * Unescape common shell/JSON escape sequences in content.
+ * This handles escape characters that may appear in GitHub Actions logs
+ * from echo commands or JSON output.
+ */
+function unescapeContent(text: string): string {
+  return (
+    text
+      // Handle escaped backticks first (common in shell output)
+      .replace(/\\`/g, '`')
+      // Escaped double quotes
+      .replace(/\\"/g, '"')
+      // Escaped single quotes
+      .replace(/\\'/g, "'")
+      // Double backslash → single backslash (must come after other escape sequences)
+      .replace(/\\\\/g, '\\')
+      // Escaped newlines
+      .replace(/\\n/g, '\n')
+      // Escaped tabs
+      .replace(/\\t/g, '\t')
+      // Escaped carriage returns
+      .replace(/\\r/g, '\r')
+      // Remove any remaining standalone backslashes before printable chars
+      // (often artifacts from shell escaping)
+      .replace(/\\(?=[^\s\\])/g, '')
+  );
+}
+
+/**
  * Process unordered lists
  */
 function processUnorderedLists(html: string): string {
@@ -160,10 +188,10 @@ function processMarkdownTables(html: string): string {
 export function markdownToHtml(markdown: string): string {
   if (!markdown) return '';
 
-  let html = markdown;
+  // First, unescape any shell/JSON escape sequences from the parsed log content
+  let html = unescapeContent(markdown);
 
-  // Escape HTML first to prevent XSS, but preserve our markdown patterns
-  // We'll handle code blocks specially to preserve their content
+  // Store code blocks to preserve their content during processing
   const codeBlocks: string[] = [];
   const inlineCode: string[] = [];
 
@@ -171,8 +199,10 @@ export function markdownToHtml(markdown: string): string {
   html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
     const index = codeBlocks.length;
     const langClass = lang || 'text';
+    // Unescape the code content as well (remove shell escape artifacts)
+    const cleanCode = unescapeContent(code.trim());
     codeBlocks.push(
-      `<pre><code class="language-${langClass}">${escapeHtml(code.trim())}</code></pre>`
+      `<pre><code class="language-${langClass}">${escapeHtml(cleanCode)}</code></pre>`
     );
     return `__CODE_BLOCK_${index}__`;
   });
@@ -180,7 +210,9 @@ export function markdownToHtml(markdown: string): string {
   // Extract inline code (`...`)
   html = html.replace(/`([^`]+)`/g, (_, code) => {
     const index = inlineCode.length;
-    inlineCode.push(`<code>${escapeHtml(code)}</code>`);
+    // Unescape the code content as well (remove shell escape artifacts)
+    const cleanCode = unescapeContent(code);
+    inlineCode.push(`<code>${escapeHtml(cleanCode)}</code>`);
     return `__INLINE_CODE_${index}__`;
   });
 
@@ -203,12 +235,14 @@ export function markdownToHtml(markdown: string): string {
   html = html.replace(/^[-*_]{3,}\s*$/gm, '<hr>');
 
   // Bold and italic (handle bold first to avoid conflicts)
+  // Note: Only match underscore-based formatting when surrounded by whitespace or at line boundaries
+  // to avoid incorrectly parsing variable names like GITHUB_STEP_SUMMARY
   html = html.replace(/\*\*\*(.+?)\*\*\*/g, '<strong><em>$1</em></strong>');
-  html = html.replace(/___(.+?)___/g, '<strong><em>$1</em></strong>');
+  html = html.replace(/(^|\s)___(.+?)___(\s|$)/gm, '$1<strong><em>$2</em></strong>$3');
   html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/__(.+?)__/g, '<strong>$1</strong>');
+  html = html.replace(/(^|\s)__(.+?)__(\s|$)/gm, '$1<strong>$2</strong>$3');
   html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  html = html.replace(/_([^_]+)_/g, '<em>$1</em>');
+  html = html.replace(/(^|\s)_([^_]+)_(\s|$)/gm, '$1<em>$2</em>$3');
 
   // Strikethrough
   html = html.replace(/~~(.+?)~~/g, '<del>$1</del>');
