@@ -300,13 +300,13 @@
           on:click={onViewSummary}
           disabled={loadingSummary}
           type="button"
-          title="View job summary (parsed from $GITHUB_STEP_SUMMARY)"
+          title="View GitHub job summary"
         >
           {#if loadingSummary}
             <span class="codicon codicon-sync spinning"></span>
             Loading...
           {:else}
-            <span class="codicon codicon-book"></span>
+            <span class="codicon codicon-github"></span>
             Summary
           {/if}
         </button>

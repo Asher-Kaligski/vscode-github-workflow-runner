@@ -140,6 +140,15 @@
   // Counter to track workflow switch generation - used to ignore stale progressive fetch callbacks
   let workflowSwitchGeneration = 0;
 
+  // Watchdog timeout for workflow fetch operations - prevents UI freeze if response never arrives
+  let workflowFetchWatchdogId: number | null = null;
+  // Timestamp when loading state was set to true - used for stuck state detection
+  let loadingStartTime: number | null = null;
+  // Maximum time (ms) to wait for a workflow fetch response before triggering recovery
+  const WORKFLOW_FETCH_TIMEOUT_MS = 30000; // 30 seconds
+  // Threshold (ms) for detecting stuck loading state in message handler
+  const STUCK_LOADING_THRESHOLD_MS = 30000; // 30 seconds
+
   // Default to "All Users" so the initial render matches the common entry points
   // (View Workflow Runs / View Last Run / Dispatch / Rerun) which all request
   // actorFilter: 'all' from the backend. This avoids a visible flicker from
@@ -248,6 +257,153 @@
 
     // Increment generation to invalidate any in-flight progressive fetch callbacks
     workflowSwitchGeneration++;
+
+    // Cancel workflow fetch watchdog
+    if (workflowFetchWatchdogId !== null) {
+      window.clearTimeout(workflowFetchWatchdogId);
+      workflowFetchWatchdogId = null;
+    }
+  }
+
+  /**
+   * Start the workflow fetch watchdog timer.
+   * This timer will trigger recovery if no valid response arrives within the timeout period.
+   * Prevents UI freeze when responses are lost or never arrive.
+   */
+  function startWorkflowFetchWatchdog() {
+    // Clear any existing watchdog
+    if (workflowFetchWatchdogId !== null) {
+      window.clearTimeout(workflowFetchWatchdogId);
+    }
+
+    // Record when loading started
+    loadingStartTime = Date.now();
+
+    // Start the watchdog timer
+    workflowFetchWatchdogId = window.setTimeout(() => {
+      workflowFetchWatchdogId = null;
+
+      // Check if we're still in a loading state that should have completed
+      if (loading && isManualWorkflowFetch) {
+        console.warn(
+          '[WorkflowRuns] WATCHDOG: Workflow fetch timeout after',
+          WORKFLOW_FETCH_TIMEOUT_MS,
+          'ms - triggering recovery'
+        );
+        console.warn('[WorkflowRuns] WATCHDOG: State at timeout:', {
+          loading,
+          isManualWorkflowFetch,
+          pendingWorkflowId,
+          refreshing,
+          workflowFilter,
+        });
+
+        // Trigger recovery
+        resetLoadingState('Workflow fetch timed out. Please try again.');
+      }
+    }, WORKFLOW_FETCH_TIMEOUT_MS);
+  }
+
+  /**
+   * Clear the workflow fetch watchdog timer.
+   * Called when a valid response is received or loading completes normally.
+   */
+  function clearWorkflowFetchWatchdog() {
+    if (workflowFetchWatchdogId !== null) {
+      window.clearTimeout(workflowFetchWatchdogId);
+      workflowFetchWatchdogId = null;
+    }
+    loadingStartTime = null;
+  }
+
+  /**
+   * Reset all loading-related state to recover from a stuck UI.
+   * This is a defensive recovery mechanism that clears all flags that could block UI interaction.
+   * @param errorMessage Optional error message to show to the user
+   */
+  function resetLoadingState(errorMessage?: string) {
+    console.warn('[WorkflowRuns] resetLoadingState called - recovering from stuck state');
+    console.warn('[WorkflowRuns] State before reset:', {
+      loading,
+      refreshing,
+      loadingMore,
+      isManualWorkflowFetch,
+      pendingWorkflowId,
+      waitingForInitialFilters,
+      progressiveFetching,
+      fetchingDateFilteredRuns,
+    });
+
+    // Clear all loading flags
+    loading = false;
+    refreshing = false;
+    loadingMore = false;
+    isManualWorkflowFetch = false;
+    pendingWorkflowId = null;
+    waitingForInitialFilters = false;
+    progressiveFetching = false;
+    fetchingDateFilteredRuns = false;
+
+    // Clear all pending timeouts
+    if (workflowFetchWatchdogId !== null) {
+      window.clearTimeout(workflowFetchWatchdogId);
+      workflowFetchWatchdogId = null;
+    }
+    if (initialFilterTimeout !== null) {
+      window.clearTimeout(initialFilterTimeout);
+      initialFilterTimeout = null;
+    }
+    if (progressiveFetchTimeoutId !== null) {
+      window.clearTimeout(progressiveFetchTimeoutId);
+      progressiveFetchTimeoutId = null;
+    }
+    if (workflowSwitchDebounceId !== null) {
+      window.clearTimeout(workflowSwitchDebounceId);
+      workflowSwitchDebounceId = null;
+    }
+
+    loadingStartTime = null;
+
+    // Show error toast if message provided
+    if (errorMessage) {
+      addToast(errorMessage, 'error');
+    }
+
+    // Re-apply filters to ensure UI is in a consistent state
+    if (runs.length > 0) {
+      filterRuns();
+    }
+
+    console.warn('[WorkflowRuns] State after reset:', {
+      loading,
+      refreshing,
+      loadingMore,
+      isManualWorkflowFetch,
+      pendingWorkflowId,
+    });
+  }
+
+  /**
+   * Check if the UI is in a stuck loading state and trigger recovery if needed.
+   * This is called at the start of message handling to detect and recover from stuck states.
+   */
+  function checkAndRecoverFromStuckState() {
+    // Only check if we're in a loading state with a recorded start time
+    if (!loading || loadingStartTime === null) {
+      return;
+    }
+
+    const elapsedMs = Date.now() - loadingStartTime;
+
+    // If we've been loading for too long, trigger recovery
+    if (elapsedMs > STUCK_LOADING_THRESHOLD_MS) {
+      console.warn(
+        '[WorkflowRuns] STUCK STATE DETECTED: Loading for',
+        Math.round(elapsedMs / 1000),
+        'seconds'
+      );
+      resetLoadingState('The panel became unresponsive and was automatically recovered.');
+    }
   }
 
   /**
@@ -564,6 +720,7 @@
   let loadingRawJobLogs: Set<number> = new Set(); // Track jobs currently loading raw logs
   let loadingStepLogs: Map<string, boolean> = new Map(); // Track steps currently loading logs (key: jobId-stepNumber)
   let loadingJobSummary: Set<number> = new Set(); // Track jobs currently loading summary
+  let jobSummaryFromStepsModal: boolean = false; // Track if job summary was requested from steps modal
 
   // Log comparison state
   let compareSourceJob: {
@@ -1713,12 +1870,21 @@
 
   /**
    * View job summary - fetches and displays summary from job logs.
-   * Opens the GitHub summary modal with content from a single job.
+   * Opens the GitHub summary modal or editor tab (when from steps modal) with content from a single job.
+   * @param fromStepsModal - If true, opens summary in editor tab instead of modal
    */
-  function viewJobSummary(jobId: number, jobName: string, runId?: number) {
+  function viewJobSummary(
+    jobId: number,
+    jobName: string,
+    runId?: number,
+    fromStepsModal: boolean = false
+  ) {
     // Set loading state
     loadingJobSummary.add(jobId);
     loadingJobSummary = loadingJobSummary;
+
+    // Track if this request came from the steps modal
+    jobSummaryFromStepsModal = fromStepsModal;
 
     // Request job summary from extension
     vscode.postMessage({
@@ -2251,6 +2417,9 @@
     // Mark this as a manual workflow fetch to skip the filter message wait
     isManualWorkflowFetch = true;
 
+    // Start watchdog timer to recover from stuck state if response never arrives
+    startWorkflowFetchWatchdog();
+
     // Debounce the actual request to prevent rapid-fire API calls
     workflowSwitchDebounceId = window.setTimeout(() => {
       workflowSwitchDebounceId = null;
@@ -2322,6 +2491,9 @@
     isManualWorkflowFetch = true;
     // Track that we're expecting "all" runs (no workflow filter)
     pendingWorkflowId = 'all';
+
+    // Start watchdog timer to recover from stuck state if response never arrives
+    startWorkflowFetchWatchdog();
 
     // Debounce the actual request to prevent rapid-fire API calls
     workflowSwitchDebounceId = window.setTimeout(() => {
@@ -2775,6 +2947,10 @@
   function handleMessage(event: MessageEvent) {
     const message = event.data;
 
+    // Check for stuck loading state on every message and recover if needed
+    // This provides a safety net in case the watchdog timer doesn't fire
+    checkAndRecoverFromStuckState();
+
     // Avoid disruptive refresh while we intentionally pause (e.g., when opening logs)
     if (message.type === 'getWorkflowRuns') {
       // Always clear the date-filter fetching indicator when a runs payload
@@ -2990,6 +3166,7 @@
         console.log('[WorkflowRuns] Manual workflow fetch - applying filters immediately');
         isManualWorkflowFetch = false; // Reset the flag
         pendingWorkflowId = null; // Reset the pending workflow ID
+        clearWorkflowFetchWatchdog(); // Clear watchdog - successful response received
         buildAvailableWorkflows();
         filterRuns();
         loading = false;
@@ -2999,6 +3176,7 @@
           '[WorkflowRuns] Initial load detected - waiting for filter messages before finalizing'
         );
         waitingForInitialFilters = true;
+        clearWorkflowFetchWatchdog(); // Clear watchdog - response received, waiting for filters
 
         // Set a timeout to finalize the load even if filter messages don't arrive
         // This prevents indefinite waiting if no filter messages are sent
@@ -3010,6 +3188,7 @@
         // Don't call filterRuns() or clear loading state yet - wait for filter messages
       } else {
         // This is a refresh or subsequent load - apply filters immediately
+        clearWorkflowFetchWatchdog(); // Clear watchdog - successful response received
         buildAvailableWorkflows();
         filterRuns();
         loading = false;
@@ -3020,6 +3199,7 @@
       console.error('[WorkflowRuns] Failed to fetch workflow runs:', message.error);
       isManualWorkflowFetch = false;
       pendingWorkflowId = null;
+      clearWorkflowFetchWatchdog(); // Clear watchdog - error response received
       loading = false;
       refreshing = false;
     } else if (message.type === 'getUserInfo' && message.success) {
@@ -3986,6 +4166,7 @@
         console.log('[WorkflowRuns] Received workflow ID:', workflowId, 'requesting runs...');
         // Track the expected workflowId to ignore stale responses
         pendingWorkflowId = workflowId;
+        // Note: Don't clear watchdog here - we're still waiting for getWorkflowRuns response
         // Now request runs for this workflow
         vscode.postMessage({
           type: 'getWorkflowRuns',
@@ -3996,6 +4177,7 @@
         // Reset the manual workflow fetch flag since we won't get a getWorkflowRuns response
         isManualWorkflowFetch = false;
         pendingWorkflowId = null;
+        clearWorkflowFetchWatchdog(); // Clear watchdog - error response received
         // Fall back to local filtering and clear loading state
         filterRuns();
         loading = false;
@@ -4065,29 +4247,53 @@
         gitHubSummaryMarkdown = '';
       }
     } else if (message.type === 'getJobSummaryResponse') {
-      // Handle job summary response - show in GitHub summary modal
+      // Handle job summary response
       const jobId = message.data?.jobId;
+      const jobName = message.data?.jobName || 'Job Summary';
+      const fromStepsModal = jobSummaryFromStepsModal;
+
+      // Reset the flag
+      jobSummaryFromStepsModal = false;
+
       if (jobId) {
         loadingJobSummary.delete(jobId);
         loadingJobSummary = loadingJobSummary;
       }
 
       if (message.success && message.data) {
-        // Close the JobStepsModal if it's open (so summary modal can be shown)
-        if (selectedJobForStepsModal) {
-          selectedJobForStepsModal = null;
-          selectedJobRunIdForSteps = null;
-        }
-
-        // Store both raw markdown (for tab view) and HTML (for modal)
         const markdownContent = message.data.markdownContent || '';
-        gitHubSummaryMarkdown = markdownContent;
-        gitHubSummaryContent = markdownContent ? markdownToHtml(markdownContent) : '';
-        gitHubSummaryHtmlUrl = message.data.htmlUrl || '';
-        gitHubSummaryError = '';
-        gitHubSummaryModalRunId = null; // Job summary, not run summary
-        showGitHubSummaryModal = true;
-        gitHubSummaryLoading = false;
+        const htmlContent = markdownContent ? markdownToHtml(markdownContent) : '';
+        const htmlUrl = message.data.htmlUrl || '';
+
+        if (fromStepsModal) {
+          // From steps modal: open summary in editor tab (keep modal open)
+          vscode.postMessage({
+            type: 'openGitHubSummaryInTab',
+            data: {
+              runId: 0,
+              runName: jobName,
+              markdownContent: markdownContent,
+              htmlContent: htmlContent,
+              htmlUrl: htmlUrl,
+            },
+          });
+        } else {
+          // From job view: show in modal (existing behavior)
+          // Close the JobStepsModal if it's open (so summary modal can be shown)
+          if (selectedJobForStepsModal) {
+            selectedJobForStepsModal = null;
+            selectedJobRunIdForSteps = null;
+          }
+
+          // Store both raw markdown (for tab view) and HTML (for modal)
+          gitHubSummaryMarkdown = markdownContent;
+          gitHubSummaryContent = htmlContent;
+          gitHubSummaryHtmlUrl = htmlUrl;
+          gitHubSummaryError = '';
+          gitHubSummaryModalRunId = null; // Job summary, not run summary
+          showGitHubSummaryModal = true;
+          gitHubSummaryLoading = false;
+        }
       } else {
         showToast(message.error || 'Failed to load job summary', 'error', 3000);
       }
@@ -6587,13 +6793,13 @@
                         class="job-logs-button summary-btn"
                         on:click|stopPropagation={() => viewJobSummary(job.id, job.name, run.id)}
                         disabled={loadingJobSummary.has(job.id)}
-                        title="View job summary"
+                        title="View GitHub job summary"
                       >
                         {#if loadingJobSummary.has(job.id)}
                           <span class="codicon codicon-sync spinning-icon"></span>
                           <span>Loading...</span>
                         {:else}
-                          <span class="codicon codicon-note"></span>
+                          <span class="codicon codicon-github"></span>
                           <span>Summary</span>
                         {/if}
                       </button>
@@ -7202,7 +7408,7 @@
           const jobName = selectedJobForStepsModal?.name || 'Job';
           const runId = selectedJobRunIdForSteps;
           if (jobId != null) {
-            viewJobSummary(jobId, jobName, runId ?? undefined);
+            viewJobSummary(jobId, jobName, runId ?? undefined, true);
           }
         }
       : undefined}

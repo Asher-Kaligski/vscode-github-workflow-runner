@@ -2,6 +2,16 @@
 
 All notable changes to the "github-workflow-runner" extension will be documented in this file.
 
+## [1.2.1] - 2025-12-18
+
+### 🎨 Changed
+
+- **GitHub Summary Button Improvements:**
+  - Added GitHub icon (octicon) to the "Summary" button in both the job view and steps view
+  - Updated tooltip text from "View job summary" to "View GitHub job summary" for clearer branding
+
+- **Steps View Summary Behavior:** The "Summary" button in the Job Steps Modal now opens the summary in a new editor tab instead of displaying it in a modal dialog, providing a better reading experience for longer summaries. The job view Summary button behavior remains unchanged and still shows a modal for quick previews.
+
 ## [1.2.0] - 2025-12-17
 
 ### ✨ New Features

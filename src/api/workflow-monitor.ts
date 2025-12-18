@@ -872,7 +872,7 @@ export async function getGitHubSummary(
     }
 
     message += `\n---\n\n`;
-    message += `👉 **Click "Open in Browser" below to view the full job summaries on GitHub.**`;
+    message += `👉 **Click "View on GitHub" below to view the full job summaries on GitHub.**`;
 
     return {
       success: true,
@@ -1988,13 +1988,13 @@ export async function getGitHubSummaryFromLogs(
       }
     } else {
       message += `ℹ️ **No summary content detected in job logs.**\n\n`;
-      message += `This workflow may not write to \`$GITHUB_STEP_SUMMARY\`,\n`;
+      message += 'This workflow may not write to GITHUB_STEP_SUMMARY,\n';
       message += `or the summary format is not recognized.\n\n`;
       message += `**Jobs checked:** ${completedJobs.length}\n`;
     }
 
     message += `\n---\n\n`;
-    message += `👉 **Click "Open in Browser" to view the full workflow run on GitHub.**`;
+    message += `👉 **Click "View on GitHub" to view the full workflow run on GitHub.**`;
 
     return {
       success: true,
@@ -2061,7 +2061,7 @@ export async function getJobSummaryFromLogs(
     if (!summaryContent.trim() && annotations.length === 0) {
       return {
         success: true,
-        markdownContent: `### 📋 Job: ${jobName}\n\nℹ️ **No summary content detected in job logs.**\n\nThis job may not write to \`$GITHUB_STEP_SUMMARY\`.`,
+        markdownContent: `### 📋 Job: ${jobName}\n\nℹ️ **No summary content detected in job logs.**\n\nThis job may not write to GITHUB_STEP_SUMMARY.`,
         htmlUrl,
       };
     }

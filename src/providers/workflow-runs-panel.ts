@@ -34,6 +34,7 @@ import { getAllWorkflowDefinitionsIncludingNonDispatch } from '../utils/workflow
 import AdmZip from 'adm-zip';
 import type { WebviewMessage, WorkflowRun } from '../types/workflow-types';
 import { buildLogURI } from '../utils/log-uri-scheme';
+import { createErrorResponse, getResponseTypeForMessage } from '../utils/message-recovery';
 import { Storage } from '../utils/storage';
 
 const AUTO_REFRESH_SECONDS_OPTIONS: number[] = [0, 15, 30, 45, 60, 90, 120, 180];
@@ -596,747 +597,772 @@ export class WorkflowRunsPanel {
    * Handle messages from webview
    */
   private async _handleMessage(message: WebviewMessage) {
-    switch (message.type) {
-      case 'webviewReady':
-        // Webview signaled it's ready to receive data
-        await this._sendInitialSettings();
-        await this._sendWorkflows();
-        await this._sendWatchedRuns(); // Load watched runs from storage
-        await this._sendWorkflowRuns();
-        break;
+    try {
+      switch (message.type) {
+        case 'webviewReady':
+          // Webview signaled it's ready to receive data
+          await this._sendInitialSettings();
+          await this._sendWorkflows();
+          await this._sendWatchedRuns(); // Load watched runs from storage
+          await this._sendWorkflowRuns();
+          break;
 
-      case 'getWorkflowRuns': {
-        const { workflowId } = (message.data || {}) as {
-          workflowId?: number;
-        };
-        await this._sendWorkflowRuns({ workflowId });
-        // Also push workflows proactively so the webview can populate the dropdown
-        await this._sendWorkflows();
+        case 'getWorkflowRuns': {
+          const { workflowId } = (message.data || {}) as {
+            workflowId?: number;
+          };
+          await this._sendWorkflowRuns({ workflowId });
+          // Also push workflows proactively so the webview can populate the dropdown
+          await this._sendWorkflows();
 
-        // Check if any initial filters are set BEFORE sending them
-        const hasInitialFilters =
-          this._initialWorkflowFilter ||
-          this._initialActorFilter ||
-          this._initialShowBotRuns !== null;
+          // Check if any initial filters are set BEFORE sending them
+          const hasInitialFilters =
+            this._initialWorkflowFilter ||
+            this._initialActorFilter ||
+            this._initialShowBotRuns !== null;
 
-        // Send initial filters if set
-        if (this._initialWorkflowFilter) {
-          // Convert filename to full path format (.github/workflows/filename.yml)
-          const workflowPath = this._initialWorkflowFilter.startsWith('.github/workflows/')
-            ? this._initialWorkflowFilter
-            : `.github/workflows/${this._initialWorkflowFilter}`;
+          // Send initial filters if set
+          if (this._initialWorkflowFilter) {
+            // Convert filename to full path format (.github/workflows/filename.yml)
+            const workflowPath = this._initialWorkflowFilter.startsWith('.github/workflows/')
+              ? this._initialWorkflowFilter
+              : `.github/workflows/${this._initialWorkflowFilter}`;
 
-          this._panel.webview.postMessage({
-            type: 'setWorkflowFilter',
-            success: true,
-            data: { workflowPath }, // Use workflowPath for consistency
-          });
-          this._initialWorkflowFilter = null;
+            this._panel.webview.postMessage({
+              type: 'setWorkflowFilter',
+              success: true,
+              data: { workflowPath }, // Use workflowPath for consistency
+            });
+            this._initialWorkflowFilter = null;
+          }
+
+          if (this._initialActorFilter) {
+            this._panel.webview.postMessage({
+              type: 'setActorFilter',
+              success: true,
+              data: { actorFilter: this._initialActorFilter },
+            });
+            this._initialActorFilter = null;
+          }
+
+          if (this._initialShowBotRuns !== null) {
+            this._panel.webview.postMessage({
+              type: 'setShowBotRuns',
+              success: true,
+              data: { showBotRuns: this._initialShowBotRuns },
+            });
+            this._initialShowBotRuns = null;
+          }
+
+          // If no initial filters were set, tell webview to finalize initial load immediately
+          // This prevents the webview from waiting indefinitely for filter messages
+          if (!hasInitialFilters) {
+            console.log(
+              '[WorkflowRunsPanel] No initial filters - sending finalizeInitialLoad message'
+            );
+            this._panel.webview.postMessage({
+              type: 'finalizeInitialLoad',
+              success: true,
+            });
+          }
+          break;
         }
 
-        if (this._initialActorFilter) {
-          this._panel.webview.postMessage({
-            type: 'setActorFilter',
-            success: true,
-            data: { actorFilter: this._initialActorFilter },
-          });
-          this._initialActorFilter = null;
+        case 'refreshWorkflowRuns': {
+          await this._sendWorkflowRuns();
+          // Keep workflows list in sync as well
+          await this._sendWorkflows();
+          break;
         }
 
-        if (this._initialShowBotRuns !== null) {
-          this._panel.webview.postMessage({
-            type: 'setShowBotRuns',
-            success: true,
-            data: { showBotRuns: this._initialShowBotRuns },
-          });
-          this._initialShowBotRuns = null;
+        case 'updateWorkflowLoadLimit': {
+          const { limit } = (message.data || {}) as { limit?: number };
+          if (typeof limit === 'number' && Number.isFinite(limit) && limit > 0) {
+            try {
+              // Persist the panel-level page size without changing the backend
+              // per-page configuration. The backend continues to use
+              // config.monitoring.maxRuns (capped at 100) for GitHub API calls,
+              // while the webview uses workflowLoadLimit purely as a UI page size
+              // for client-side pagination.
+              await Storage.updateWorkflowRunsPanelSettings({
+                workflowLoadLimit: limit,
+              });
+            } catch (error) {
+              console.error('Failed to persist workflow load limit:', error);
+            }
+          }
+          break;
         }
 
-        // If no initial filters were set, tell webview to finalize initial load immediately
-        // This prevents the webview from waiting indefinitely for filter messages
-        if (!hasInitialFilters) {
-          console.log(
-            '[WorkflowRunsPanel] No initial filters - sending finalizeInitialLoad message'
-          );
-          this._panel.webview.postMessage({
-            type: 'finalizeInitialLoad',
-            success: true,
-          });
+        case 'updateWorkflowRunsTotalLimits': {
+          const { nonDateMaxTotalRuns, dateFilterMaxTotalRuns } = (message.data || {}) as {
+            nonDateMaxTotalRuns?: number;
+            dateFilterMaxTotalRuns?: number;
+          };
+
+          const updates: Partial<{
+            nonDateMaxTotalRuns: number;
+            dateFilterMaxTotalRuns: number;
+          }> = {};
+
+          if (
+            typeof nonDateMaxTotalRuns === 'number' &&
+            Number.isFinite(nonDateMaxTotalRuns) &&
+            nonDateMaxTotalRuns > 0
+          ) {
+            updates.nonDateMaxTotalRuns = nonDateMaxTotalRuns;
+          }
+
+          if (
+            typeof dateFilterMaxTotalRuns === 'number' &&
+            Number.isFinite(dateFilterMaxTotalRuns) &&
+            dateFilterMaxTotalRuns > 0
+          ) {
+            updates.dateFilterMaxTotalRuns = dateFilterMaxTotalRuns;
+          }
+
+          if (Object.keys(updates).length > 0) {
+            try {
+              await Storage.updateWorkflowRunsPanelSettings(updates);
+            } catch (error) {
+              console.error('Failed to persist workflow runs total limits:', error);
+            }
+          }
+          break;
         }
-        break;
-      }
 
-      case 'refreshWorkflowRuns': {
-        await this._sendWorkflowRuns();
-        // Keep workflows list in sync as well
-        await this._sendWorkflows();
-        break;
-      }
+        case 'updateAutoRefresh': {
+          const { autoRefreshSeconds } = (message.data || {}) as {
+            autoRefreshSeconds?: number;
+          };
 
-      case 'updateWorkflowLoadLimit': {
-        const { limit } = (message.data || {}) as { limit?: number };
-        if (typeof limit === 'number' && Number.isFinite(limit) && limit > 0) {
+          if (
+            typeof autoRefreshSeconds !== 'number' ||
+            !Number.isFinite(autoRefreshSeconds) ||
+            autoRefreshSeconds < 0
+          ) {
+            break;
+          }
+
+          if (!AUTO_REFRESH_SECONDS_OPTIONS.includes(autoRefreshSeconds)) {
+            console.warn(
+              '[WorkflowRunsPanel] Ignoring unsupported auto-refresh value from webview:',
+              autoRefreshSeconds
+            );
+            break;
+          }
+
           try {
-            // Persist the panel-level page size without changing the backend
-            // per-page configuration. The backend continues to use
-            // config.monitoring.maxRuns (capped at 100) for GitHub API calls,
-            // while the webview uses workflowLoadLimit purely as a UI page size
-            // for client-side pagination.
             await Storage.updateWorkflowRunsPanelSettings({
-              workflowLoadLimit: limit,
+              autoRefreshSeconds,
             });
           } catch (error) {
-            console.error('Failed to persist workflow load limit:', error);
+            console.error('Failed to persist Workflow Runs auto-refresh value:', error);
           }
-        }
-        break;
-      }
-
-      case 'updateWorkflowRunsTotalLimits': {
-        const { nonDateMaxTotalRuns, dateFilterMaxTotalRuns } = (message.data || {}) as {
-          nonDateMaxTotalRuns?: number;
-          dateFilterMaxTotalRuns?: number;
-        };
-
-        const updates: Partial<{
-          nonDateMaxTotalRuns: number;
-          dateFilterMaxTotalRuns: number;
-        }> = {};
-
-        if (
-          typeof nonDateMaxTotalRuns === 'number' &&
-          Number.isFinite(nonDateMaxTotalRuns) &&
-          nonDateMaxTotalRuns > 0
-        ) {
-          updates.nonDateMaxTotalRuns = nonDateMaxTotalRuns;
-        }
-
-        if (
-          typeof dateFilterMaxTotalRuns === 'number' &&
-          Number.isFinite(dateFilterMaxTotalRuns) &&
-          dateFilterMaxTotalRuns > 0
-        ) {
-          updates.dateFilterMaxTotalRuns = dateFilterMaxTotalRuns;
-        }
-
-        if (Object.keys(updates).length > 0) {
-          try {
-            await Storage.updateWorkflowRunsPanelSettings(updates);
-          } catch (error) {
-            console.error('Failed to persist workflow runs total limits:', error);
-          }
-        }
-        break;
-      }
-
-      case 'updateAutoRefresh': {
-        const { autoRefreshSeconds } = (message.data || {}) as {
-          autoRefreshSeconds?: number;
-        };
-
-        if (
-          typeof autoRefreshSeconds !== 'number' ||
-          !Number.isFinite(autoRefreshSeconds) ||
-          autoRefreshSeconds < 0
-        ) {
           break;
         }
 
-        if (!AUTO_REFRESH_SECONDS_OPTIONS.includes(autoRefreshSeconds)) {
-          console.warn(
-            '[WorkflowRunsPanel] Ignoring unsupported auto-refresh value from webview:',
-            autoRefreshSeconds
+        case 'updateNotificationSettings': {
+          const { showWorkflowToastNotifications, showProgressIndicators } = (message.data ||
+            {}) as {
+            showWorkflowToastNotifications?: boolean;
+            showProgressIndicators?: boolean;
+          };
+
+          // Build update object with only provided values
+          const updates: {
+            showWorkflowToastNotifications?: boolean;
+            showProgressIndicators?: boolean;
+          } = {};
+
+          if (typeof showWorkflowToastNotifications === 'boolean') {
+            updates.showWorkflowToastNotifications = showWorkflowToastNotifications;
+          }
+          if (typeof showProgressIndicators === 'boolean') {
+            updates.showProgressIndicators = showProgressIndicators;
+          }
+
+          if (Object.keys(updates).length > 0) {
+            try {
+              await Storage.updateWorkflowRunsPanelSettings(updates);
+            } catch (error) {
+              console.error('Failed to persist notification settings:', error);
+            }
+          }
+          break;
+        }
+
+        case 'updateDateFilter': {
+          const { from, to } = (message.data || {}) as {
+            from?: string;
+            to?: string;
+          };
+          const normalizedFrom = typeof from === 'string' && from.trim() ? from.trim() : null;
+          const normalizedTo = typeof to === 'string' && to.trim() ? to.trim() : null;
+          this._currentDateFilterFrom = normalizedFrom;
+          this._currentDateFilterTo = normalizedTo;
+          try {
+            await Storage.updateWorkflowRunsPanelSettings({
+              dateFilterFrom: normalizedFrom,
+              dateFilterTo: normalizedTo,
+            });
+          } catch (error) {
+            console.error('Failed to persist Workflow Runs date filter:', error);
+          }
+          await this._sendWorkflowRuns();
+          break;
+        }
+
+        case 'getUserInfo':
+          await this._sendUserInfo();
+          break;
+
+        case 'openWorkflowRun':
+          const runUrl = message.data as string;
+          if (runUrl) {
+            vscode.env.openExternal(vscode.Uri.parse(runUrl));
+          }
+          break;
+
+        case 'cancelWorkflowRun':
+          await this._cancelWorkflowRun(message.data as { runId: number });
+          break;
+
+        case 'getWorkflowRunJobs':
+          await this._sendWorkflowRunJobs(message.data as { runId: number });
+          break;
+
+        case 'getJobDependencies':
+          await this._sendJobDependencies(message.data as { runId: number; workflowPath: string });
+          break;
+
+        case 'viewWorkflowRunLogs':
+          await this._viewWorkflowRunLogs(message.data as { runId: number });
+          break;
+
+        case 'downloadWorkflowArtifacts':
+          await this._downloadWorkflowArtifacts(message.data as { runId: number });
+          break;
+
+        case 'rerunWorkflow':
+          await this._rerunWorkflow(message.data as { runId: number; failedJobsOnly?: boolean });
+          break;
+
+        case 'promptRerunWorkflow': {
+          const { runId, workflowName, branch } = (message.data || {}) as {
+            runId: number;
+            workflowName?: string;
+            branch?: string;
+          };
+          await this._promptRerunWorkflowWithInputCheck(runId, workflowName, branch);
+          break;
+        }
+
+        case 'requestCancelWorkflowRun': {
+          const { runId, runName } = (message.data || {}) as {
+            runId: number;
+            runName?: string;
+          };
+          const confirm = await vscode.window.showWarningMessage(
+            `Cancel "${runName || `run #${runId}`}"?`,
+            { modal: true },
+            'Cancel Run',
+            'Dismiss'
+          );
+          if (confirm === 'Cancel Run') {
+            await this._cancelWorkflowRun({ runId });
+          }
+          break;
+        }
+
+        case 'openSidebarWithWorkflow':
+          // Focus the sidebar view without forcing an instructional toast
+          await vscode.commands.executeCommand(
+            'workbench.view.extension.github-workflow-runner-sidebar-view'
           );
           break;
-        }
 
-        try {
-          await Storage.updateWorkflowRunsPanelSettings({
-            autoRefreshSeconds,
-          });
-        } catch (error) {
-          console.error('Failed to persist Workflow Runs auto-refresh value:', error);
-        }
-        break;
-      }
+        case 'loadMoreRuns':
+          await this._loadMoreRuns(message.data as { page: number });
+          break;
 
-      case 'updateNotificationSettings': {
-        const { showWorkflowToastNotifications, showProgressIndicators } = (message.data || {}) as {
-          showWorkflowToastNotifications?: boolean;
-          showProgressIndicators?: boolean;
-        };
+        case 'progressiveFetchRuns':
+          await this._progressiveFetchRuns(
+            message.data as { startPage: number; maxPages: number; generation?: number }
+          );
+          break;
 
-        // Build update object with only provided values
-        const updates: {
-          showWorkflowToastNotifications?: boolean;
-          showProgressIndicators?: boolean;
-        } = {};
+        case 'viewJobLogs':
+          await this._viewJobLogs(
+            message.data as { jobId: number; jobName: string; runId: number }
+          );
+          break;
 
-        if (typeof showWorkflowToastNotifications === 'boolean') {
-          updates.showWorkflowToastNotifications = showWorkflowToastNotifications;
-        }
-        if (typeof showProgressIndicators === 'boolean') {
-          updates.showProgressIndicators = showProgressIndicators;
-        }
+        // DISABLED: Interactive log viewer - temporarily disabled in v1.2.0
+        // case 'viewJobLogsInteractive':
+        //   await this._viewJobLogsInteractive(
+        //     message.data as { jobId: number; jobName: string; runId: number }
+        //   );
+        //   break;
 
-        if (Object.keys(updates).length > 0) {
+        // DISABLED: Log comparison - temporarily disabled in v1.2.0
+        // case 'compareJobLogs':
+        //   await this._compareJobLogs(
+        //     message.data as {
+        //       sourceJobId: number;
+        //       sourceJobName: string;
+        //       sourceRunId: number;
+        //       targetJobId: number;
+        //       targetJobName: string;
+        //       targetRunId: number;
+        //     }
+        //   );
+        //   break;
+
+        // DISABLED: Step log comparison - temporarily disabled in v1.2.0
+        // case 'compareStepLogs':
+        //   await this._compareStepLogs(
+        //     message.data as {
+        //       sourceJobId: number;
+        //       sourceJobName: string;
+        //       sourceRunId: number;
+        //       sourceStepNumber: number;
+        //       sourceStepName: string;
+        //       targetJobId: number;
+        //       targetJobName: string;
+        //       targetRunId: number;
+        //       targetStepNumber: number;
+        //       targetStepName: string;
+        //     }
+        //   );
+        //   break;
+
+        case 'checkJobLogsAvailability':
+          await this._checkJobLogsAvailability(
+            message.data as { jobId: number; jobName: string; runId: number }
+          );
+          break;
+
+        case 'getJobDetails':
+          await this._getJobDetails(message.data as { jobId: number; runId: number });
+          break;
+
+        // DISABLED: Step log viewing - temporarily disabled in v1.2.0
+        // case 'viewStepLogs':
+        //   await this._viewStepLogs(
+        //     message.data as {
+        //       jobId: number;
+        //       jobName: string;
+        //       runId: number;
+        //       stepNumber: number;
+        //       stepName: string;
+        //     }
+        //   );
+        //   break;
+
+        case 'getWorkflowRunArtifacts':
+          await this._getWorkflowRunArtifacts(message.data as { runId: number });
+          break;
+
+        case 'downloadArtifact':
+          await this._downloadArtifact(
+            message.data as { artifactId: number; artifactName: string }
+          );
+          break;
+
+        case 'getCurrentPR': {
           try {
-            await Storage.updateWorkflowRunsPanelSettings(updates);
+            const repoInfo = await getRepositoryInfo();
+            if (!repoInfo) {
+              this._panel.webview.postMessage({
+                type: 'getCurrentPRResponse',
+                success: true,
+                data: { number: null },
+              });
+              break;
+            }
+            const branch = await getCurrentBranch();
+            if (!branch) {
+              this._panel.webview.postMessage({
+                type: 'getCurrentPRResponse',
+                success: true,
+                data: { number: null },
+              });
+              break;
+            }
+            const prNumber = await getCurrentPullRequest(repoInfo.owner, repoInfo.name, branch);
+            this._panel.webview.postMessage({
+              type: 'getCurrentPRResponse',
+              success: true,
+              data: { number: prNumber },
+            });
           } catch (error) {
-            console.error('Failed to persist notification settings:', error);
-          }
-        }
-        break;
-      }
-
-      case 'updateDateFilter': {
-        const { from, to } = (message.data || {}) as {
-          from?: string;
-          to?: string;
-        };
-        const normalizedFrom = typeof from === 'string' && from.trim() ? from.trim() : null;
-        const normalizedTo = typeof to === 'string' && to.trim() ? to.trim() : null;
-        this._currentDateFilterFrom = normalizedFrom;
-        this._currentDateFilterTo = normalizedTo;
-        try {
-          await Storage.updateWorkflowRunsPanelSettings({
-            dateFilterFrom: normalizedFrom,
-            dateFilterTo: normalizedTo,
-          });
-        } catch (error) {
-          console.error('Failed to persist Workflow Runs date filter:', error);
-        }
-        await this._sendWorkflowRuns();
-        break;
-      }
-
-      case 'getUserInfo':
-        await this._sendUserInfo();
-        break;
-
-      case 'openWorkflowRun':
-        const runUrl = message.data as string;
-        if (runUrl) {
-          vscode.env.openExternal(vscode.Uri.parse(runUrl));
-        }
-        break;
-
-      case 'cancelWorkflowRun':
-        await this._cancelWorkflowRun(message.data as { runId: number });
-        break;
-
-      case 'getWorkflowRunJobs':
-        await this._sendWorkflowRunJobs(message.data as { runId: number });
-        break;
-
-      case 'getJobDependencies':
-        await this._sendJobDependencies(message.data as { runId: number; workflowPath: string });
-        break;
-
-      case 'viewWorkflowRunLogs':
-        await this._viewWorkflowRunLogs(message.data as { runId: number });
-        break;
-
-      case 'downloadWorkflowArtifacts':
-        await this._downloadWorkflowArtifacts(message.data as { runId: number });
-        break;
-
-      case 'rerunWorkflow':
-        await this._rerunWorkflow(message.data as { runId: number; failedJobsOnly?: boolean });
-        break;
-
-      case 'promptRerunWorkflow': {
-        const { runId, workflowName, branch } = (message.data || {}) as {
-          runId: number;
-          workflowName?: string;
-          branch?: string;
-        };
-        await this._promptRerunWorkflowWithInputCheck(runId, workflowName, branch);
-        break;
-      }
-
-      case 'requestCancelWorkflowRun': {
-        const { runId, runName } = (message.data || {}) as {
-          runId: number;
-          runName?: string;
-        };
-        const confirm = await vscode.window.showWarningMessage(
-          `Cancel "${runName || `run #${runId}`}"?`,
-          { modal: true },
-          'Cancel Run',
-          'Dismiss'
-        );
-        if (confirm === 'Cancel Run') {
-          await this._cancelWorkflowRun({ runId });
-        }
-        break;
-      }
-
-      case 'openSidebarWithWorkflow':
-        // Focus the sidebar view without forcing an instructional toast
-        await vscode.commands.executeCommand(
-          'workbench.view.extension.github-workflow-runner-sidebar-view'
-        );
-        break;
-
-      case 'loadMoreRuns':
-        await this._loadMoreRuns(message.data as { page: number });
-        break;
-
-      case 'progressiveFetchRuns':
-        await this._progressiveFetchRuns(
-          message.data as { startPage: number; maxPages: number; generation?: number }
-        );
-        break;
-
-      case 'viewJobLogs':
-        await this._viewJobLogs(message.data as { jobId: number; jobName: string; runId: number });
-        break;
-
-      // DISABLED: Interactive log viewer - temporarily disabled in v1.2.0
-      // case 'viewJobLogsInteractive':
-      //   await this._viewJobLogsInteractive(
-      //     message.data as { jobId: number; jobName: string; runId: number }
-      //   );
-      //   break;
-
-      // DISABLED: Log comparison - temporarily disabled in v1.2.0
-      // case 'compareJobLogs':
-      //   await this._compareJobLogs(
-      //     message.data as {
-      //       sourceJobId: number;
-      //       sourceJobName: string;
-      //       sourceRunId: number;
-      //       targetJobId: number;
-      //       targetJobName: string;
-      //       targetRunId: number;
-      //     }
-      //   );
-      //   break;
-
-      // DISABLED: Step log comparison - temporarily disabled in v1.2.0
-      // case 'compareStepLogs':
-      //   await this._compareStepLogs(
-      //     message.data as {
-      //       sourceJobId: number;
-      //       sourceJobName: string;
-      //       sourceRunId: number;
-      //       sourceStepNumber: number;
-      //       sourceStepName: string;
-      //       targetJobId: number;
-      //       targetJobName: string;
-      //       targetRunId: number;
-      //       targetStepNumber: number;
-      //       targetStepName: string;
-      //     }
-      //   );
-      //   break;
-
-      case 'checkJobLogsAvailability':
-        await this._checkJobLogsAvailability(
-          message.data as { jobId: number; jobName: string; runId: number }
-        );
-        break;
-
-      case 'getJobDetails':
-        await this._getJobDetails(message.data as { jobId: number; runId: number });
-        break;
-
-      // DISABLED: Step log viewing - temporarily disabled in v1.2.0
-      // case 'viewStepLogs':
-      //   await this._viewStepLogs(
-      //     message.data as {
-      //       jobId: number;
-      //       jobName: string;
-      //       runId: number;
-      //       stepNumber: number;
-      //       stepName: string;
-      //     }
-      //   );
-      //   break;
-
-      case 'getWorkflowRunArtifacts':
-        await this._getWorkflowRunArtifacts(message.data as { runId: number });
-        break;
-
-      case 'downloadArtifact':
-        await this._downloadArtifact(message.data as { artifactId: number; artifactName: string });
-        break;
-
-      case 'getCurrentPR': {
-        try {
-          const repoInfo = await getRepositoryInfo();
-          if (!repoInfo) {
             this._panel.webview.postMessage({
               type: 'getCurrentPRResponse',
-              success: true,
-              data: { number: null },
+              success: false,
+              error: error instanceof Error ? error.message : 'Failed to get current PR',
             });
-            break;
           }
-          const branch = await getCurrentBranch();
-          if (!branch) {
+          break;
+        }
+
+        case 'getCurrentBranch': {
+          try {
+            const branch = await getCurrentBranch();
             this._panel.webview.postMessage({
-              type: 'getCurrentPRResponse',
+              type: 'getCurrentBranch',
               success: true,
-              data: { number: null },
+              data: branch || null,
             });
-            break;
+          } catch (error) {
+            this._panel.webview.postMessage({
+              type: 'getCurrentBranch',
+              success: false,
+              error: error instanceof Error ? error.message : 'Failed to get current branch',
+            });
           }
-          const prNumber = await getCurrentPullRequest(repoInfo.owner, repoInfo.name, branch);
-          this._panel.webview.postMessage({
-            type: 'getCurrentPRResponse',
-            success: true,
-            data: { number: prNumber },
-          });
-        } catch (error) {
-          this._panel.webview.postMessage({
-            type: 'getCurrentPRResponse',
-            success: false,
-            error: error instanceof Error ? error.message : 'Failed to get current PR',
-          });
+          break;
         }
-        break;
-      }
 
-      case 'getCurrentBranch': {
-        try {
-          const branch = await getCurrentBranch();
-          this._panel.webview.postMessage({
-            type: 'getCurrentBranch',
-            success: true,
-            data: branch || null,
-          });
-        } catch (error) {
-          this._panel.webview.postMessage({
-            type: 'getCurrentBranch',
-            success: false,
-            error: error instanceof Error ? error.message : 'Failed to get current branch',
-          });
+        case 'getDefaultBranch': {
+          try {
+            const config = getConfig();
+            const defaultBranch = config.defaultBranch;
+            this._panel.webview.postMessage({
+              type: 'getDefaultBranch',
+              success: true,
+              data: defaultBranch,
+            });
+          } catch (error) {
+            this._panel.webview.postMessage({
+              type: 'getDefaultBranch',
+              success: false,
+              error: error instanceof Error ? error.message : 'Failed to get default branch',
+            });
+          }
+          break;
         }
-        break;
-      }
 
-      case 'getDefaultBranch': {
-        try {
-          const config = getConfig();
-          const defaultBranch = config.defaultBranch;
-          this._panel.webview.postMessage({
-            type: 'getDefaultBranch',
-            success: true,
-            data: defaultBranch,
-          });
-        } catch (error) {
-          this._panel.webview.postMessage({
-            type: 'getDefaultBranch',
-            success: false,
-            error: error instanceof Error ? error.message : 'Failed to get default branch',
-          });
-        }
-        break;
-      }
-
-      case 'checkBranchOnRemote': {
-        try {
-          const branch = await getCurrentBranch();
-          if (!branch) {
+        case 'checkBranchOnRemote': {
+          try {
+            const branch = await getCurrentBranch();
+            if (!branch) {
+              this._panel.webview.postMessage({
+                type: 'checkBranchOnRemote',
+                success: true,
+                data: { exists: false },
+              });
+              break;
+            }
+            const exists = await branchExistsOnRemote(branch);
             this._panel.webview.postMessage({
               type: 'checkBranchOnRemote',
               success: true,
-              data: { exists: false },
+              data: { exists },
+            });
+          } catch (error) {
+            this._panel.webview.postMessage({
+              type: 'checkBranchOnRemote',
+              success: false,
+              error: error instanceof Error ? error.message : 'Failed to check branch on remote',
+            });
+          }
+          break;
+        }
+
+        case 'openWorkflowFile': {
+          const { filePath } = (message.data || {}) as { filePath: string };
+          if (filePath) {
+            await this._openWorkflowFile(filePath);
+          }
+          break;
+        }
+
+        case 'getMarkedWorkflows': {
+          const markedWorkflows = await Storage.getMarkedWorkflows();
+          this._panel.webview.postMessage({
+            type: 'getMarkedWorkflowsResponse',
+            success: true,
+            data: markedWorkflows,
+          });
+          break;
+        }
+
+        case 'toggleWorkflowMarked': {
+          const { workflowPath } = (message.data || {}) as {
+            workflowPath: string;
+          };
+          if (workflowPath) {
+            const isMarked = await Storage.toggleWorkflowMarked(workflowPath);
+            this._panel.webview.postMessage({
+              type: 'toggleWorkflowMarkedResponse',
+              success: true,
+              data: { workflowPath, isMarked },
+            });
+          }
+          break;
+        }
+
+        case 'getWatchedRuns': {
+          const repoConfig = await getRepositoryConfig();
+          if (!repoConfig) {
+            console.log('[WorkflowRunsPanel] getWatchedRuns: Repository not configured');
+            this._panel.webview.postMessage({
+              type: 'getWatchedRunsResponse',
+              success: false,
+              error: 'Repository not configured',
             });
             break;
           }
-          const exists = await branchExistsOnRemote(branch);
-          this._panel.webview.postMessage({
-            type: 'checkBranchOnRemote',
-            success: true,
-            data: { exists },
-          });
-        } catch (error) {
-          this._panel.webview.postMessage({
-            type: 'checkBranchOnRemote',
-            success: false,
-            error: error instanceof Error ? error.message : 'Failed to check branch on remote',
-          });
-        }
-        break;
-      }
-
-      case 'openWorkflowFile': {
-        const { filePath } = (message.data || {}) as { filePath: string };
-        if (filePath) {
-          await this._openWorkflowFile(filePath);
-        }
-        break;
-      }
-
-      case 'getMarkedWorkflows': {
-        const markedWorkflows = await Storage.getMarkedWorkflows();
-        this._panel.webview.postMessage({
-          type: 'getMarkedWorkflowsResponse',
-          success: true,
-          data: markedWorkflows,
-        });
-        break;
-      }
-
-      case 'toggleWorkflowMarked': {
-        const { workflowPath } = (message.data || {}) as {
-          workflowPath: string;
-        };
-        if (workflowPath) {
-          const isMarked = await Storage.toggleWorkflowMarked(workflowPath);
-          this._panel.webview.postMessage({
-            type: 'toggleWorkflowMarkedResponse',
-            success: true,
-            data: { workflowPath, isMarked },
-          });
-        }
-        break;
-      }
-
-      case 'getWatchedRuns': {
-        const repoConfig = await getRepositoryConfig();
-        if (!repoConfig) {
-          console.log('[WorkflowRunsPanel] getWatchedRuns: Repository not configured');
+          console.log(
+            `[WorkflowRunsPanel] getWatchedRuns: Fetching for ${repoConfig.owner}/${repoConfig.name}`
+          );
+          const watchedRuns = await Storage.getWatchedRunsForRepo(
+            repoConfig.owner,
+            repoConfig.name
+          );
+          console.log(
+            `[WorkflowRunsPanel] getWatchedRuns: Sending ${watchedRuns.length} watched runs to webview`
+          );
           this._panel.webview.postMessage({
             type: 'getWatchedRunsResponse',
-            success: false,
-            error: 'Repository not configured',
-          });
-          break;
-        }
-        console.log(
-          `[WorkflowRunsPanel] getWatchedRuns: Fetching for ${repoConfig.owner}/${repoConfig.name}`
-        );
-        const watchedRuns = await Storage.getWatchedRunsForRepo(repoConfig.owner, repoConfig.name);
-        console.log(
-          `[WorkflowRunsPanel] getWatchedRuns: Sending ${watchedRuns.length} watched runs to webview`
-        );
-        this._panel.webview.postMessage({
-          type: 'getWatchedRunsResponse',
-          success: true,
-          data: watchedRuns,
-        });
-        break;
-      }
-
-      case 'toggleRunWatch': {
-        const { runId, isWatched } = (message.data || {}) as {
-          runId: number;
-          isWatched: boolean;
-        };
-        if (!runId) {
-          break;
-        }
-
-        const repoConfig = await getRepositoryConfig();
-        if (!repoConfig) {
-          this._panel.webview.postMessage({
-            type: 'toggleRunWatchResponse',
-            success: false,
-            error: 'Repository not configured',
+            success: true,
+            data: watchedRuns,
           });
           break;
         }
 
-        const result = await Storage.toggleRunWatch(runId, repoConfig.owner, repoConfig.name);
+        case 'toggleRunWatch': {
+          const { runId, isWatched } = (message.data || {}) as {
+            runId: number;
+            isWatched: boolean;
+          };
+          if (!runId) {
+            break;
+          }
 
-        this._panel.webview.postMessage({
-          type: 'toggleRunWatchResponse',
-          success: !result.error,
-          data: { runId, isWatched: result.isWatched },
-          error: result.error,
-        });
-        break;
-      }
-
-      case 'unwatchAllRuns': {
-        try {
           const repoConfig = await getRepositoryConfig();
           if (!repoConfig) {
             this._panel.webview.postMessage({
-              type: 'unwatchAllRunsResponse',
+              type: 'toggleRunWatchResponse',
               success: false,
               error: 'Repository not configured',
             });
             break;
           }
 
-          const existing = await Storage.getWatchedRunsForRepo(repoConfig.owner, repoConfig.name);
-          const total = existing.length;
-
-          if (total === 0) {
-            this._panel.webview.postMessage({
-              type: 'unwatchAllRunsResponse',
-              success: true,
-              data: { clearedCount: 0 },
-            });
-            break;
-          }
-
-          const confirm = await vscode.window.showWarningMessage(
-            `Stop watching all ${total} workflow run${total === 1 ? '' : 's'}?`,
-            { modal: true },
-            'Unwatch All'
-          );
-          if (confirm !== 'Unwatch All') {
-            this._panel.webview.postMessage({
-              type: 'unwatchAllRunsResponse',
-              success: false,
-              error: 'Unwatch all runs cancelled.',
-            });
-            break;
-          }
-
-          await Storage.clearWatchedRunsForRepo(repoConfig.owner, repoConfig.name);
+          const result = await Storage.toggleRunWatch(runId, repoConfig.owner, repoConfig.name);
 
           this._panel.webview.postMessage({
-            type: 'unwatchAllRunsResponse',
-            success: true,
-            data: { clearedCount: total },
-          });
-        } catch (error) {
-          this._panel.webview.postMessage({
-            type: 'unwatchAllRunsResponse',
-            success: false,
-            error: error instanceof Error ? error.message : 'Failed to unwatch all runs',
-          });
-        }
-        break;
-      }
-
-      case 'backgroundRefreshWatchedRuns': {
-        await this._backgroundRefreshWatchedRuns(message.data as { watchedRunIds: number[] });
-        break;
-      }
-
-      case 'backgroundRefreshAllRuns': {
-        await this._backgroundRefreshAllRuns();
-        break;
-      }
-
-      case 'filterStateResponse': {
-        // Store the current filter state from webview
-        const filterState = (message.data || {}) as {
-          workflowFilter: string | 'all';
-          actorFilter: string;
-          showBotRuns: boolean;
-        };
-        this._currentWorkflowFilter =
-          filterState.workflowFilter === 'all' ? null : filterState.workflowFilter;
-        this._currentActorFilter = filterState.actorFilter;
-        this._currentShowBotRuns = filterState.showBotRuns;
-        console.log('[WorkflowRunsPanel] Updated filter state:', {
-          workflowFilter: this._currentWorkflowFilter,
-          actorFilter: this._currentActorFilter,
-          showBotRuns: this._currentShowBotRuns,
-        });
-        break;
-      }
-
-      case 'getRunParameters': {
-        const { runId } = (message.data || {}) as { runId?: number };
-        if (!runId) {
-          this._panel.webview.postMessage({
-            type: 'getRunParametersResponse',
-            success: false,
-            error: 'Missing runId for parameter lookup.',
+            type: 'toggleRunWatchResponse',
+            success: !result.error,
+            data: { runId, isWatched: result.isWatched },
+            error: result.error,
           });
           break;
         }
 
-        try {
-          const recovered = await this._recoverInputsForRun(runId);
-          if (!recovered) {
+        case 'unwatchAllRuns': {
+          try {
+            const repoConfig = await getRepositoryConfig();
+            if (!repoConfig) {
+              this._panel.webview.postMessage({
+                type: 'unwatchAllRunsResponse',
+                success: false,
+                error: 'Repository not configured',
+              });
+              break;
+            }
+
+            const existing = await Storage.getWatchedRunsForRepo(repoConfig.owner, repoConfig.name);
+            const total = existing.length;
+
+            if (total === 0) {
+              this._panel.webview.postMessage({
+                type: 'unwatchAllRunsResponse',
+                success: true,
+                data: { clearedCount: 0 },
+              });
+              break;
+            }
+
+            const confirm = await vscode.window.showWarningMessage(
+              `Stop watching all ${total} workflow run${total === 1 ? '' : 's'}?`,
+              { modal: true },
+              'Unwatch All'
+            );
+            if (confirm !== 'Unwatch All') {
+              this._panel.webview.postMessage({
+                type: 'unwatchAllRunsResponse',
+                success: false,
+                error: 'Unwatch all runs cancelled.',
+              });
+              break;
+            }
+
+            await Storage.clearWatchedRunsForRepo(repoConfig.owner, repoConfig.name);
+
+            this._panel.webview.postMessage({
+              type: 'unwatchAllRunsResponse',
+              success: true,
+              data: { clearedCount: total },
+            });
+          } catch (error) {
+            this._panel.webview.postMessage({
+              type: 'unwatchAllRunsResponse',
+              success: false,
+              error: error instanceof Error ? error.message : 'Failed to unwatch all runs',
+            });
+          }
+          break;
+        }
+
+        case 'backgroundRefreshWatchedRuns': {
+          await this._backgroundRefreshWatchedRuns(message.data as { watchedRunIds: number[] });
+          break;
+        }
+
+        case 'backgroundRefreshAllRuns': {
+          await this._backgroundRefreshAllRuns();
+          break;
+        }
+
+        case 'filterStateResponse': {
+          // Store the current filter state from webview
+          const filterState = (message.data || {}) as {
+            workflowFilter: string | 'all';
+            actorFilter: string;
+            showBotRuns: boolean;
+          };
+          this._currentWorkflowFilter =
+            filterState.workflowFilter === 'all' ? null : filterState.workflowFilter;
+          this._currentActorFilter = filterState.actorFilter;
+          this._currentShowBotRuns = filterState.showBotRuns;
+          console.log('[WorkflowRunsPanel] Updated filter state:', {
+            workflowFilter: this._currentWorkflowFilter,
+            actorFilter: this._currentActorFilter,
+            showBotRuns: this._currentShowBotRuns,
+          });
+          break;
+        }
+
+        case 'getRunParameters': {
+          const { runId } = (message.data || {}) as { runId?: number };
+          if (!runId) {
+            this._panel.webview.postMessage({
+              type: 'getRunParametersResponse',
+              success: false,
+              error: 'Missing runId for parameter lookup.',
+            });
+            break;
+          }
+
+          try {
+            const recovered = await this._recoverInputsForRun(runId);
+            if (!recovered) {
+              this._panel.webview.postMessage({
+                type: 'getRunParametersResponse',
+                success: true,
+                data: { found: false, runId },
+              });
+              return;
+            }
+
             this._panel.webview.postMessage({
               type: 'getRunParametersResponse',
               success: true,
-              data: { found: false, runId },
+              data: {
+                found: true,
+                runId,
+                workflowFilename: recovered.workflowFilename,
+                branch: recovered.branch,
+                inputs: recovered.inputs,
+              },
             });
-            return;
+          } catch (error) {
+            this._panel.webview.postMessage({
+              type: 'getRunParametersResponse',
+              success: false,
+              error: error instanceof Error ? error.message : 'Failed to recover run parameters',
+              data: { runId },
+            });
           }
-
-          this._panel.webview.postMessage({
-            type: 'getRunParametersResponse',
-            success: true,
-            data: {
-              found: true,
-              runId,
-              workflowFilename: recovered.workflowFilename,
-              branch: recovered.branch,
-              inputs: recovered.inputs,
-            },
-          });
-        } catch (error) {
-          this._panel.webview.postMessage({
-            type: 'getRunParametersResponse',
-            success: false,
-            error: error instanceof Error ? error.message : 'Failed to recover run parameters',
-            data: { runId },
-          });
+          break;
         }
-        break;
-      }
 
-      case 'getWorkflows': {
-        console.log('[WorkflowRunsPanel] Received getWorkflows message');
-        await this._sendWorkflows();
-        break;
-      }
-
-      case 'getWorkflowId': {
-        const { workflowFilename } = (message.data || {}) as {
-          workflowFilename: string;
-        };
-        if (workflowFilename) {
-          await this._sendWorkflowId(workflowFilename);
+        case 'getWorkflows': {
+          console.log('[WorkflowRunsPanel] Received getWorkflows message');
+          await this._sendWorkflows();
+          break;
         }
-        break;
-      }
 
-      // Disabled: GitHub API doesn't provide job summary content via REST API.
-      // The button now opens the browser directly instead of using this modal flow.
-      case 'getGitHubSummary': {
-        await this._getGitHubSummary(message.data as { runId: number });
-        break;
-      }
-
-      // Get summary for a single job
-      case 'getJobSummary': {
-        await this._getJobSummary(message.data as { jobId: number; jobName: string });
-        break;
-      }
-
-      case 'openGitHubSummaryInTab': {
-        await this._openGitHubSummaryInTab(
-          message.data as {
-            runId: number;
-            runName: string;
-            markdownContent: string;
-            htmlContent: string;
-            htmlUrl?: string;
+        case 'getWorkflowId': {
+          const { workflowFilename } = (message.data || {}) as {
+            workflowFilename: string;
+          };
+          if (workflowFilename) {
+            await this._sendWorkflowId(workflowFilename);
           }
-        );
-        break;
-      }
-
-      case 'openInBrowser': {
-        const { url } = (message.data || {}) as { url: string };
-        if (url) {
-          vscode.env.openExternal(vscode.Uri.parse(url));
+          break;
         }
-        break;
-      }
 
-      // Handle external URL clicks from markdown content
-      case 'openExternalUrl': {
-        const { url } = (message.data || {}) as { url: string };
-        if (url) {
-          vscode.env.openExternal(vscode.Uri.parse(url));
+        // Disabled: GitHub API doesn't provide job summary content via REST API.
+        // The button now opens the browser directly instead of using this modal flow.
+        case 'getGitHubSummary': {
+          await this._getGitHubSummary(message.data as { runId: number });
+          break;
         }
-        break;
+
+        // Get summary for a single job
+        case 'getJobSummary': {
+          await this._getJobSummary(message.data as { jobId: number; jobName: string });
+          break;
+        }
+
+        case 'openGitHubSummaryInTab': {
+          await this._openGitHubSummaryInTab(
+            message.data as {
+              runId: number;
+              runName: string;
+              markdownContent: string;
+              htmlContent: string;
+              htmlUrl?: string;
+            }
+          );
+          break;
+        }
+
+        case 'openInBrowser': {
+          const { url } = (message.data || {}) as { url: string };
+          if (url) {
+            vscode.env.openExternal(vscode.Uri.parse(url));
+          }
+          break;
+        }
+
+        // Handle external URL clicks from markdown content
+        case 'openExternalUrl': {
+          const { url } = (message.data || {}) as { url: string };
+          if (url) {
+            vscode.env.openExternal(vscode.Uri.parse(url));
+          }
+          break;
+        }
+      }
+    } catch (error) {
+      // Log the error and send an error response to the webview
+      // This prevents silent failures that could leave the UI in a stuck state
+      console.error(
+        '[WorkflowRunsPanel] Error handling message:',
+        message.type,
+        error instanceof Error ? error.message : error
+      );
+
+      // For message types that expect a response, send an error response
+      // This helps the webview recover from stuck loading states
+      const responseType = getResponseTypeForMessage(message.type);
+      if (responseType) {
+        this._panel.webview.postMessage(createErrorResponse(responseType, error));
       }
     }
   }
