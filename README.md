@@ -103,63 +103,103 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 
 ## 📸 Screenshots
 
-### Workflow Dispatch
+Explore the key features of GitHub Actions Runner, organized by functionality.
 
-![Workflow Dispatch](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/hero-workflow-dispatch.png)
+---
 
-> Select workflows, fill inputs, and dispatch with one click
+### 🚀 Getting Started
 
-### Workflow Runs
+#### Workflow Dispatch Panel
 
-![Workflow Runs](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-runs-panel.png)
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/hero-workflow-dispatch.png" alt="Workflow Dispatch" width="450">
 
-> Monitor runs in real-time with powerful filters
+> Select workflows, fill dynamic inputs, and dispatch with one click
 
-### Preset Management
+---
 
-![Preset Management](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management.png)
+### 📊 Monitoring & Analysis
 
-> Save and load workflow configurations as reusable presets
+#### Workflow Runs Panel
 
-![Preset Management Expanded](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management-expanded.png)
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-runs-panel.png" alt="Workflow Runs" width="100%">
 
-> Full preset management with rename, export/import, and storage info — share configurations with your team
+> Monitor runs in real-time with powerful filters and pagination
 
-### Favorites
+#### Job Dependencies Graph & Step Details
 
-![Workflow Favorites](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-favorites.png)
+<table>
+<tr>
+<td width="60%">
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/job-dependencies-graph.png" alt="Job Dependencies Graph" width="100%">
+<p><em>Visualize job dependencies with an interactive graph showing execution stages and matrix jobs</em></p>
+</td>
+<td width="40%">
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/job-step-details.png" alt="Job Step Details" width="100%">
+<p><em>Click any job to view step-by-step execution details</em></p>
+</td>
+</tr>
+</table>
 
-> Quick access to frequently used workflows
+#### Workflow Summary & Logs
 
-### Logs View
+<table>
+<tr>
+<td width="50%">
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-summary.png" alt="Workflow Summary" width="100%">
+<p><em>Intelligent summaries parsed from job logs — security scan results, build metadata, and error details</em></p>
+</td>
+<td width="50%">
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/logs-view.png" alt="Logs View" width="100%">
+<p><em>View workflow logs directly in VS Code editor</em></p>
+</td>
+</tr>
+</table>
 
-![Logs View](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/logs-view.png)
+---
 
-> View workflow logs directly in VS Code editor
+### 💾 Organization & Productivity
 
-### Job Dependencies Graph
+#### Preset Management
 
-![Job Dependencies Graph](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/job-dependencies-graph.png)
+Save and load workflow configurations as reusable presets — perfect for team collaboration.
 
-> Visualize job dependencies with an interactive graph showing execution stages, matrix jobs, and real-time status updates. Click jobs to view step details.
+<table>
+<tr>
+<td width="50%">
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management.png" alt="Preset Management" width="100%">
+<p><em>Quick preset dropdown</em></p>
+</td>
+<td width="50%">
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/preset-management-expanded.png" alt="Preset Management Expanded" width="100%">
+<p><em>Full panel with rename, export/import, and storage info</em></p>
+</td>
+</tr>
+</table>
 
-### Job Step Details
+#### Favorites & Watched Runs
 
-![Job Step Details](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/job-step-details.png)
+<table>
+<tr>
+<td width="50%">
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-favorites.png" alt="Workflow Favorites" width="100%">
+<p><em>Mark frequently used workflows as favorites for instant access</em></p>
+</td>
+<td width="50%">
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/marked-workflows.png" alt="Marked Workflows" width="100%">
+<p><em>Watch important runs to track them regardless of filters</em></p>
+</td>
+</tr>
+</table>
 
-> Click any job to view step-by-step execution details with status indicators and timing information
+---
 
-### Workflow Summary
+### ⚙️ Configuration
 
-![Workflow Summary](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-summary.png)
+#### Settings Panel
 
-> Get intelligent summaries parsed from job logs showing security scan results, build metadata, and error details — without scrolling through raw logs
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/settings-panel.png" alt="Settings Panel" width="600">
 
-### Settings Panel
-
-![Settings Panel](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/settings-panel.png)
-
-> Configure refresh intervals, run limits, and date filters with intuitive in-panel settings. Toggle between General and Notifications tabs.
+> Configure refresh intervals, run limits, date filters, and notifications with intuitive in-panel settings
 
 ---
 
