@@ -29,8 +29,6 @@ function unescapeContent(text: string): string {
       .replace(/\\"/g, '"')
       // Escaped single quotes
       .replace(/\\'/g, "'")
-      // Double backslash → single backslash (must come after other escape sequences)
-      .replace(/\\\\/g, '\\')
       // Escaped newlines
       .replace(/\\n/g, '\n')
       // Escaped tabs
@@ -40,6 +38,9 @@ function unescapeContent(text: string): string {
       // Remove any remaining standalone backslashes before printable chars
       // (often artifacts from shell escaping)
       .replace(/\\(?=[^\s\\])/g, '')
+      // Double backslash → single backslash (MUST come LAST to avoid double-unescaping)
+      // See: https://cwe.mitre.org/data/definitions/116.html
+      .replace(/\\\\/g, '\\')
   );
 }
 

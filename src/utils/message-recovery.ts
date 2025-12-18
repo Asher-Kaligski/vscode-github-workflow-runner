@@ -152,4 +152,3 @@ export function formatStuckStateDiagnostic(
   }
   return parts.join(', ');
 }
-
