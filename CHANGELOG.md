@@ -7,9 +7,9 @@ All notable changes to the "github-workflow-runner" extension will be documented
 ### ✨ New Features
 
 - **Smart File Input:** Enhanced input fields for workflow parameters with intelligent file handling.
-  - **Three Input Modes:** Switch between Text (direct input), Path (file path selection), and Content (extract values from files) modes using the mode selector icon
-  - **File Path Autocomplete:** Type a path and get real-time suggestions from your workspace files
-  - **Content Extraction:** Load values from JSON/YAML files with configurable extraction options:
+  - **Three Input Modes:** Switch between Text (direct input), Path (insert file path), and Content (extract values from files) modes using the mode selector icon
+  - **Path Mode:** Browse and insert file paths from your workspace
+  - **Content Extraction:** Load values from JSON, YAML, CSV, ENV, and text files with multi-select:
     - Extract property names, property values, or specific keys from JSON arrays
     - Support for nested arrays with path selection
     - Configurable delimiters (comma, pipe, newline, space, or custom)
@@ -20,6 +20,7 @@ All notable changes to the "github-workflow-runner" extension will be documented
     - Value favorites for frequently used values
     - Reload from file with saved configuration
   - **Open in Editor:** Quick action to open any file path in VS Code editor
+  - **Discoverability Improvements:** Mode selector button now features a hover chevron indicator and first-time pulse animation to help users discover the feature
 
 ### 🔧 Technical Improvements
 
