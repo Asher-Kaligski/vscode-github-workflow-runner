@@ -1,13 +1,29 @@
 /**
  * Sidebar webview provider for workflow dispatch
  */
+import * as path from 'path';
 import * as vscode from 'vscode';
 import { dispatchWorkflowWithRunId } from '../api/workflow-dispatcher';
-import type { ExtensionConfig, WebviewMessage, WorkflowDefinition } from '../types/workflow-types';
+import type {
+  AddFileFavoriteMessage,
+  ExtensionConfig,
+  FileContentConfig,
+  GetFileSuggestionsMessage,
+  GetSmartFileInputDataMessage,
+  OpenFileInEditorMessage,
+  ParseFileForSelectionMessage,
+  RemoveFileFavoriteMessage,
+  SaveValueFavoritesMessage,
+  TrackRecentFileMessage,
+  UpdateFileFavoriteMessage,
+  WebviewMessage,
+  WorkflowDefinition,
+} from '../types/workflow-types';
 import { isAuthenticated, signOut } from '../utils/authenticate';
 import { getConfig } from '../utils/config';
 import { FavoritesManager } from '../utils/favorites-manager';
 import { getNonce } from '../utils/get-nonce';
+import { SmartFileInputManager } from '../utils/smart-file-input-manager';
 import { ensureGitContextValidOrWarn, refreshGitContext } from '../utils/git-context-validation';
 import { getCurrentBranch, getRecentBranches, getRepositoryInfo } from '../utils/git-operations';
 import { fetchGitHubUserInfo } from '../utils/github-user';
@@ -392,6 +408,43 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
 
       case 'reloadExtensionData':
         await this._reloadExtensionData();
+        break;
+
+      // SmartFileInput message handlers
+      case 'getSmartFileInputData':
+        await this._getSmartFileInputData(message.data as GetSmartFileInputDataMessage);
+        break;
+
+      case 'addFileFavorite':
+        await this._addSmartFileFavorite(message.data as AddFileFavoriteMessage);
+        break;
+
+      case 'removeFileFavorite':
+        await this._removeSmartFileFavorite(message.data as RemoveFileFavoriteMessage);
+        break;
+
+      case 'updateFileFavorite':
+        await this._updateSmartFileFavorite(message.data as UpdateFileFavoriteMessage);
+        break;
+
+      case 'trackRecentFile':
+        await this._trackSmartFileRecent(message.data as TrackRecentFileMessage);
+        break;
+
+      case 'getFileSuggestions':
+        await this._getFileSuggestions(message.data as GetFileSuggestionsMessage);
+        break;
+
+      case 'parseFileForSelection':
+        await this._parseFileForSelection(message.data as ParseFileForSelectionMessage);
+        break;
+
+      case 'openFileInEditor':
+        await this._openFileInEditor(message.data as OpenFileInEditorMessage);
+        break;
+
+      case 'saveValueFavorites':
+        await this._saveValueFavorites(message.data as SaveValueFavoritesMessage);
         break;
     }
   }
@@ -1246,7 +1299,12 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   /**
    * Select a file using VS Code file picker
    */
-  private async _selectFile(data: { parameterName: string; currentPath?: string; filters?: any }) {
+  private async _selectFile(data: {
+    parameterName: string;
+    currentPath?: string;
+    filters?: any;
+    mode?: 'path' | 'content';
+  }) {
     try {
       // Determine default URI
       let defaultUri: vscode.Uri | undefined;
@@ -1276,6 +1334,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           success: false,
           data: {
             parameterName: data.parameterName,
+            mode: data.mode,
           },
           error: 'File selection cancelled',
         });
@@ -1310,6 +1369,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
           path: fileUri.fsPath,
           size: stat.size,
           relativePath,
+          mode: data.mode,
         },
         warning,
       });
@@ -1319,6 +1379,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         success: false,
         data: {
           parameterName: data.parameterName,
+          mode: data.mode,
         },
         error: error instanceof Error ? error.message : 'Failed to select file',
       });
@@ -1637,5 +1698,307 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       success: true,
       data: { info },
     });
+  }
+
+  // ============================================
+  // SmartFileInput handlers
+  // ============================================
+
+  /**
+   * Get SmartFileInput data (recent files and favorites) for a specific scope
+   */
+  private async _getSmartFileInputData(data: GetSmartFileInputDataMessage) {
+    try {
+      const key = {
+        owner: data.repoOwner,
+        repo: data.repoName,
+        workflowFilename: data.workflowPath,
+        inputName: data.inputName,
+      };
+      const inputData = await SmartFileInputManager.getData(key);
+
+      this._view?.webview.postMessage({
+        type: 'smartFileInputDataResponse',
+        success: true,
+        data: {
+          inputName: data.inputName,
+          recentFiles: inputData.recentFiles,
+          favorites: inputData.favorites,
+          valueFavorites: inputData.valueFavorites || [],
+        },
+      });
+    } catch (error) {
+      this._view?.webview.postMessage({
+        type: 'smartFileInputDataResponse',
+        success: false,
+        data: { inputName: data.inputName },
+        error: error instanceof Error ? error.message : 'Failed to get SmartFileInput data',
+      });
+    }
+  }
+
+  /**
+   * Add a file to SmartFileInput favorites
+   */
+  private async _addSmartFileFavorite(data: AddFileFavoriteMessage) {
+    try {
+      const key = {
+        owner: data.repoOwner,
+        repo: data.repoName,
+        workflowFilename: data.workflowPath,
+        inputName: data.inputName,
+      };
+      const favorite = await SmartFileInputManager.addFavorite(
+        key,
+        data.relativePath,
+        data.absolutePath,
+        data.nickname
+      );
+
+      this._view?.webview.postMessage({
+        type: 'addFileFavoriteResponse',
+        success: true,
+        data: {
+          inputName: data.inputName,
+          favorite,
+        },
+      });
+    } catch (error) {
+      this._view?.webview.postMessage({
+        type: 'addFileFavoriteResponse',
+        success: false,
+        data: { inputName: data.inputName },
+        error: error instanceof Error ? error.message : 'Failed to add favorite',
+      });
+    }
+  }
+
+  /**
+   * Remove a file from SmartFileInput favorites
+   */
+  private async _removeSmartFileFavorite(data: RemoveFileFavoriteMessage) {
+    try {
+      const key = {
+        owner: data.repoOwner,
+        repo: data.repoName,
+        workflowFilename: data.workflowPath,
+        inputName: data.inputName,
+      };
+      await SmartFileInputManager.removeFavorite(key, data.favoriteId);
+
+      this._view?.webview.postMessage({
+        type: 'removeFileFavoriteResponse',
+        success: true,
+        data: {
+          inputName: data.inputName,
+          favoriteId: data.favoriteId,
+        },
+      });
+    } catch (error) {
+      this._view?.webview.postMessage({
+        type: 'removeFileFavoriteResponse',
+        success: false,
+        data: { inputName: data.inputName },
+        error: error instanceof Error ? error.message : 'Failed to remove favorite',
+      });
+    }
+  }
+
+  /**
+   * Update a SmartFileInput favorite (nickname or config)
+   */
+  private async _updateSmartFileFavorite(data: UpdateFileFavoriteMessage) {
+    try {
+      const key = {
+        owner: data.repoOwner,
+        repo: data.repoName,
+        workflowFilename: data.workflowPath,
+        inputName: data.inputName,
+      };
+      const updated = await SmartFileInputManager.updateFavorite(key, data.favoriteId, {
+        nickname: data.nickname,
+        config: data.config,
+      });
+
+      this._view?.webview.postMessage({
+        type: 'updateFileFavoriteResponse',
+        success: true,
+        data: {
+          inputName: data.inputName,
+          favorite: updated,
+        },
+      });
+    } catch (error) {
+      this._view?.webview.postMessage({
+        type: 'updateFileFavoriteResponse',
+        success: false,
+        data: { inputName: data.inputName },
+        error: error instanceof Error ? error.message : 'Failed to update favorite',
+      });
+    }
+  }
+
+  /**
+   * Track a file as recently used
+   */
+  private async _trackSmartFileRecent(data: TrackRecentFileMessage) {
+    try {
+      const key = {
+        owner: data.repoOwner,
+        repo: data.repoName,
+        workflowFilename: data.workflowPath,
+        inputName: data.inputName,
+      };
+      await SmartFileInputManager.trackRecentFile(
+        key,
+        data.relativePath,
+        data.absolutePath,
+        data.config,
+        data.mode
+      );
+
+      this._view?.webview.postMessage({
+        type: 'trackRecentFileResponse',
+        success: true,
+        data: { inputName: data.inputName },
+      });
+    } catch (error) {
+      // Silent failure for tracking - not critical
+      console.error('Failed to track recent file:', error);
+    }
+  }
+
+  /**
+   * Get file path suggestions for autocomplete
+   */
+  private async _getFileSuggestions(data: GetFileSuggestionsMessage) {
+    try {
+      const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!workspaceRoot) {
+        this._view?.webview.postMessage({
+          type: 'fileSuggestionsResponse',
+          success: true,
+          data: {
+            inputName: data.inputName,
+            suggestions: [],
+          },
+        });
+        return;
+      }
+
+      const suggestions = await SmartFileInputManager.getFileSuggestions(
+        workspaceRoot,
+        data.partialPath,
+        10
+      );
+
+      this._view?.webview.postMessage({
+        type: 'fileSuggestionsResponse',
+        success: true,
+        data: {
+          inputName: data.inputName,
+          suggestions,
+        },
+      });
+    } catch (error) {
+      this._view?.webview.postMessage({
+        type: 'fileSuggestionsResponse',
+        success: false,
+        data: { inputName: data.inputName, suggestions: [] },
+        error: error instanceof Error ? error.message : 'Failed to get suggestions',
+      });
+    }
+  }
+
+  /**
+   * Parse file content for multi-select modal
+   */
+  private async _parseFileForSelection(data: ParseFileForSelectionMessage) {
+    try {
+      // Resolve relative path to absolute path using workspace folder
+      let absolutePath = data.path;
+      if (!path.isAbsolute(data.path)) {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (workspaceFolder) {
+          absolutePath = path.join(workspaceFolder.uri.fsPath, data.path);
+        }
+      }
+
+      const fileUri = vscode.Uri.file(absolutePath);
+      const content = await vscode.workspace.fs.readFile(fileUri);
+      const text = Buffer.from(content).toString('utf8');
+
+      const parsed = SmartFileInputManager.parseFileContent(text, data.path, data.config);
+
+      this._view?.webview.postMessage({
+        type: 'parseFileForSelectionResponse',
+        success: true,
+        data: {
+          inputName: data.inputName,
+          parsedContent: parsed,
+          filePath: data.path,
+        },
+      });
+    } catch (error) {
+      this._view?.webview.postMessage({
+        type: 'parseFileForSelectionResponse',
+        success: false,
+        data: { inputName: data.inputName },
+        error: error instanceof Error ? error.message : 'Failed to parse file',
+      });
+    }
+  }
+
+  /**
+   * Open a file in VS Code editor - resolves relative paths using workspace
+   */
+  private async _openFileInEditor(data: OpenFileInEditorMessage) {
+    try {
+      // Resolve relative path to absolute path using workspace folder
+      let absolutePath = data.path;
+      if (!path.isAbsolute(data.path)) {
+        const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
+        if (workspaceFolder) {
+          absolutePath = path.join(workspaceFolder.uri.fsPath, data.path);
+        }
+      }
+      const fileUri = vscode.Uri.file(absolutePath);
+      await vscode.window.showTextDocument(fileUri);
+    } catch (error) {
+      vscode.window.showErrorMessage(
+        `Failed to open file: ${error instanceof Error ? error.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Save value favorites for a specific input
+   */
+  private async _saveValueFavorites(data: SaveValueFavoritesMessage) {
+    try {
+      const key = {
+        owner: data.repoOwner,
+        repo: data.repoName,
+        workflowFilename: data.workflowPath,
+        inputName: data.inputName,
+      };
+      const savedFavorites = await SmartFileInputManager.saveValueFavorites(key, data.favorites);
+
+      this._view?.webview.postMessage({
+        type: 'saveValueFavoritesResponse',
+        success: true,
+        data: {
+          inputName: data.inputName,
+          favorites: savedFavorites,
+        },
+      });
+    } catch (error) {
+      this._view?.webview.postMessage({
+        type: 'saveValueFavoritesResponse',
+        success: false,
+        data: { inputName: data.inputName },
+        error: error instanceof Error ? error.message : 'Failed to save value favorites',
+      });
+    }
   }
 }

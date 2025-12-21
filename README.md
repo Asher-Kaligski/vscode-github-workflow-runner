@@ -30,7 +30,18 @@ Stop switching between VS Code and GitHub's web UI. Dispatch workflows, monitor 
 - **Auto-generated forms** from your workflow YAML — no manual configuration
 - **Intelligent input recovery** — rerun workflows with prefilled inputs from previous runs
 - **Branch auto-detection** — automatically uses your current Git branch
-- **File path detection** — browse and select files with VS Code's native picker
+- **Smart File Input** — enhanced input fields with file path autocomplete, content extraction, and favorites
+
+### 📁 **Smart File Input** _(New in v1.3.0)_
+
+Enhanced input fields that make working with file-based values effortless:
+
+- **Three Input Modes:** Switch between Text, Path, and Content modes using the mode selector
+- **File Path Autocomplete:** Get real-time suggestions as you type file paths
+- **Content Extraction:** Load values from JSON/YAML files with configurable extraction options
+- **File Favorites:** Save frequently used files with custom nicknames
+- **Recent Files:** Automatically tracks your recently used files per input
+- **Preview/Edit Modal:** View and edit multi-value inputs in a list format
 
 ### 💾 **Reusable Presets**
 

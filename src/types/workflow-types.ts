@@ -548,6 +548,251 @@ export interface FilePickerState {
 }
 
 /**
+ * Smart file input modes
+ */
+export type SmartInputMode = 'text' | 'path' | 'content';
+
+/**
+ * Delimiter options for joining values from file content
+ */
+export type DelimiterOption = 'comma' | 'pipe' | 'newline' | 'space' | 'custom';
+
+/**
+ * JSON extraction mode for loading content from JSON files
+ */
+export type JsonExtractionMode = 'full' | 'property-names' | 'property-values' | 'specific-key';
+
+/**
+ * Configuration for how to load content from a file
+ */
+export interface FileContentConfig {
+  /** Delimiter used to join selected values */
+  delimiter: DelimiterOption;
+  /** Custom delimiter string (when delimiter is 'custom') */
+  customDelimiter?: string;
+  /** For JSON files: extraction mode */
+  jsonExtractionMode?: JsonExtractionMode;
+  /** For JSON files: specific key to extract (e.g., "tag", "name") */
+  jsonSpecificKey?: string;
+  /** For JSON files: path to array containing objects */
+  jsonArrayPath?: string;
+  /** Last selected values (for restoring exact selection) */
+  selectedValues?: string[];
+}
+
+/**
+ * Favorite value for a specific input field
+ * Used for quick access to frequently used values in the Preview/Edit modal
+ */
+export interface InputValueFavorite {
+  /** The actual value */
+  value: string;
+  /** Optional label for display */
+  label?: string;
+  /** Timestamp when added */
+  addedAt: number;
+}
+
+/**
+ * A saved file favorite with optional nickname and configuration
+ */
+export interface FileFavorite {
+  /** Unique identifier */
+  id: string;
+  /** File path relative to workspace */
+  relativePath: string;
+  /** Absolute file path */
+  absolutePath: string;
+  /** User-defined nickname for easy identification */
+  nickname?: string;
+  /** Saved configuration for loading content from this file */
+  config?: FileContentConfig;
+  /** Timestamp when favorite was added */
+  addedAt: number;
+  /** Timestamp when favorite was last used */
+  lastUsedAt?: number;
+}
+
+/**
+ * Recent file entry
+ */
+export interface RecentFile {
+  /** File path relative to workspace */
+  relativePath: string;
+  /** Absolute file path */
+  absolutePath: string;
+  /** Timestamp when file was last used */
+  lastUsedAt: number;
+  /** Number of times this file was used */
+  useCount: number;
+  /** Last used configuration for loading content from this file */
+  lastConfig?: FileContentConfig;
+  /** Last used mode: 'path' (insert file path) or 'content' (load file content) */
+  lastMode?: 'path' | 'content';
+}
+
+/**
+ * Storage key for file favorites and recent files
+ * Scoped to repository + workflow file combination
+ */
+export interface SmartFileInputStorageKey {
+  /** Repository owner */
+  owner: string;
+  /** Repository name */
+  repo: string;
+  /** Workflow YAML filename */
+  workflowFilename: string;
+  /** Input parameter name (optional, for input-specific storage) */
+  inputName?: string;
+}
+
+/**
+ * Smart file input data for a specific repo+workflow+input combination
+ */
+export interface SmartFileInputData {
+  /** Recent files (max 10) */
+  recentFiles: RecentFile[];
+  /** Favorite files with configurations */
+  favorites: FileFavorite[];
+  /** Favorite values for quick selection in Preview/Edit modal */
+  valueFavorites?: InputValueFavorite[];
+}
+
+/**
+ * Parsed content item from a file
+ */
+export interface ParsedContentItem {
+  /** Display text for the item */
+  display: string;
+  /** Actual value to use when selected */
+  value: string;
+  /** Source key or index in the file */
+  source: string;
+  /** Whether this item is currently selected */
+  selected: boolean;
+}
+
+/**
+ * Result of parsing file content for selection
+ */
+export interface ParsedFileContent {
+  /** Parsed items available for selection */
+  items: ParsedContentItem[];
+  /** Detected file type */
+  fileType: 'json' | 'yaml' | 'text' | 'csv';
+  /** Detected structure (e.g., array of objects, key-value pairs) */
+  structure?: string;
+  /** Available extraction modes for this file */
+  availableExtractionModes: JsonExtractionMode[];
+  /** Suggested keys for extraction (for JSON files with arrays of objects) */
+  suggestedKeys?: string[];
+  /** Nested arrays detected in JSON objects (property name -> properties available in that array) */
+  nestedArrays?: Record<string, string[]>;
+  /** Currently selected array path for nested extraction */
+  selectedArrayPath?: string;
+}
+
+// ============================================
+// Smart File Input Message Data Interfaces
+// ============================================
+
+/**
+ * Message data for getting SmartFileInput data
+ */
+export interface GetSmartFileInputDataMessage {
+  repoOwner: string;
+  repoName: string;
+  workflowPath: string;
+  inputName: string;
+}
+
+/**
+ * Message data for adding a file favorite
+ */
+export interface AddFileFavoriteMessage {
+  repoOwner: string;
+  repoName: string;
+  workflowPath: string;
+  inputName: string;
+  relativePath: string;
+  absolutePath: string;
+  nickname?: string;
+}
+
+/**
+ * Message data for removing a file favorite
+ */
+export interface RemoveFileFavoriteMessage {
+  repoOwner: string;
+  repoName: string;
+  workflowPath: string;
+  inputName: string;
+  favoriteId: string;
+}
+
+/**
+ * Message data for updating a file favorite
+ */
+export interface UpdateFileFavoriteMessage {
+  repoOwner: string;
+  repoName: string;
+  workflowPath: string;
+  inputName: string;
+  favoriteId: string;
+  nickname?: string;
+  config?: FileContentConfig;
+}
+
+/**
+ * Message data for tracking a recent file
+ */
+export interface TrackRecentFileMessage {
+  repoOwner: string;
+  repoName: string;
+  workflowPath: string;
+  inputName: string;
+  relativePath: string;
+  absolutePath: string;
+  config?: FileContentConfig;
+  mode?: 'path' | 'content';
+}
+
+/**
+ * Message data for getting file suggestions
+ */
+export interface GetFileSuggestionsMessage {
+  partialPath: string;
+  inputName: string;
+}
+
+/**
+ * Message data for parsing file for selection
+ */
+export interface ParseFileForSelectionMessage {
+  path: string;
+  inputName: string;
+  config?: Partial<FileContentConfig>;
+}
+
+/**
+ * Message data for opening a file in editor
+ */
+export interface OpenFileInEditorMessage {
+  path: string;
+}
+
+/**
+ * Message data for saving value favorites
+ */
+export interface SaveValueFavoritesMessage {
+  repoOwner: string;
+  repoName: string;
+  workflowPath: string;
+  inputName: string;
+  favorites: InputValueFavorite[];
+}
+
+/**
  * Message types for webview communication
  */
 export type WebviewMessageType =
@@ -608,6 +853,28 @@ export type WebviewMessageType =
   | 'readFileContentResponse'
   | 'validateFilePath'
   | 'validateFilePathResponse'
+  | 'getSmartFileInputData'
+  | 'getSmartFileInputDataResponse'
+  | 'saveSmartFileInputData'
+  | 'saveSmartFileInputDataResponse'
+  | 'addFileFavorite'
+  | 'addFileFavoriteResponse'
+  | 'removeFileFavorite'
+  | 'removeFileFavoriteResponse'
+  | 'updateFileFavorite'
+  | 'updateFileFavoriteResponse'
+  | 'trackRecentFile'
+  | 'trackRecentFileResponse'
+  | 'saveValueFavorites'
+  | 'saveValueFavoritesResponse'
+  | 'browseFiles'
+  | 'browseFilesResponse'
+  | 'getFileSuggestions'
+  | 'getFileSuggestionsResponse'
+  | 'openFileInEditor'
+  | 'openFileInEditorResponse'
+  | 'parseFileForSelection'
+  | 'parseFileForSelectionResponse'
   | 'getWorkflowRunJobs'
   | 'getWorkflowRunJobsResponse'
   | 'viewWorkflowRunLogs'

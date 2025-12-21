@@ -8,7 +8,13 @@
     WorkflowDefinition,
     WorkflowFavorite,
     WorkflowTemplate,
+    FileFavorite,
+    RecentFile,
+    ParsedFileContent,
+    FileContentConfig,
   } from '../src/types/workflow-types';
+  import SmartFileInput from './components/SmartFileInput.svelte';
+  import FileContentModal from './components/FileContentModal.svelte';
 
   let authenticated = false;
   let workflows: WorkflowDefinition[] = [];
@@ -116,6 +122,58 @@
   let toastIdCounter = 1;
   let reduceMotion = false;
   let reloadingInputs = false;
+
+  // SmartFileInput state
+  let smartFileInputData: Map<string, { recentFiles: RecentFile[]; favorites: FileFavorite[] }> =
+    new Map();
+  let smartFileInputLoading: Map<string, boolean> = new Map();
+  let smartFileInputErrors: Map<string, string | null> = new Map();
+  let smartFileInputSuggestions: Map<string, string[]> = new Map();
+  let smartFileInputForceMode: Map<string, 'text' | 'path' | 'content' | null> = new Map();
+  let smartFileInputValueFavorites: Map<
+    string,
+    Array<{ value: string; label?: string; addedAt: number }>
+  > = new Map();
+
+  // FileContentModal state
+  let showFileContentModal: boolean = false;
+  let fileContentModalInputName: string = '';
+  let fileContentModalFilePath: string = '';
+  let fileContentModalParsedContent: ParsedFileContent | null = null;
+  let fileContentModalLoading: boolean = false;
+  let fileContentModalError: string | null = null;
+  let fileContentModalPreSelectedValues: string[] = []; // Issue 9: Pre-selected values for reload
+
+  // Preview modal state
+  let showPreviewModal: boolean = false;
+  let previewModalInputName: string = '';
+  let previewModalValue: string = '';
+  let previewModalItems: Array<{ value: string; selected: boolean }> = [];
+  let previewModalDelimiter: string = ',';
+  let previewModalDelimiterName: string = 'Comma';
+  let previewModalMode: 'text' | 'list' = 'text';
+  let previewModalNewItemValue: string = '';
+  let previewModalShowFavorites: boolean = false;
+
+  // Value favorites per input (loaded from storage)
+  let previewModalValueFavorites: Array<{ value: string; label?: string; addedAt: number }> = [];
+
+  // Delimiter options for preview modal
+  const DELIMITER_OPTIONS = [
+    { delimiter: ',', name: 'Comma', display: ',' },
+    { delimiter: '|', name: 'Pipe', display: '|' },
+    { delimiter: '\n', name: 'Newline', display: '\\n' },
+    { delimiter: ';', name: 'Semicolon', display: ';' },
+    { delimiter: ' ', name: 'Space', display: '(space)' },
+  ];
+
+  // Delimiter detection patterns for preview modal (order matters - check more specific first)
+  const DELIMITER_PATTERNS = [
+    { delimiter: '|', name: 'Pipe' },
+    { delimiter: ';', name: 'Semicolon' },
+    { delimiter: '\n', name: 'Newline' },
+    { delimiter: ',', name: 'Comma' },
+  ];
 
   function showToast(message: string, type: ToastType = 'info', duration = 4000) {
     const id = toastIdCounter++;
@@ -526,11 +584,22 @@
   <li><strong>Real-time Monitoring:</strong> Track workflow runs with auto-refresh and live status updates</li>
   <li><strong>Advanced Filtering:</strong> Filter runs by workflow, actor, PR, branch, or bot runs</li>
   <li><strong>Preset Management:</strong> Save, load, export, and import workflow input configurations</li>
-  <li><strong>Favorites System:</strong> Quick access to frequently used workflows</li>
+  <li><strong>Smart Input:</strong> Enhanced input fields with file path selection, content extraction, and multi-value editing</li>
+  <li><strong>Favorites System:</strong> Quick access to frequently used workflows and input values</li>
   <li><strong>Artifact Management:</strong> Download and view workflow artifacts</li>
   <li><strong>Parameter Recovery:</strong> Automatically recover inputs from previous runs</li>
   <li><strong>Logs & Jobs:</strong> View detailed logs and job information</li>
 </ul>
+
+<h4>📝 Smart Input Features</h4>
+<p>Smart Input provides three modes for entering workflow parameters:</p>
+<ul>
+  <li><strong>Text Mode</strong> <span class="codicon codicon-symbol-string"></span>: Enter text directly (default)</li>
+  <li><strong>Path Mode</strong> <span class="codicon codicon-file-symlink-file"></span>: Browse and insert file paths from your workspace</li>
+  <li><strong>Content Mode</strong> <span class="codicon codicon-file-code"></span>: Extract values from JSON/YAML files (e.g., test tags, config values)</li>
+</ul>
+<p><strong>Preview/Edit</strong> <span class="codicon codicon-eye"></span>: Click the eye icon to preview and edit multi-value inputs. Supports comma, pipe (|), newline, and other delimiters. Select/unselect items and save favorites.</p>
+<p><strong>Recent & Favorites</strong>: Access recently used files and save favorites for quick reuse.</p>
 
 <h4>🎯 Quick Start</h4>
 <ol>
@@ -548,6 +617,7 @@
   <li>Use the <span class="codicon codicon-go-to-file"></span> <strong>View File</strong> button to open workflow YAML files in the editor</li>
   <li>Export presets to share configurations with your team</li>
   <li>Use artifact patterns (in Advanced Configuration) to automatically recover parameters from previous runs</li>
+  <li>Use Smart Input's Content Mode to extract test tags or config values from JSON/YAML files</li>
 </ul>
 
 <h4>📚 Documentation</h4>
@@ -1227,9 +1297,43 @@
       case 'selectFileResponse':
         {
           const paramName = message.data?.parameterName;
+          const mode = message.data?.mode;
           if (paramName) {
-            // Check if this is a "load contents" request
-            if (paramName.startsWith('__loadContents_')) {
+            // Check if this is a SmartFileInput request (has mode parameter)
+            if (mode) {
+              // Clear SmartFileInput loading state
+              smartFileInputLoading.set(paramName, false);
+              smartFileInputLoading = smartFileInputLoading;
+
+              if (message.success) {
+                const relativePath = message.data.relativePath || message.data.path;
+
+                if (mode === 'content') {
+                  // For content mode, open the FileContentModal
+                  handleSmartInputLoadContent(paramName, relativePath);
+                } else {
+                  // For path mode, set the value directly
+                  inputs[paramName] = relativePath;
+                  inputs = inputs;
+                  // Track as recent file with path mode
+                  handleSmartInputTrackRecent(paramName, relativePath, undefined, 'path');
+                  // Auto-switch to text mode after browse, then clear force mode
+                  smartFileInputForceMode.set(paramName, 'text');
+                  smartFileInputForceMode = smartFileInputForceMode;
+                  // Clear force mode after a tick so component can react but future mode switches work
+                  setTimeout(() => {
+                    smartFileInputForceMode.set(paramName, null);
+                    smartFileInputForceMode = smartFileInputForceMode;
+                  }, 50);
+                }
+              } else if (message.error !== 'File selection cancelled') {
+                // Only show error if not cancelled
+                smartFileInputErrors.set(paramName, message.error || 'Failed to select file');
+                smartFileInputErrors = smartFileInputErrors;
+              }
+            }
+            // Check if this is a "load contents" request (old file picker)
+            else if (paramName.startsWith('__loadContents_')) {
               const actualParamName = paramName.replace('__loadContents_', '');
               if (message.success) {
                 // Request file contents
@@ -1248,7 +1352,7 @@
                 filePickerStates = filePickerStates;
               }
             } else {
-              // Regular file path selection
+              // Regular file path selection (old file picker)
               const state = filePickerStates.get(paramName);
               if (message.success) {
                 inputs[paramName] = message.data.relativePath || message.data.path;
@@ -1298,6 +1402,67 @@
           filePickerStates = filePickerStates;
         }
         break;
+
+      // SmartFileInput message handlers
+      case 'smartFileInputDataResponse':
+        if (message.data?.inputName) {
+          const inputName = message.data.inputName;
+          if (message.success) {
+            smartFileInputData.set(inputName, {
+              recentFiles: message.data.recentFiles || [],
+              favorites: message.data.favorites || [],
+            });
+            // Also load value favorites if present
+            if (message.data.valueFavorites) {
+              const storageKey = `${repoOwner}/${repoName}/${selectedWorkflow?.filename}/${inputName}`;
+              smartFileInputValueFavorites.set(storageKey, message.data.valueFavorites);
+              smartFileInputValueFavorites = smartFileInputValueFavorites;
+            }
+          }
+          smartFileInputData = smartFileInputData;
+        }
+        break;
+
+      case 'addFileFavoriteResponse':
+      case 'removeFileFavoriteResponse':
+      case 'updateFileFavoriteResponse':
+      case 'trackRecentFileResponse':
+        // Refresh the data for this input to show updated history
+        if (message.data?.inputName) {
+          requestSmartFileInputData(message.data.inputName);
+        }
+        break;
+
+      case 'fileSuggestionsResponse':
+        if (message.data?.inputName) {
+          smartFileInputSuggestions.set(message.data.inputName, message.data.suggestions || []);
+          smartFileInputSuggestions = smartFileInputSuggestions;
+        }
+        break;
+
+      case 'parseFileForSelectionResponse':
+        if (message.data?.inputName === fileContentModalInputName) {
+          fileContentModalLoading = false;
+          if (message.success) {
+            fileContentModalParsedContent = message.data.parsedContent;
+            fileContentModalFilePath = message.data.filePath || fileContentModalFilePath;
+          } else {
+            fileContentModalError = message.error || 'Failed to parse file';
+          }
+        }
+        break;
+
+      case 'saveValueFavoritesResponse':
+        if (message.success && message.data?.inputName) {
+          const storageKey = `${repoOwner}/${repoName}/${selectedWorkflow?.filename}/${message.data.inputName}`;
+          smartFileInputValueFavorites.set(storageKey, message.data.favorites || []);
+          smartFileInputValueFavorites = smartFileInputValueFavorites;
+          // Update the preview modal state if it's open for this input
+          if (showPreviewModal && previewModalInputName === message.data.inputName) {
+            previewModalValueFavorites = message.data.favorites || [];
+          }
+        }
+        break;
     }
   }
 
@@ -1310,11 +1475,22 @@
     }
 
     inputs = {};
+    // Clear SmartFileInput data for new workflow
+    smartFileInputData.clear();
+    smartFileInputLoading.clear();
+    smartFileInputErrors.clear();
+    smartFileInputSuggestions.clear();
+
     for (const input of selectedWorkflow.inputs) {
       if (input.default !== undefined) {
         inputs[input.name] = String(input.default);
       } else {
         inputs[input.name] = '';
+      }
+
+      // Request SmartFileInput data for string-type inputs
+      if (input.type === 'string' || input.type === 'text') {
+        requestSmartFileInputData(input.name);
       }
     }
   }
@@ -1758,6 +1934,14 @@
     // Clear file picker states
     filePickerStates.clear();
     filePickerStates = filePickerStates;
+
+    // Reset smart input force modes to text (default mode)
+    smartFileInputForceMode.clear();
+    smartFileInputForceMode = smartFileInputForceMode;
+
+    // Clear smart input errors
+    smartFileInputErrors.clear();
+    smartFileInputErrors = smartFileInputErrors;
   }
 
   /**
@@ -1797,6 +1981,507 @@
     const keyValuePattern = /(?:^|[\s,;])[^\s,;=]+\s*=\s*[^\s,;=]+/i;
 
     return hasKeyword || keyValuePattern.test(description);
+  }
+
+  // ============================================
+  // SmartFileInput handlers
+  // ============================================
+
+  /**
+   * Request SmartFileInput data for an input field
+   */
+  function requestSmartFileInputData(inputName: string) {
+    if (!selectedWorkflow) return;
+
+    vscode.postMessage({
+      type: 'getSmartFileInputData',
+      data: {
+        repoOwner,
+        repoName,
+        workflowPath: selectedWorkflow.filename,
+        inputName,
+      },
+    });
+  }
+
+  /**
+   * Handle SmartFileInput value change
+   */
+  function handleSmartInputChange(inputName: string, value: string) {
+    inputs[inputName] = value;
+    inputs = inputs;
+    clearError();
+  }
+
+  /**
+   * Handle SmartFileInput browse file request
+   */
+  function handleSmartInputBrowse(inputName: string, mode: 'path' | 'content') {
+    smartFileInputLoading.set(inputName, true);
+    smartFileInputLoading = smartFileInputLoading;
+
+    vscode.postMessage({
+      type: 'selectFile',
+      data: {
+        parameterName: inputName,
+        mode,
+      },
+    });
+  }
+
+  /**
+   * Handle SmartFileInput load content request
+   */
+  function handleSmartInputLoadContent(inputName: string, path: string) {
+    if (!selectedWorkflow) return;
+
+    fileContentModalInputName = inputName;
+    fileContentModalFilePath = path;
+    fileContentModalLoading = true;
+    fileContentModalError = null;
+    fileContentModalParsedContent = null;
+    fileContentModalPreSelectedValues = []; // Clear pre-selected values for fresh load
+    showFileContentModal = true;
+
+    vscode.postMessage({
+      type: 'parseFileForSelection',
+      data: {
+        path,
+        inputName,
+      },
+    });
+  }
+
+  /**
+   * Handle SmartFileInput add favorite - shows a prompt for label (display name)
+   */
+  async function handleSmartInputAddFavorite(inputName: string, path: string, label?: string) {
+    if (!selectedWorkflow) return;
+
+    // Extract filename without extension for default display
+    // Handle dotfiles (like .gitignore) by not stripping extension if name starts with dot
+    const fileName = path.split('/').pop() || path;
+    const fileNameWithoutExt = fileName.startsWith('.')
+      ? fileName // Keep dotfiles as-is (e.g., .gitignore stays .gitignore)
+      : fileName.replace(/\.[^/.]+$/, '') || fileName;
+
+    // Prompt for label only if not provided - explain that leaving blank uses filename
+    const finalLabel =
+      label ??
+      (await showInputPrompt(
+        `Label for "${fileName}" (optional):`,
+        '',
+        `Leave blank to use "${fileNameWithoutExt}"`
+      ));
+
+    // Convert empty string to undefined to use default display
+    const nickname = finalLabel?.trim() || undefined;
+
+    vscode.postMessage({
+      type: 'addFileFavorite',
+      data: {
+        repoOwner,
+        repoName,
+        workflowPath: selectedWorkflow.filename,
+        inputName,
+        relativePath: path,
+        absolutePath: path, // Will be resolved on extension side
+        nickname, // Keep 'nickname' in message for backward compatibility
+      },
+    });
+  }
+
+  /**
+   * Handle SmartFileInput remove favorite
+   */
+  function handleSmartInputRemoveFavorite(inputName: string, favoriteId: string) {
+    if (!selectedWorkflow) return;
+
+    vscode.postMessage({
+      type: 'removeFileFavorite',
+      data: {
+        repoOwner,
+        repoName,
+        workflowPath: selectedWorkflow.filename,
+        inputName,
+        favoriteId,
+      },
+    });
+  }
+
+  /**
+   * Handle SmartFileInput track recent file
+   */
+  function handleSmartInputTrackRecent(
+    inputName: string,
+    path: string,
+    config?: FileContentConfig,
+    mode?: 'path' | 'content'
+  ) {
+    if (!selectedWorkflow) return;
+
+    vscode.postMessage({
+      type: 'trackRecentFile',
+      data: {
+        repoOwner,
+        repoName,
+        workflowPath: selectedWorkflow.filename,
+        inputName,
+        relativePath: path,
+        absolutePath: path,
+        config,
+        mode,
+      },
+    });
+  }
+
+  /**
+   * Handle SmartFileInput request suggestions
+   */
+  function handleSmartInputRequestSuggestions(inputName: string, partialPath: string) {
+    vscode.postMessage({
+      type: 'getFileSuggestions',
+      data: {
+        partialPath,
+        inputName,
+      },
+    });
+  }
+
+  /**
+   * Handle SmartFileInput open file in editor
+   */
+  function handleSmartInputOpenFile(path: string) {
+    vscode.postMessage({
+      type: 'openFileInEditor',
+      data: { path },
+    });
+  }
+
+  /**
+   * Handle SmartFileInput preview/edit request
+   * Detects delimiters and shows list mode if multiple values found
+   */
+  function handleSmartInputShowPreview(inputName: string, value: string) {
+    previewModalInputName = inputName;
+    previewModalValue = value;
+    previewModalNewItemValue = '';
+    previewModalShowFavorites = false;
+
+    // Load value favorites for this input
+    const storageKey = `${repoOwner}/${repoName}/${selectedWorkflow?.filename}/${inputName}`;
+    const storedFavorites = smartFileInputValueFavorites.get(storageKey);
+    previewModalValueFavorites = storedFavorites || [];
+
+    // Detect delimiter and parse into items
+    let detectedDelimiter = ',';
+    let detectedName = 'Comma';
+    let items: string[] = [];
+
+    for (const { delimiter, name } of DELIMITER_PATTERNS) {
+      const parts = value
+        .split(delimiter)
+        .map((p) => p.trim())
+        .filter((p) => p.length > 0);
+      if (parts.length > 1) {
+        detectedDelimiter = delimiter;
+        detectedName = name;
+        items = parts;
+        break;
+      }
+    }
+
+    previewModalDelimiter = detectedDelimiter;
+    previewModalDelimiterName = detectedName;
+    if (items.length > 1) {
+      previewModalItems = items.map((v) => ({ value: v, selected: true }));
+      previewModalMode = 'list';
+    } else {
+      // For single value, create a single-item list so user can switch to list mode
+      const trimmedValue = value.trim();
+      previewModalItems = trimmedValue ? [{ value: trimmedValue, selected: true }] : [];
+      previewModalMode = 'text';
+    }
+
+    showPreviewModal = true;
+  }
+
+  /**
+   * Handle preview modal save
+   */
+  function handlePreviewModalSave(newValue: string) {
+    inputs[previewModalInputName] = newValue;
+    inputs = inputs;
+    showPreviewModal = false;
+  }
+
+  /**
+   * Handle preview modal save from list mode
+   */
+  function handlePreviewModalSaveList() {
+    const selectedValues = previewModalItems
+      .filter((item) => item.selected)
+      .map((item) => item.value);
+    const delimiter = previewModalDelimiter === '\n' ? '\n' : previewModalDelimiter;
+    const newValue = selectedValues.join(delimiter);
+    handlePreviewModalSave(newValue);
+  }
+
+  /**
+   * Toggle preview modal item selection
+   */
+  function togglePreviewModalItem(index: number) {
+    previewModalItems[index].selected = !previewModalItems[index].selected;
+    previewModalItems = previewModalItems;
+  }
+
+  /**
+   * Select all preview modal items
+   */
+  function selectAllPreviewModalItems() {
+    previewModalItems = previewModalItems.map((item) => ({ ...item, selected: true }));
+  }
+
+  /**
+   * Unselect all preview modal items
+   */
+  function unselectAllPreviewModalItems() {
+    previewModalItems = previewModalItems.map((item) => ({ ...item, selected: false }));
+  }
+
+  /**
+   * Add a new item to the preview modal list
+   */
+  function addPreviewModalItem() {
+    const trimmedValue = previewModalNewItemValue.trim();
+    if (!trimmedValue) return;
+
+    // Check if item already exists
+    if (previewModalItems.some((item) => item.value === trimmedValue)) {
+      showToast('Item already exists in the list', 'warning');
+      return;
+    }
+
+    previewModalItems = [...previewModalItems, { value: trimmedValue, selected: true }];
+    previewModalNewItemValue = '';
+  }
+
+  /**
+   * Remove an item from the preview modal list
+   */
+  function removePreviewModalItem(index: number) {
+    previewModalItems = previewModalItems.filter((_, i) => i !== index);
+  }
+
+  /**
+   * Add current item to value favorites for this input
+   */
+  function addToValueFavorites(value: string) {
+    if (!value.trim()) return;
+
+    // Check if already in favorites
+    if (previewModalValueFavorites.some((f) => f.value === value)) {
+      showToast('Value already in favorites', 'warning');
+      return;
+    }
+
+    const newFavorite = { value, addedAt: Date.now() };
+    previewModalValueFavorites = [...previewModalValueFavorites, newFavorite];
+
+    // Save to storage
+    vscode.postMessage({
+      type: 'saveValueFavorites',
+      data: {
+        repoOwner,
+        repoName,
+        workflowPath: selectedWorkflow?.filename,
+        inputName: previewModalInputName,
+        favorites: previewModalValueFavorites,
+      },
+    });
+
+    showToast('Added to favorites', 'success');
+  }
+
+  /**
+   * Remove item from value favorites
+   */
+  function removeFromValueFavorites(value: string) {
+    previewModalValueFavorites = previewModalValueFavorites.filter((f) => f.value !== value);
+
+    // Save to storage
+    vscode.postMessage({
+      type: 'saveValueFavorites',
+      data: {
+        repoOwner,
+        repoName,
+        workflowPath: selectedWorkflow?.filename,
+        inputName: previewModalInputName,
+        favorites: previewModalValueFavorites,
+      },
+    });
+  }
+
+  /**
+   * Add a favorite value to the current list
+   */
+  function addFavoriteToList(value: string) {
+    if (previewModalItems.some((item) => item.value === value)) {
+      showToast('Item already in list', 'warning');
+      return;
+    }
+    previewModalItems = [...previewModalItems, { value, selected: true }];
+  }
+
+  /**
+   * Handle switching from List mode to Text mode in preview modal.
+   * Syncs the list items to the text value using the selected delimiter.
+   */
+  function handlePreviewModalSwitchToText() {
+    // Join list items using the selected delimiter and update previewModalValue
+    const selectedValues = previewModalItems
+      .filter((item) => item.selected)
+      .map((item) => item.value);
+    const delimiter = previewModalDelimiter === '\n' ? '\n' : previewModalDelimiter;
+    previewModalValue = selectedValues.join(delimiter);
+    previewModalMode = 'text';
+  }
+
+  /**
+   * Handle preview modal close
+   */
+  function handlePreviewModalClose() {
+    showPreviewModal = false;
+    previewModalMode = 'text';
+    previewModalItems = [];
+    previewModalNewItemValue = '';
+    previewModalShowFavorites = false;
+  }
+
+  /**
+   * Handle SmartFileInput reload from file with saved config
+   * Opens the FileContentModal with the saved configuration pre-applied
+   */
+  function handleSmartInputReloadFromFile(
+    inputName: string,
+    path: string,
+    config: FileContentConfig
+  ) {
+    fileContentModalInputName = inputName;
+    fileContentModalFilePath = path;
+    fileContentModalLoading = true;
+    fileContentModalError = null;
+    fileContentModalParsedContent = null;
+    // Issue 9: Set pre-selected values from saved config
+    fileContentModalPreSelectedValues = config.selectedValues || [];
+    showFileContentModal = true;
+
+    // Send message to parse file content with the saved config
+    vscode.postMessage({
+      type: 'parseFileForSelection',
+      data: {
+        path,
+        inputName,
+        config: {
+          jsonExtractionMode: config.jsonExtractionMode,
+          jsonSpecificKey: config.jsonSpecificKey,
+          jsonArrayPath: config.jsonArrayPath,
+        },
+      },
+    });
+  }
+
+  /**
+   * Handle FileContentModal confirm
+   */
+  function handleFileContentModalConfirm(values: string[], config: FileContentConfig) {
+    // Join values with the configured delimiter
+    let delimiter = ',';
+    switch (config.delimiter) {
+      case 'pipe':
+        delimiter = '|';
+        break;
+      case 'newline':
+        delimiter = '\n';
+        break;
+      case 'space':
+        delimiter = ' ';
+        break;
+      case 'custom':
+        delimiter = config.customDelimiter || ',';
+        break;
+    }
+
+    const joinedValue = values.join(delimiter);
+    inputs[fileContentModalInputName] = joinedValue;
+    inputs = inputs;
+
+    // Issue 9: Save selected values in config for reload
+    const configWithSelectedValues: FileContentConfig = {
+      ...config,
+      selectedValues: values,
+    };
+
+    // Track as recent file with the config used (including selected values) and content mode
+    handleSmartInputTrackRecent(
+      fileContentModalInputName,
+      fileContentModalFilePath,
+      configWithSelectedValues,
+      'content'
+    );
+
+    // Reset mode to text after content is loaded
+    smartFileInputForceMode.set(fileContentModalInputName, 'text');
+    smartFileInputForceMode = smartFileInputForceMode;
+    // Clear force mode after a tick so component can react
+    setTimeout(() => {
+      smartFileInputForceMode.set(fileContentModalInputName, null);
+      smartFileInputForceMode = smartFileInputForceMode;
+    }, 50);
+
+    showFileContentModal = false;
+    fileContentModalParsedContent = null;
+  }
+
+  /**
+   * Handle FileContentModal close
+   */
+  function handleFileContentModalClose() {
+    showFileContentModal = false;
+    fileContentModalParsedContent = null;
+    fileContentModalError = null;
+    fileContentModalPreSelectedValues = []; // Clear pre-selected values
+  }
+
+  /**
+   * Handle FileContentModal extraction mode change - re-parse with new mode
+   */
+  function handleFileContentModalExtractionModeChange(
+    mode: string,
+    key?: string,
+    arrayPath?: string
+  ) {
+    // Re-request parsing with new extraction mode
+    vscode.postMessage({
+      type: 'parseFileForSelection',
+      data: {
+        path: fileContentModalFilePath,
+        inputName: fileContentModalInputName,
+        config: {
+          jsonExtractionMode: mode,
+          jsonSpecificKey: key,
+          jsonArrayPath: arrayPath,
+        },
+      },
+    });
+    fileContentModalLoading = true;
+  }
+
+  /**
+   * Check if input should use SmartFileInput (all string types)
+   */
+  function shouldUseSmartFileInput(input: any): boolean {
+    return input.type === 'string' || input.type === 'text';
   }
 </script>
 
@@ -2248,76 +2933,41 @@
                   on:input={clearError}
                   disabled={loading}
                 />
-              {:else if input.isFilePath && input.filePickerEnabled}
-                <div class="text-input-with-file-loader">
-                  <input
-                    id={input.name}
-                    type="text"
-                    bind:value={inputs[input.name]}
-                    on:input={clearError}
-                    placeholder={input.description || 'Enter file path'}
-                    disabled={loading}
-                    class="text-input-field"
-                  />
-                  <button
-                    type="button"
-                    on:click={() => loadFileContents(input.name)}
-                    disabled={loading || filePickerStates.get(input.name)?.isLoading}
-                    class="load-file-button"
-                    title="Load contents from file"
-                  >
-                    {#if filePickerStates.get(input.name)?.isLoading}
-                      <span class="codicon codicon-loading spinning-icon"></span>
-                    {:else}
-                      <span class="codicon codicon-file-text"></span>
-                    {/if}
-                  </button>
-                </div>
-                {#if filePickerStates.get(input.name)?.warning}
-                  <div class="file-warning" transition:fade>
-                    ⚠️ {filePickerStates.get(input.name)?.warning}
-                  </div>
-                {/if}
-                {#if filePickerStates.get(input.name)?.error}
-                  <div class="file-error" transition:fade>
-                    ❌ {filePickerStates.get(input.name)?.error}
-                  </div>
-                {/if}
-              {:else if shouldShowFileLoader(input)}
-                <div class="text-input-with-file-loader">
-                  <input
-                    id={input.name}
-                    type="text"
-                    bind:value={inputs[input.name]}
-                    on:input={clearError}
-                    placeholder={input.default ? String(input.default) : ''}
-                    disabled={loading}
-                    class="text-input-field"
-                  />
-                  <button
-                    type="button"
-                    on:click={() => loadFileContents(input.name)}
-                    disabled={loading || filePickerStates.get(input.name)?.isLoading}
-                    class="load-file-button"
-                    title="Load contents from file"
-                  >
-                    {#if filePickerStates.get(input.name)?.isLoading}
-                      <span class="codicon codicon-loading spinning-icon"></span>
-                    {:else}
-                      <span class="codicon codicon-file-text"></span>
-                    {/if}
-                  </button>
-                </div>
-                {#if filePickerStates.get(input.name)?.warning}
-                  <div class="file-warning" transition:fade>
-                    ⚠️ {filePickerStates.get(input.name)?.warning}
-                  </div>
-                {/if}
-                {#if filePickerStates.get(input.name)?.error}
-                  <div class="file-error" transition:fade>
-                    ❌ {filePickerStates.get(input.name)?.error}
-                  </div>
-                {/if}
+              {:else if shouldUseSmartFileInput(input)}
+                <!-- SmartFileInput for all string-type inputs -->
+                <SmartFileInput
+                  inputName={input.name}
+                  value={inputs[input.name] || ''}
+                  placeholder={input.default ? String(input.default) : ''}
+                  disabled={loading}
+                  required={input.required}
+                  recentFiles={smartFileInputData.get(input.name)?.recentFiles || []}
+                  favorites={smartFileInputData.get(input.name)?.favorites || []}
+                  suggestions={smartFileInputSuggestions.get(input.name) || []}
+                  isLoading={smartFileInputLoading.get(input.name) || false}
+                  error={smartFileInputErrors.get(input.name) || null}
+                  forceMode={smartFileInputForceMode.get(input.name) || null}
+                  on:change={(e) => handleSmartInputChange(input.name, e.detail.value)}
+                  on:browseFile={(e) => handleSmartInputBrowse(input.name, e.detail.mode)}
+                  on:loadContent={(e) => handleSmartInputLoadContent(input.name, e.detail.path)}
+                  on:addFavorite={(e) =>
+                    handleSmartInputAddFavorite(input.name, e.detail.path, e.detail.nickname)}
+                  on:removeFavorite={(e) => handleSmartInputRemoveFavorite(input.name, e.detail.id)}
+                  on:openFile={(e) => handleSmartInputOpenFile(e.detail.path)}
+                  on:requestSuggestions={(e) =>
+                    handleSmartInputRequestSuggestions(input.name, e.detail.partialPath)}
+                  on:trackRecent={(e) =>
+                    handleSmartInputTrackRecent(
+                      input.name,
+                      e.detail.path,
+                      undefined,
+                      e.detail.mode
+                    )}
+                  on:showPreview={(e) => handleSmartInputShowPreview(input.name, e.detail.value)}
+                  on:reloadFromFile={(e) =>
+                    handleSmartInputReloadFromFile(input.name, e.detail.path, e.detail.config)}
+                  on:showInfo={(e) => showInfoModal_func(e.detail.title, e.detail.content)}
+                />
               {:else}
                 <input
                   id={input.name}
@@ -2467,6 +3117,297 @@
           </div>
         {/if}
       {/if}
+    </div>
+  {/if}
+
+  <!-- FileContentModal for SmartFileInput -->
+  {#if showFileContentModal}
+    <FileContentModal
+      title="Select Content from File"
+      filePath={fileContentModalFilePath}
+      parsedContent={fileContentModalParsedContent}
+      isLoading={fileContentModalLoading}
+      error={fileContentModalError}
+      preSelectedValues={fileContentModalPreSelectedValues}
+      on:close={handleFileContentModalClose}
+      on:confirm={(e) => handleFileContentModalConfirm(e.detail.values, e.detail.config)}
+      on:changeExtractionMode={(e) =>
+        handleFileContentModalExtractionModeChange(e.detail.mode, e.detail.key, e.detail.arrayPath)}
+      on:showInfo={(e) => showInfoModal_func(e.detail.title, e.detail.content)}
+    />
+  {/if}
+
+  <!-- Preview/Edit Modal for SmartFileInput -->
+  {#if showPreviewModal}
+    <!-- svelte-ignore a11y_interactive_supports_focus -->
+    <div
+      class="modal-overlay"
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="preview-modal-title"
+      on:click={handlePreviewModalClose}
+      on:keydown={(e) => e.key === 'Escape' && handlePreviewModalClose()}
+    >
+      <!-- svelte-ignore a11y_no_static_element_interactions -->
+      <div class="modal-content preview-modal" on:click|stopPropagation on:keydown={() => {}}>
+        <div class="modal-header">
+          <div class="modal-header-text">
+            <h3 id="preview-modal-title">Preview/Edit Value</h3>
+            <span class="modal-subtitle">{previewModalInputName}</span>
+          </div>
+          <div class="modal-header-actions">
+            <button
+              type="button"
+              class="modal-info-btn"
+              title="Learn more about Preview/Edit Value"
+              on:click={() =>
+                showInfoModal_func(
+                  'Preview/Edit Value',
+                  `
+<h4>What is this?</h4>
+<p>Preview and edit multi-value inputs. This modal helps you work with workflow parameters that contain multiple values.</p>
+
+<h4>Features</h4>
+<ul>
+  <li><strong>Text Mode:</strong> Edit the raw value directly as text</li>
+  <li><strong>List Mode:</strong> View and manage individual items in a list format</li>
+  <li><strong>Select/Unselect:</strong> Toggle items on and off</li>
+  <li><strong>Favorites:</strong> Save frequently used values for quick access</li>
+</ul>
+
+<h4>Supported Delimiters</h4>
+<p>Values can be separated by: comma, pipe (|), newline, semicolon, or space.</p>
+`
+                )}
+            >
+              <span class="codicon codicon-info"></span>
+            </button>
+            <button
+              type="button"
+              class="modal-close-btn"
+              on:click={handlePreviewModalClose}
+              title="Close (Esc)"
+            >
+              <span class="codicon codicon-close"></span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Mode toggle buttons - always show for single values too -->
+        <div class="preview-mode-toggle">
+          <button
+            type="button"
+            class="mode-btn"
+            class:active={previewModalMode === 'text'}
+            on:click={handlePreviewModalSwitchToText}
+          >
+            <span class="codicon codicon-edit"></span> Text
+          </button>
+          <button
+            type="button"
+            class="mode-btn"
+            class:active={previewModalMode === 'list'}
+            on:click={() => (previewModalMode = 'list')}
+          >
+            <span class="codicon codicon-list-selection"></span> List ({previewModalItems.length})
+          </button>
+        </div>
+
+        {#if previewModalMode === 'text'}
+          <textarea
+            class="preview-textarea"
+            bind:value={previewModalValue}
+            placeholder="Enter value..."
+          ></textarea>
+          <div class="modal-buttons">
+            <button type="button" on:click={() => handlePreviewModalSave(previewModalValue)}
+              >Save</button
+            >
+            <button
+              type="button"
+              class="secondary"
+              on:click={() => {
+                previewModalValue = '';
+                handlePreviewModalSave('');
+              }}>Clear</button
+            >
+            <button type="button" class="secondary" on:click={handlePreviewModalClose}
+              >Cancel</button
+            >
+          </div>
+        {:else}
+          <!-- List mode with multi-select -->
+          <div class="preview-delimiter-row">
+            <span class="delimiter-label">Join with:</span>
+            <select
+              class="delimiter-select"
+              bind:value={previewModalDelimiter}
+              on:change={(e) => {
+                const selected = DELIMITER_OPTIONS.find(
+                  (d) => d.delimiter === e.currentTarget.value
+                );
+                if (selected) previewModalDelimiterName = selected.name;
+              }}
+            >
+              {#each DELIMITER_OPTIONS as opt (opt.delimiter)}
+                <option value={opt.delimiter}>{opt.name} ({opt.display})</option>
+              {/each}
+            </select>
+          </div>
+
+          <!-- Add new item section -->
+          <div class="preview-add-item-row">
+            <input
+              type="text"
+              class="add-item-input"
+              placeholder="Add new item..."
+              bind:value={previewModalNewItemValue}
+              on:keydown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  addPreviewModalItem();
+                }
+              }}
+            />
+            <button
+              type="button"
+              class="add-item-btn"
+              on:click={addPreviewModalItem}
+              disabled={!previewModalNewItemValue.trim()}
+              title="Add new item to the list (Enter)"
+            >
+              <span class="codicon codicon-plus"></span>
+            </button>
+            <button
+              type="button"
+              class="favorites-toggle-btn"
+              class:active={previewModalShowFavorites}
+              on:click={() => (previewModalShowFavorites = !previewModalShowFavorites)}
+              title={previewModalShowFavorites
+                ? 'Hide saved favorites'
+                : `Show saved favorites (${previewModalValueFavorites.length})`}
+            >
+              <span class="codicon codicon-star-full"></span>
+              {#if previewModalValueFavorites.length > 0}
+                <span class="favorites-count">{previewModalValueFavorites.length}</span>
+              {/if}
+            </button>
+          </div>
+
+          <!-- Favorites section (collapsible) -->
+          {#if previewModalShowFavorites}
+            <div class="preview-favorites-section">
+              <div class="favorites-header">
+                <span class="favorites-title">⭐ Favorite Values</span>
+              </div>
+              {#if previewModalValueFavorites.length === 0}
+                <div class="favorites-empty">No favorites saved for this input</div>
+              {:else}
+                <div class="favorites-list">
+                  {#each previewModalValueFavorites as fav (fav.value)}
+                    {@const alreadyInList = previewModalItems.some(
+                      (item) => item.value === fav.value
+                    )}
+                    <div class="favorite-item">
+                      {#if !alreadyInList}
+                        <button
+                          type="button"
+                          class="favorite-add-btn"
+                          on:click={() => addFavoriteToList(fav.value)}
+                          title="Add to list"
+                        >
+                          <span class="codicon codicon-plus"></span>
+                        </button>
+                      {:else}
+                        <span class="favorite-in-list-badge" title="Already in list">
+                          <span class="codicon codicon-check"></span>
+                        </span>
+                      {/if}
+                      <span class="favorite-value" title={fav.value}>{fav.label || fav.value}</span>
+                      <button
+                        type="button"
+                        class="favorite-remove-btn"
+                        on:click={() => removeFromValueFavorites(fav.value)}
+                        title="Remove from favorites"
+                      >
+                        <span class="codicon codicon-trash"></span>
+                      </button>
+                    </div>
+                  {/each}
+                </div>
+              {/if}
+            </div>
+          {/if}
+
+          <div class="preview-list-controls">
+            <button
+              type="button"
+              class="control-btn"
+              on:click={selectAllPreviewModalItems}
+              disabled={previewModalItems.every((i) => i.selected)}
+              title="Select all items in the list"
+            >
+              <span class="codicon codicon-check-all"></span> Select All
+            </button>
+            <button
+              type="button"
+              class="control-btn"
+              on:click={unselectAllPreviewModalItems}
+              disabled={previewModalItems.every((i) => !i.selected)}
+              title="Unselect all items in the list"
+            >
+              <span class="codicon codicon-close-all"></span> Unselect All
+            </button>
+            <span class="selection-count">
+              {previewModalItems.filter((i) => i.selected).length} of {previewModalItems.length} selected
+            </span>
+          </div>
+          <div class="preview-list-items">
+            {#each previewModalItems as item, index (item.value)}
+              {@const isFavorite = previewModalValueFavorites.some((f) => f.value === item.value)}
+              <div class="preview-list-item" class:selected={item.selected}>
+                <input
+                  type="checkbox"
+                  checked={item.selected}
+                  on:change={() => togglePreviewModalItem(index)}
+                  title={item.selected ? 'Unselect this item' : 'Select this item'}
+                />
+                <span class="item-value" title={item.value}>{item.value}</span>
+                <div class="item-actions">
+                  {#if !isFavorite}
+                    <button
+                      type="button"
+                      class="item-action-btn"
+                      on:click={() => addToValueFavorites(item.value)}
+                      title="Save to favorites"
+                    >
+                      <span class="codicon codicon-star-empty"></span>
+                    </button>
+                  {:else}
+                    <span class="item-favorite-badge" title="Already in favorites">
+                      <span class="codicon codicon-star-full"></span>
+                    </span>
+                  {/if}
+                  <button
+                    type="button"
+                    class="item-action-btn delete-btn"
+                    on:click={() => removePreviewModalItem(index)}
+                    title="Remove this item from the list"
+                  >
+                    <span class="codicon codicon-trash"></span>
+                  </button>
+                </div>
+              </div>
+            {/each}
+          </div>
+          <div class="modal-buttons">
+            <button type="button" on:click={handlePreviewModalSaveList}>Save</button>
+            <button type="button" class="secondary" on:click={handlePreviewModalClose}
+              >Cancel</button
+            >
+          </div>
+        {/if}
+      </div>
     </div>
   {/if}
 
@@ -3059,7 +4000,8 @@
   }
 
   .load-file-button:disabled::before,
-  .artifact-pattern-save-button:disabled::before {
+  .artifact-pattern-save-button:disabled::before,
+  .preview-modal button:disabled::before {
     content: none;
     width: 0;
     height: 0;
@@ -3542,9 +4484,10 @@
     font-weight: 600;
   }
 
-  .modal-content input {
+  .modal-content input:not(.add-item-input) {
     width: 100%;
     margin-bottom: 16px;
+    box-sizing: border-box;
   }
 
   .modal-buttons {
@@ -3575,6 +4518,454 @@
 
   .modal-buttons button.primary:hover {
     background: var(--vscode-button-hoverBackground);
+  }
+
+  /* Preview/Edit Modal Styles */
+  .preview-modal {
+    min-width: 400px;
+    max-width: 600px;
+  }
+
+  .preview-modal .modal-header {
+    display: flex;
+    flex-direction: row;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 12px;
+    margin-bottom: 16px;
+  }
+
+  .preview-modal .modal-header-text {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+  }
+
+  .preview-modal .modal-header h3 {
+    margin: 0;
+  }
+
+  .preview-modal .modal-subtitle {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    font-family: var(--vscode-editor-font-family);
+  }
+
+  .modal-header-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+  }
+
+  .modal-info-btn {
+    padding: 4px;
+    background: transparent;
+    border: none;
+    cursor: help;
+    color: var(--vscode-textLink-foreground);
+    opacity: 0.7;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .modal-info-btn:hover {
+    opacity: 1;
+    background: var(--vscode-toolbar-hoverBackground);
+  }
+
+  .modal-close-btn {
+    padding: 4px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--vscode-foreground);
+    opacity: 0.7;
+    border-radius: 4px;
+    flex-shrink: 0;
+  }
+
+  .modal-close-btn:hover {
+    opacity: 1;
+    background: var(--vscode-toolbar-hoverBackground);
+  }
+
+  .preview-textarea {
+    width: 100%;
+    min-height: 200px;
+    max-height: 400px;
+    padding: 10px;
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border);
+    color: var(--vscode-input-foreground);
+    font-family: var(--vscode-editor-font-family);
+    font-size: 12px;
+    resize: vertical;
+    margin-bottom: 16px;
+    border-radius: 2px;
+    box-sizing: border-box;
+  }
+
+  .preview-textarea:focus {
+    outline: none;
+    border-color: var(--vscode-focusBorder);
+  }
+
+  /* Preview Modal Mode Toggle */
+  .preview-mode-toggle {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 12px;
+    padding: 4px;
+    background: var(--vscode-input-background);
+    border-radius: 4px;
+  }
+
+  .preview-mode-toggle .mode-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 6px 12px;
+    background: transparent;
+    border: 1px solid transparent;
+    color: var(--vscode-foreground);
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 12px;
+  }
+
+  .preview-mode-toggle .mode-btn:hover {
+    background: var(--vscode-list-hoverBackground);
+  }
+
+  .preview-mode-toggle .mode-btn.active {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+  }
+
+  /* Preview List Controls */
+  .preview-list-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+  }
+
+  .preview-list-controls .control-btn {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    padding: 4px 8px;
+    background: transparent;
+    border: 1px solid var(--vscode-input-border);
+    color: var(--vscode-foreground);
+    cursor: pointer;
+    border-radius: 3px;
+    font-size: 11px;
+  }
+
+  .preview-list-controls .control-btn:hover:not(:disabled) {
+    background: var(--vscode-list-hoverBackground);
+  }
+
+  .preview-list-controls .control-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .preview-list-controls .selection-count {
+    margin-left: auto;
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+  }
+
+  /* Delimiter selector row */
+  .preview-delimiter-row {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin-bottom: 12px;
+    padding: 8px 12px;
+    background: var(--vscode-input-background);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+  }
+
+  .preview-delimiter-row .delimiter-label {
+    font-size: 12px;
+    color: var(--vscode-foreground);
+    white-space: nowrap;
+  }
+
+  .preview-delimiter-row .delimiter-select {
+    flex: 1;
+    max-width: 200px;
+    padding: 4px 8px;
+    font-size: 12px;
+    background: var(--vscode-dropdown-background);
+    color: var(--vscode-dropdown-foreground);
+    border: 1px solid var(--vscode-dropdown-border);
+    border-radius: 3px;
+    cursor: pointer;
+  }
+
+  .preview-delimiter-row .delimiter-select:focus {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+  }
+
+  /* Preview Add Item Row */
+  .preview-add-item-row {
+    display: flex;
+    gap: 4px;
+    margin-bottom: 12px;
+    align-items: center;
+  }
+
+  .add-item-input {
+    flex: 1;
+    padding: 6px 8px;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+    font-size: 12px;
+    box-sizing: border-box;
+    line-height: 1.4;
+    height: 28px;
+  }
+
+  .add-item-input:focus {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+  }
+
+  .add-item-btn,
+  .favorites-toggle-btn {
+    padding: 0 8px;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 1px solid transparent;
+    border-radius: 4px;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    box-sizing: border-box;
+    height: 28px;
+    line-height: 1;
+    font-size: 13px;
+    flex-shrink: 0;
+  }
+
+  .add-item-btn .codicon,
+  .favorites-toggle-btn .codicon {
+    font-size: 14px;
+    line-height: 1;
+  }
+
+  .add-item-btn:hover,
+  .favorites-toggle-btn:hover {
+    background: var(--vscode-button-secondaryHoverBackground);
+  }
+
+  .add-item-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .favorites-toggle-btn.active {
+    background: var(--vscode-button-background);
+    color: var(--vscode-button-foreground);
+  }
+
+  .favorites-count {
+    font-size: 9px;
+    background: var(--vscode-badge-background);
+    color: var(--vscode-badge-foreground);
+    padding: 0 4px;
+    border-radius: 6px;
+    min-width: 14px;
+    height: 14px;
+    line-height: 14px;
+    text-align: center;
+    display: inline-block;
+  }
+
+  /* Preview Favorites Section */
+  .preview-favorites-section {
+    margin-bottom: 12px;
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+    background: var(--vscode-editor-background);
+  }
+
+  .favorites-header {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--vscode-widget-border);
+    background: var(--vscode-sideBarSectionHeader-background);
+  }
+
+  .favorites-title {
+    font-size: 12px;
+    font-weight: 500;
+  }
+
+  .favorites-empty {
+    padding: 12px;
+    text-align: center;
+    color: var(--vscode-descriptionForeground);
+    font-size: 12px;
+    font-style: italic;
+  }
+
+  .favorites-list {
+    max-height: 120px;
+    overflow-y: auto;
+  }
+
+  .favorite-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 6px 12px;
+    border-bottom: 1px solid var(--vscode-widget-border);
+  }
+
+  .favorite-item:last-child {
+    border-bottom: none;
+  }
+
+  .favorite-add-btn,
+  .favorite-remove-btn {
+    padding: 2px 4px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--vscode-foreground);
+    opacity: 0.7;
+    border-radius: 3px;
+  }
+
+  .favorite-add-btn:hover,
+  .favorite-remove-btn:hover {
+    opacity: 1;
+    background: var(--vscode-toolbar-hoverBackground);
+  }
+
+  .favorite-add-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .favorite-remove-btn:hover {
+    color: var(--vscode-errorForeground);
+  }
+
+  .favorite-value {
+    flex: 1;
+    font-size: 12px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* Preview List Items */
+  .preview-list-items {
+    max-height: 300px;
+    overflow-y: auto;
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 4px;
+    margin-bottom: 16px;
+    background: var(--vscode-input-background);
+  }
+
+  .preview-list-item {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--vscode-widget-border);
+    color: var(--vscode-foreground);
+    font-size: 12px;
+  }
+
+  .preview-list-item:last-child {
+    border-bottom: none;
+  }
+
+  .preview-list-item:hover {
+    background: var(--vscode-list-hoverBackground);
+  }
+
+  .preview-list-item.selected {
+    background: var(--vscode-list-activeSelectionBackground);
+    color: var(--vscode-list-activeSelectionForeground);
+  }
+
+  .preview-list-item input[type='checkbox'] {
+    flex-shrink: 0;
+    width: 16px;
+    height: 16px;
+    margin: 0;
+    cursor: pointer;
+  }
+
+  .preview-list-item .item-value {
+    flex: 1;
+    font-family: var(--vscode-editor-font-family);
+    font-size: 12px;
+    word-break: break-all;
+    color: inherit;
+    text-align: left;
+  }
+
+  .preview-list-item .item-actions {
+    display: flex;
+    gap: 4px;
+    opacity: 0.6;
+  }
+
+  .preview-list-item:hover .item-actions {
+    opacity: 1;
+  }
+
+  .item-action-btn {
+    padding: 2px 4px;
+    background: transparent;
+    border: none;
+    cursor: pointer;
+    color: var(--vscode-foreground);
+    border-radius: 3px;
+  }
+
+  .item-action-btn:hover {
+    background: var(--vscode-toolbar-hoverBackground);
+  }
+
+  .item-action-btn:disabled {
+    opacity: 0.3;
+    cursor: not-allowed;
+  }
+
+  .item-action-btn.delete-btn:hover {
+    color: var(--vscode-errorForeground);
+  }
+
+  .item-favorite-badge,
+  .favorite-in-list-badge {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 2px 4px;
+    color: var(--vscode-charts-yellow, #cca700);
+    opacity: 0.8;
+  }
+
+  .favorite-in-list-badge {
+    color: var(--vscode-charts-green, #89d185);
   }
 
   /* Confirmation Modal Styles */

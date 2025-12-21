@@ -2,6 +2,31 @@
 
 All notable changes to the "github-workflow-runner" extension will be documented in this file.
 
+## [1.3.0] - 2025-12-21
+
+### ✨ New Features
+
+- **Smart File Input:** Enhanced input fields for workflow parameters with intelligent file handling.
+  - **Three Input Modes:** Switch between Text (direct input), Path (file path selection), and Content (extract values from files) modes using the mode selector icon
+  - **File Path Autocomplete:** Type a path and get real-time suggestions from your workspace files
+  - **Content Extraction:** Load values from JSON/YAML files with configurable extraction options:
+    - Extract property names, property values, or specific keys from JSON arrays
+    - Support for nested arrays with path selection
+    - Configurable delimiters (comma, pipe, newline, space, or custom)
+  - **File Favorites:** Save frequently used files with custom nicknames for quick access
+  - **Recent Files History:** Automatically tracks recently used files per input field
+  - **Preview/Edit Modal:** View and edit multi-value inputs in a list format with:
+    - Add, remove, and reorder items
+    - Value favorites for frequently used values
+    - Reload from file with saved configuration
+  - **Open in Editor:** Quick action to open any file path in VS Code editor
+
+### 🔧 Technical Improvements
+
+- Added typed message interfaces for Smart File Input communication
+- Extracted constants for display limits and priority keys to improve maintainability
+- New `SmartFileInputManager` utility class for managing file favorites and recent files
+
 ## [1.2.1] - 2025-12-18
 
 ### 🎨 Changed

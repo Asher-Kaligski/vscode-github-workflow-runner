@@ -6,6 +6,7 @@ import * as vscode from 'vscode';
 import { TokenManager } from './utils/token-manager';
 import { Storage } from './utils/storage';
 import { FavoritesManager } from './utils/favorites-manager';
+import { SmartFileInputManager } from './utils/smart-file-input-manager';
 import { SidebarProvider } from './providers/sidebar-provider';
 import { WorkflowRunsProvider } from './providers/workflow-runs-provider';
 import { WorkflowRunsPanel } from './providers/workflow-runs-panel';
@@ -26,6 +27,7 @@ export async function activate(context: vscode.ExtensionContext) {
   TokenManager.initialize(context);
   Storage.initialize(context);
   FavoritesManager.initialize(context);
+  SmartFileInputManager.initialize(context);
 
   // Register log document provider for workflow job logs
   const logDocumentProvider = new LogDocumentProvider();
