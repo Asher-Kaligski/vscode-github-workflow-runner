@@ -162,21 +162,21 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 
 The Smart File Input feature provides three modes for entering workflow input values, making it easy to work with file-based configurations, test tags, and multi-value inputs.
 
-<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/smart-input-mode-selector.png" width="350" alt="Preview/Edit modal with list mode">
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/smart-input-preview-modal.png" width="220" alt="Mode selector showing Text, Path, and Content options">
 
-_**Preview/Edit Modal** — View and edit multi-value inputs in list format with favorites support_
-
-<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/smart-input-content-dropdown.png" width="450" alt="File content modal with extraction options for JSON, YAML, CSV, ENV, and text files">
-
-_**File Content Modal** — Extract values from JSON, YAML, CSV, ENV, and text files with multi-select and configurable delimiters_
+_**Mode Selector** — Switch between Text (direct input), Path (insert file path), and Content (extract from file) modes_
 
 <img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/smart-input-file-content-modal.png" width="450" alt="Content mode dropdown showing favorites and recent files">
 
 _**Content Mode Dropdown** — Access favorite files and recently used files for quick content extraction_
 
-<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/smart-input-preview-modal.png" width="220" alt="Mode selector showing Text, Path, and Content options">
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/smart-input-content-dropdown.png" width="450" alt="File content modal with extraction options for JSON, YAML, CSV, ENV, and text files">
 
-_**Mode Selector** — Switch between Text (direct input), Path (insert file path), and Content (extract from file) modes_
+_**File Content Modal** — Extract values from JSON, YAML, CSV, ENV, and text files with multi-select and configurable delimiters_
+
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/smart-input-mode-selector.png" width="350" alt="Preview/Edit modal with list mode">
+
+_**Preview/Edit Modal** — View and edit multi-value inputs in list format with favorites support_
 
 ### Logs View
 
