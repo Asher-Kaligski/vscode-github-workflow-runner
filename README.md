@@ -30,7 +30,18 @@ Stop switching between VS Code and GitHub's web UI. Dispatch workflows, monitor 
 - **Auto-generated forms** from your workflow YAML — no manual configuration
 - **Intelligent input recovery** — rerun workflows with prefilled inputs from previous runs
 - **Branch auto-detection** — automatically uses your current Git branch
-- **File path detection** — browse and select files with VS Code's native picker
+- **Smart File Input** — enhanced input fields with file path autocomplete, content extraction, and favorites
+
+### 📁 **Smart File Input** _(New in v1.3.0)_
+
+Enhanced input fields that make working with file-based values effortless:
+
+- **Three Input Modes:** Switch between Text, Path, and Content modes using the mode selector
+- **Path Mode:** Browse and insert file paths from your workspace
+- **Content Extraction:** Load values from JSON, YAML, CSV, ENV, and text files with multi-select
+- **File Favorites:** Save frequently used files with custom nicknames
+- **Recent Files:** Automatically tracks your recently used files per input
+- **Preview/Edit Modal:** View and edit multi-value inputs in a list format
 
 ### 💾 **Reusable Presets**
 
@@ -103,18 +114,19 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 
 ## 📸 Screenshots
 
-| Feature                                           | Description                                  |
-| ------------------------------------------------- | -------------------------------------------- |
-| [Workflow Dispatch](#workflow-dispatch)           | Select workflows, fill inputs, and dispatch  |
-| [Workflow Runs](#workflow-runs)                   | Monitor runs in real-time with filters       |
-| [Watched Runs](#watched-runs)                     | Track important runs across sessions         |
-| [Preset Management](#preset-management)           | Save and share reusable configurations       |
-| [Favorites](#favorites)                           | Quick access to frequent workflows           |
-| [Logs View](#logs-view)                           | View logs directly in VS Code                |
-| [Job Dependencies Graph](#job-dependencies-graph) | Visualize job execution stages               |
-| [Job Step Details](#job-step-details)             | Step-by-step execution details               |
-| [Workflow Summary](#workflow-summary)             | GitHub step summaries and annotations        |
-| [Settings Panel](#settings-panel)                 | Configure refresh, limits, and notifications |
+| Feature                                           | Description                                   |
+| ------------------------------------------------- | --------------------------------------------- |
+| [Workflow Dispatch](#workflow-dispatch)           | Select workflows, fill inputs, and dispatch   |
+| [Workflow Runs](#workflow-runs)                   | Monitor runs in real-time with filters        |
+| [Watched Runs](#watched-runs)                     | Track important runs across sessions          |
+| [Preset Management](#preset-management)           | Save and share reusable configurations        |
+| [Favorites](#favorites)                           | Quick access to frequent workflows            |
+| [Smart File Input](#smart-file-input)             | Enhanced input with file path & content modes |
+| [Logs View](#logs-view)                           | View logs directly in VS Code                 |
+| [Job Dependencies Graph](#job-dependencies-graph) | Visualize job execution stages                |
+| [Job Step Details](#job-step-details)             | Step-by-step execution details                |
+| [Workflow Summary](#workflow-summary)             | GitHub step summaries and annotations         |
+| [Settings Panel](#settings-panel)                 | Configure refresh, limits, and notifications  |
 
 ### Workflow Dispatch
 
@@ -145,6 +157,26 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 ![Workflow Favorites](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-favorites.png)
 
 > Quick access to frequently used workflows
+
+### Smart File Input
+
+The Smart File Input feature provides three modes for entering workflow input values, making it easy to work with file-based configurations, test tags, and multi-value inputs.
+
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/smart-input-mode-selector.png" width="220" alt="Mode selector showing Text, Path, and Content options">
+
+_**Mode Selector** — Switch between Text (direct input), Path (insert file path), and Content (extract from file) modes_
+
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/smart-input-content-dropdown.png" width="450" alt="Content mode dropdown showing favorites and recent files">
+
+_**Content Mode Dropdown** — Access favorite files and recently used files for quick content extraction_
+
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/smart-input-file-content-modal.png" width="450" alt="File content modal with JSON extraction options">
+
+_**File Content Modal** — Extract values from JSON, YAML, CSV, ENV, and text files with multi-select and configurable delimiters_
+
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/smart-input-preview-modal.png" width="350" alt="Preview/Edit modal with list mode">
+
+_**Preview/Edit Modal** — View and edit multi-value inputs in list format with favorites support_
 
 ### Logs View
 
