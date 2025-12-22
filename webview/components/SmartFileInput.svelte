@@ -558,7 +558,7 @@
                   <span class="file-path-hint">{fileName}</span>
                 {/if}
               </button>
-              <!-- Issue 1: Show reload button for favorites with saved config (content mode only) -->
+              
               {#if mode === 'content' && fav.config}
                 <button
                   type="button"

@@ -19,8 +19,8 @@
   export let parsedContent: ParsedFileContent | null = null;
   export let isLoading: boolean = false;
   export let error: string | null = null;
-  export let preSelectedValues: string[] = []; // Issue 9: Pre-select items from saved config
-  export let savedConfig: FileContentConfig | null = null; // Issue 1: Saved config from favorites
+  export let preSelectedValues: string[] = [];
+  export let savedConfig: FileContentConfig | null = null;
 
   // Internal state
   let items: ParsedContentItem[] = [];
@@ -131,7 +131,7 @@
       jsonExtractionMode: parsedContent?.fileType === 'json' ? extractionMode : undefined,
       jsonSpecificKey: extractionMode === 'specific-key' ? specificKey : undefined,
       jsonArrayPath: selectedArrayPath || undefined,
-      selectedValues, // Issue 9: Store selected values for reload
+      selectedValues,
     };
 
     dispatch('confirm', { values: selectedValues, config });

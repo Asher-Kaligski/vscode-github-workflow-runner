@@ -4497,7 +4497,6 @@
       });
     }
 
-    // Issue 5: Sort by created_at (most recent first) when favorites-only is enabled
     // This ensures the most recent runs appear at the top regardless of workflow
     if (!skipFavoritesOnly && showFavoritesOnly && markedWorkflows.length > 0) {
       filtered.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
