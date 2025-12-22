@@ -41,7 +41,6 @@
   }>();
 
   /**
-   * Issue 1: Handle reload with saved config
    * Dispatches event to parent to reload with the saved configuration
    */
   function handleReloadSavedConfig() {

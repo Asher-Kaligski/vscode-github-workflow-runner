@@ -558,7 +558,7 @@
                   <span class="file-path-hint">{fileName}</span>
                 {/if}
               </button>
-              
+
               {#if mode === 'content' && fav.config}
                 <button
                   type="button"
