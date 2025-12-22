@@ -43,7 +43,11 @@
     loadContent: { path: string };
     selectPath: { path: string };
     browseFile: { mode: 'path' | 'content' };
-    addFavorite: { path: string; nickname?: string };
+    addFavorite: {
+      path: string;
+      nickname?: string;
+      config?: import('../../src/types/workflow-types').FileContentConfig;
+    };
     removeFavorite: { id: string };
     updateFavorite: { id: string; nickname?: string };
     openFile: { path: string };
@@ -62,6 +66,20 @@
 
   // Track if user has ever used mode selector (for first-time discovery pulse)
   let hasUsedModeSelector: boolean = false;
+
+  // Track value-loaded animation state for visual feedback
+  let valueLoadedAnimation: boolean = false;
+
+  /**
+   * Trigger the value-loaded animation when content is populated
+   * Called externally via binding or internally when selecting files
+   */
+  export function triggerValueLoadedAnimation() {
+    valueLoadedAnimation = true;
+    setTimeout(() => {
+      valueLoadedAnimation = false;
+    }, 300);
+  }
 
   // Constants for display limits
   const MAX_VISIBLE_RECENT_FILES = 5;
@@ -118,6 +136,8 @@
     value = suggestion;
     dispatch('change', { value });
     dispatch('trackRecent', { path: suggestion });
+    // Trigger value-loaded animation for path autocomplete
+    triggerValueLoadedAnimation();
     // Auto-switch back to text mode
     mode = 'text';
   }
@@ -190,10 +210,13 @@
       dispatch('loadContent', { path });
       loadedFilePath = path;
       // Note: Content mode will switch to text after content is loaded (handled by parent)
+      // Animation will be triggered by parent after content is loaded
     } else {
       value = path;
       dispatch('change', { value });
       dispatch('trackRecent', { path, mode: 'path' });
+      // Trigger value-loaded animation for path mode
+      triggerValueLoadedAnimation();
       // Auto-switch back to text mode
       mode = 'text';
     }
@@ -328,7 +351,7 @@
     {/if}
 
     <!-- Main input area -->
-    <div class="input-area">
+    <div class="input-area" class:value-loaded={valueLoadedAnimation}>
       {#if mode === 'text'}
         <input
           type="text"
@@ -535,6 +558,28 @@
                   <span class="file-path-hint">{fileName}</span>
                 {/if}
               </button>
+
+              {#if mode === 'content' && fav.config}
+                <button
+                  type="button"
+                  class="file-action-btn reload-btn"
+                  on:click|stopPropagation={() => {
+                    if (fav.config) {
+                      dispatch('reloadFromFile', {
+                        path: fav.relativePath,
+                        config: fav.config,
+                      });
+                    }
+                  }}
+                  title="Reload with saved settings: {fav.config.jsonSpecificKey
+                    ? `Extract "${fav.config.jsonSpecificKey}" from ${fav.config.jsonArrayPath || 'root'}`
+                    : 'Load file content'}{fav.config.selectedValues?.length
+                    ? ` (${fav.config.selectedValues.length} items pre-selected)`
+                    : ''}"
+                >
+                  <span class="codicon codicon-history"></span>
+                </button>
+              {/if}
               <button
                 type="button"
                 class="file-action-btn"
@@ -577,7 +622,8 @@
                 <span class="file-name">{recent.relativePath.split('/').pop()}</span>
                 <span class="file-path-hint">{recent.relativePath}</span>
               </button>
-              {#if recent.lastConfig}
+              <!-- Show reload button in content mode for recent files with saved config -->
+              {#if mode === 'content' && recent.lastConfig}
                 <button
                   type="button"
                   class="file-action-btn reload-btn"
@@ -602,8 +648,8 @@
                 type="button"
                 class="file-action-btn"
                 on:click|stopPropagation={() =>
-                  dispatch('addFavorite', { path: recent.relativePath })}
-                title="Add to favorites"
+                  dispatch('addFavorite', { path: recent.relativePath, config: recent.lastConfig })}
+                title="Add to favorites{recent.lastConfig ? ' (with saved settings)' : ''}"
               >
                 <span class="codicon codicon-star-empty"></span>
               </button>
@@ -797,6 +843,20 @@
     display: flex;
     align-items: center;
     min-width: 0;
+  }
+
+  /* Value loaded animation - subtle highlight effect */
+  @keyframes value-loaded-highlight {
+    0% {
+      background: var(--vscode-editor-selectionBackground);
+    }
+    100% {
+      background: transparent;
+    }
+  }
+
+  .input-area.value-loaded {
+    animation: value-loaded-highlight 300ms ease-out;
   }
 
   .inline-input {

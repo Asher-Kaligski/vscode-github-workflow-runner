@@ -1752,7 +1752,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
         key,
         data.relativePath,
         data.absolutePath,
-        data.nickname
+        data.nickname,
+        data.config // Pass config from recent file when adding to favorites
       );
 
       this._view?.webview.postMessage({

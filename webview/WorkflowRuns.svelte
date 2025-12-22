@@ -2937,7 +2937,6 @@
     loading = false;
     refreshing = false;
 
-    // Auto-load jobs for in-progress runs to show mini progress indicator (Issue 5)
     autoLoadJobsForInProgressRuns();
   }
 
@@ -3991,7 +3990,6 @@
         };
 
         // Update existing runs and track changes
-        // Track workflow-level status changes for notifications (Issue 9)
         const workflowStatusChanges: Array<{
           name: string;
           status: string;
@@ -4016,7 +4014,6 @@
                 newRun.status
               );
 
-              // Track workflow-level status changes for notification (Issue 9)
               // Only notify for significant workflow state transitions
               const isWorkflowStarted = run.status === 'queued' && newRun.status === 'in_progress';
               const isWorkflowCompleted =
@@ -4085,7 +4082,6 @@
           }
         }
 
-        // Show workflow-level notifications only (Issue 9)
         // Instead of showing "X runs updated", show specific workflow events
         // Only show if workflow toast notifications are enabled
         // Filter to only show notifications for runs that match all active filters
@@ -4115,7 +4111,6 @@
         // Re-filter to update the UI
         filterRuns();
 
-        // Issue 8: Refresh jobs for all in-progress runs
         // This ensures the mini progress indicator and graph stay updated
         // Also refresh jobs for runs that just completed to update final job statuses
         for (const run of runs) {
@@ -4340,6 +4335,10 @@
     // ALL other filters and show only watched runs present in the current dataset.
     if (showWatchedOnly && !skipWatchedOnly && watchedRuns.size > 0) {
       const watchedFiltered = runs.filter((run) => watchedRuns.has(run.id));
+      // Sort by created_at descending (most recent first)
+      watchedFiltered.sort(
+        (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+      );
       console.log(
         '[WorkflowRuns] Watched-only mode: showing',
         watchedFiltered.length,
@@ -4496,6 +4495,11 @@
         }
         return true;
       });
+    }
+
+    // This ensures the most recent runs appear at the top regardless of workflow
+    if (!skipFavoritesOnly && showFavoritesOnly && markedWorkflows.length > 0) {
+      filtered.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
     }
 
     return filtered;
@@ -5198,7 +5202,6 @@
 
   /**
    * Handle clicking on a run - toggle dependency graph view
-   * Changed from Jobs to Graph as the default view per Issue 4
    */
   function openRun(run: WorkflowRun) {
     toggleDependencyGraph(run);
