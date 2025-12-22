@@ -20,6 +20,7 @@
   export let isLoading: boolean = false;
   export let error: string | null = null;
   export let preSelectedValues: string[] = []; // Issue 9: Pre-select items from saved config
+  export let savedConfig: FileContentConfig | null = null; // Issue 1: Saved config from favorites
 
   // Internal state
   let items: ParsedContentItem[] = [];
@@ -36,7 +37,35 @@
     confirm: { values: string[]; config: FileContentConfig };
     changeExtractionMode: { mode: JsonExtractionMode; key?: string; arrayPath?: string };
     showInfo: { title: string; content: string };
+    reloadSavedConfig: void;
   }>();
+
+  /**
+   * Issue 1: Handle reload with saved config
+   * Dispatches event to parent to reload with the saved configuration
+   */
+  function handleReloadSavedConfig() {
+    if (savedConfig) {
+      // Apply saved settings to local state
+      if (savedConfig.delimiter) {
+        delimiter = savedConfig.delimiter;
+      }
+      if (savedConfig.customDelimiter) {
+        customDelimiter = savedConfig.customDelimiter;
+      }
+      if (savedConfig.jsonExtractionMode) {
+        extractionMode = savedConfig.jsonExtractionMode;
+      }
+      if (savedConfig.jsonSpecificKey) {
+        specificKey = savedConfig.jsonSpecificKey;
+      }
+      if (savedConfig.jsonArrayPath) {
+        selectedArrayPath = savedConfig.jsonArrayPath;
+      }
+      // Dispatch event to re-parse with saved config
+      dispatch('reloadSavedConfig');
+    }
+  }
 
   // Update items ONLY when parsedContent reference actually changes (not on every reactivity cycle)
   $: if (parsedContent && parsedContent !== lastParsedContentRef) {
@@ -185,6 +214,16 @@
         </span>
       {/if}
       <div class="modal-header-actions">
+        {#if savedConfig}
+          <button
+            type="button"
+            class="reload-config-button"
+            title="Reload with saved settings from favorites"
+            on:click={handleReloadSavedConfig}
+          >
+            <span class="codicon codicon-history"></span>
+          </button>
+        {/if}
         <button
           type="button"
           class="info-button"
@@ -458,6 +497,21 @@
     display: flex;
     align-items: center;
     gap: 4px;
+  }
+
+  .reload-config-button {
+    background: transparent;
+    border: none;
+    color: var(--vscode-textLink-foreground);
+    cursor: pointer;
+    padding: 4px;
+    opacity: 0.8;
+    border-radius: 4px;
+  }
+
+  .reload-config-button:hover {
+    opacity: 1;
+    background: var(--vscode-toolbar-hoverBackground);
   }
 
   .info-button {

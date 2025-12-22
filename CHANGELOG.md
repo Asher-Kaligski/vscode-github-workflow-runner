@@ -2,6 +2,33 @@
 
 All notable changes to the "github-workflow-runner" extension will be documented in this file.
 
+## [1.3.1] - 2025-12-22
+
+### 🐛 Fixed
+
+- **File Content Modal - Reload with Saved Settings:** The "reload with saved settings" icon (history icon) now appears in the File Content Modal header when the current file is a favorite with saved configuration, allowing quick re-extraction with previously saved settings (delimiter, extraction mode, selected values)
+
+- **File Content Modal - Reload Icon Immediate Update:** The reload icon now appears immediately after adding a file to favorites with saved configuration, without needing to close and reopen the modal
+
+- **Preview/Edit Modal - Add Value to Favorites:** Added an input field inside the expanded "⭐ Favorite Values" section to directly add new values to favorites without first adding them to the list
+
+- **Preview/Edit Modal - Text-to-List Sync:** Switching from Text tab to List tab now properly parses the text value using the current delimiter setting and updates the list items accordingly
+
+- **Preview/Edit Modal - Drag-and-Drop Reordering:** Added drag handles (⋮⋮ icon) to list items in the List tab, allowing users to drag and drop items to reorder them
+
+- **Workflow Runs - Sorting for Filtered Views:** Runs are now sorted by creation date (most recent first) when "Watched Runs Only" or "Favorites Only" filters are active, making it easier to find the latest runs
+
+- **Smart File Input - Reload Icon Consistency:** Fixed the reload icon (history icon) appearing incorrectly in the file dropdown. The reload icon now only appears in **Content mode** for files (favorites or recent) that have saved configuration. The icon no longer appears in Path mode
+
+- **Smart File Input - Favorites Config Inheritance:** Fixed favorites not inheriting configuration when added from the Recent section. When a recent file with saved configuration is added to favorites (by clicking the star icon), the configuration is now properly transferred to the favorite, making the reload icon appear immediately
+
+### ✨ Enhancements
+
+- **Smart File Input - Value Loaded Animation:** Added a subtle highlight animation (300ms fade) when values are populated into Smart File Input fields. This provides visual feedback when:
+  - Loading content from a file (Content mode)
+  - Inserting a file path (Path mode)
+  - Applying changes from the Preview/Edit Modal
+
 ## [1.3.0] - 2025-12-21
 
 ### ✨ New Features

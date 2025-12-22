@@ -134,6 +134,8 @@
     string,
     Array<{ value: string; label?: string; addedAt: number }>
   > = new Map();
+  // Component references for calling animation methods
+  let smartFileInputRefs: Record<string, SmartFileInput> = {};
 
   // FileContentModal state
   let showFileContentModal: boolean = false;
@@ -142,7 +144,8 @@
   let fileContentModalParsedContent: ParsedFileContent | null = null;
   let fileContentModalLoading: boolean = false;
   let fileContentModalError: string | null = null;
-  let fileContentModalPreSelectedValues: string[] = []; // Issue 9: Pre-selected values for reload
+  let fileContentModalPreSelectedValues: string[] = [];
+  let fileContentModalSavedConfig: FileContentConfig | null = null;
 
   // Preview modal state
   let showPreviewModal: boolean = false;
@@ -154,6 +157,9 @@
   let previewModalMode: 'text' | 'list' = 'text';
   let previewModalNewItemValue: string = '';
   let previewModalShowFavorites: boolean = false;
+  let previewModalNewFavoriteValue: string = '';
+  let previewModalDragIndex: number | null = null;
+  let previewModalDragOverIndex: number | null = null;
 
   // Value favorites per input (loaded from storage)
   let previewModalValueFavorites: Array<{ value: string; label?: string; addedAt: number }> = [];
@@ -1325,6 +1331,8 @@
                     smartFileInputForceMode.set(paramName, null);
                     smartFileInputForceMode = smartFileInputForceMode;
                   }, 50);
+                  // Trigger value-loaded animation for visual feedback
+                  smartFileInputRefs[paramName]?.triggerValueLoadedAnimation();
                 }
               } else if (message.error !== 'File selection cancelled') {
                 // Only show error if not cancelled
@@ -2041,6 +2049,11 @@
     fileContentModalError = null;
     fileContentModalParsedContent = null;
     fileContentModalPreSelectedValues = []; // Clear pre-selected values for fresh load
+
+    const inputData = smartFileInputData.get(inputName);
+    const favorite = inputData?.favorites?.find((f) => f.relativePath === path);
+    fileContentModalSavedConfig = favorite?.config || null;
+
     showFileContentModal = true;
 
     vscode.postMessage({
@@ -2054,8 +2067,17 @@
 
   /**
    * Handle SmartFileInput add favorite - shows a prompt for label (display name)
+   * @param inputName - The input field name
+   * @param path - The file path
+   * @param label - Optional label/nickname for the favorite
+   * @param config - Optional saved configuration from recent file
    */
-  async function handleSmartInputAddFavorite(inputName: string, path: string, label?: string) {
+  async function handleSmartInputAddFavorite(
+    inputName: string,
+    path: string,
+    label?: string,
+    config?: FileContentConfig
+  ) {
     if (!selectedWorkflow) return;
 
     // Extract filename without extension for default display
@@ -2087,6 +2109,7 @@
         relativePath: path,
         absolutePath: path, // Will be resolved on extension side
         nickname, // Keep 'nickname' in message for backward compatibility
+        config, // Pass saved config from recent file (if available)
       },
     });
   }
@@ -2166,6 +2189,7 @@
     previewModalInputName = inputName;
     previewModalValue = value;
     previewModalNewItemValue = '';
+    previewModalNewFavoriteValue = '';
     previewModalShowFavorites = false;
 
     // Load value favorites for this input
@@ -2213,6 +2237,8 @@
     inputs[previewModalInputName] = newValue;
     inputs = inputs;
     showPreviewModal = false;
+    // Trigger value-loaded animation for visual feedback
+    smartFileInputRefs[previewModalInputName]?.triggerValueLoadedAnimation();
   }
 
   /**
@@ -2274,6 +2300,56 @@
   }
 
   /**
+   * Handle drag start for list item reordering
+   */
+  function handlePreviewModalDragStart(index: number) {
+    previewModalDragIndex = index;
+  }
+
+  /**
+   * Handle drag over for list item reordering
+   */
+  function handlePreviewModalDragOver(event: DragEvent, index: number) {
+    event.preventDefault();
+    previewModalDragOverIndex = index;
+  }
+
+  /**
+   * Handle drag leave
+   */
+  function handlePreviewModalDragLeave() {
+    previewModalDragOverIndex = null;
+  }
+
+  /**
+   * Handle drop for list item reordering
+   */
+  function handlePreviewModalDrop(targetIndex: number) {
+    if (previewModalDragIndex === null || previewModalDragIndex === targetIndex) {
+      previewModalDragIndex = null;
+      previewModalDragOverIndex = null;
+      return;
+    }
+
+    // Reorder items
+    const items = [...previewModalItems];
+    const [draggedItem] = items.splice(previewModalDragIndex, 1);
+    items.splice(targetIndex, 0, draggedItem);
+    previewModalItems = items;
+
+    previewModalDragIndex = null;
+    previewModalDragOverIndex = null;
+  }
+
+  /**
+   * Handle drag end (cleanup)
+   */
+  function handlePreviewModalDragEnd() {
+    previewModalDragIndex = null;
+    previewModalDragOverIndex = null;
+  }
+
+  /**
    * Add current item to value favorites for this input
    */
   function addToValueFavorites(value: string) {
@@ -2286,7 +2362,7 @@
     }
 
     const newFavorite = { value, addedAt: Date.now() };
-    previewModalValueFavorites = [...previewModalValueFavorites, newFavorite];
+    previewModalValueFavorites = [newFavorite, ...previewModalValueFavorites];
 
     // Save to storage
     vscode.postMessage({
@@ -2301,6 +2377,17 @@
     });
 
     showToast('Added to favorites', 'success');
+  }
+
+  /**
+   * Add a new favorite value directly from the favorites section input
+   */
+  function addNewFavoriteFromInput() {
+    const trimmedValue = previewModalNewFavoriteValue.trim();
+    if (!trimmedValue) return;
+
+    addToValueFavorites(trimmedValue);
+    previewModalNewFavoriteValue = '';
   }
 
   /**
@@ -2348,6 +2435,28 @@
   }
 
   /**
+   * Handle switching from Text mode to List mode in preview modal.
+   * Syncs the text value to list items using the current delimiter.
+   */
+  function handlePreviewModalSwitchToList() {
+    // Parse the text value using the current delimiter
+    const delimiter = previewModalDelimiter === '\n' ? '\n' : previewModalDelimiter;
+    const textValue = previewModalValue.trim();
+
+    if (textValue) {
+      const values = textValue
+        .split(delimiter)
+        .map((v) => v.trim())
+        .filter((v) => v.length > 0);
+      previewModalItems = values.map((v) => ({ value: v, selected: true }));
+    } else {
+      previewModalItems = [];
+    }
+
+    previewModalMode = 'list';
+  }
+
+  /**
    * Handle preview modal close
    */
   function handlePreviewModalClose() {
@@ -2355,6 +2464,7 @@
     previewModalMode = 'text';
     previewModalItems = [];
     previewModalNewItemValue = '';
+    previewModalNewFavoriteValue = '';
     previewModalShowFavorites = false;
   }
 
@@ -2372,7 +2482,6 @@
     fileContentModalLoading = true;
     fileContentModalError = null;
     fileContentModalParsedContent = null;
-    // Issue 9: Set pre-selected values from saved config
     fileContentModalPreSelectedValues = config.selectedValues || [];
     showFileContentModal = true;
 
@@ -2416,7 +2525,6 @@
     inputs[fileContentModalInputName] = joinedValue;
     inputs = inputs;
 
-    // Issue 9: Save selected values in config for reload
     const configWithSelectedValues: FileContentConfig = {
       ...config,
       selectedValues: values,
@@ -2430,6 +2538,30 @@
       'content'
     );
 
+    // Note: smartFileInputData uses inputName as key (not storageKey)
+    const inputData = smartFileInputData.get(fileContentModalInputName);
+    if (inputData?.favorites) {
+      const existingFavorite = inputData.favorites.find(
+        (f) => f.relativePath === fileContentModalFilePath
+      );
+      if (existingFavorite) {
+        // Update the favorite's config
+        vscode.postMessage({
+          type: 'updateFileFavorite',
+          data: {
+            repoOwner,
+            repoName,
+            workflowPath: selectedWorkflow?.filename,
+            inputName: fileContentModalInputName,
+            favoriteId: existingFavorite.id,
+            config: configWithSelectedValues,
+          },
+        });
+        // Update local state immediately so reload button appears without re-opening modal
+        fileContentModalSavedConfig = configWithSelectedValues;
+      }
+    }
+
     // Reset mode to text after content is loaded
     smartFileInputForceMode.set(fileContentModalInputName, 'text');
     smartFileInputForceMode = smartFileInputForceMode;
@@ -2438,6 +2570,9 @@
       smartFileInputForceMode.set(fileContentModalInputName, null);
       smartFileInputForceMode = smartFileInputForceMode;
     }, 50);
+
+    // Trigger value-loaded animation for visual feedback
+    smartFileInputRefs[fileContentModalInputName]?.triggerValueLoadedAnimation();
 
     showFileContentModal = false;
     fileContentModalParsedContent = null;
@@ -2451,6 +2586,7 @@
     fileContentModalParsedContent = null;
     fileContentModalError = null;
     fileContentModalPreSelectedValues = []; // Clear pre-selected values
+    fileContentModalSavedConfig = null; // Clear saved config
   }
 
   /**
@@ -2475,6 +2611,32 @@
       },
     });
     fileContentModalLoading = true;
+  }
+
+  /**
+   * Handle FileContentModal reload with saved config.
+   * Re-parses the file with the saved extraction settings from favorites.
+   */
+  function handleFileContentModalReloadSavedConfig() {
+    if (!fileContentModalSavedConfig) return;
+
+    // Set pre-selected values from saved config
+    fileContentModalPreSelectedValues = fileContentModalSavedConfig.selectedValues || [];
+    fileContentModalLoading = true;
+
+    // Re-request parsing with saved config
+    vscode.postMessage({
+      type: 'parseFileForSelection',
+      data: {
+        path: fileContentModalFilePath,
+        inputName: fileContentModalInputName,
+        config: {
+          jsonExtractionMode: fileContentModalSavedConfig.jsonExtractionMode,
+          jsonSpecificKey: fileContentModalSavedConfig.jsonSpecificKey,
+          jsonArrayPath: fileContentModalSavedConfig.jsonArrayPath,
+        },
+      },
+    });
   }
 
   /**
@@ -2936,6 +3098,7 @@
               {:else if shouldUseSmartFileInput(input)}
                 <!-- SmartFileInput for all string-type inputs -->
                 <SmartFileInput
+                  bind:this={smartFileInputRefs[input.name]}
                   inputName={input.name}
                   value={inputs[input.name] || ''}
                   placeholder={input.default ? String(input.default) : ''}
@@ -2951,7 +3114,12 @@
                   on:browseFile={(e) => handleSmartInputBrowse(input.name, e.detail.mode)}
                   on:loadContent={(e) => handleSmartInputLoadContent(input.name, e.detail.path)}
                   on:addFavorite={(e) =>
-                    handleSmartInputAddFavorite(input.name, e.detail.path, e.detail.nickname)}
+                    handleSmartInputAddFavorite(
+                      input.name,
+                      e.detail.path,
+                      e.detail.nickname,
+                      e.detail.config
+                    )}
                   on:removeFavorite={(e) => handleSmartInputRemoveFavorite(input.name, e.detail.id)}
                   on:openFile={(e) => handleSmartInputOpenFile(e.detail.path)}
                   on:requestSuggestions={(e) =>
@@ -3129,10 +3297,12 @@
       isLoading={fileContentModalLoading}
       error={fileContentModalError}
       preSelectedValues={fileContentModalPreSelectedValues}
+      savedConfig={fileContentModalSavedConfig}
       on:close={handleFileContentModalClose}
       on:confirm={(e) => handleFileContentModalConfirm(e.detail.values, e.detail.config)}
       on:changeExtractionMode={(e) =>
         handleFileContentModalExtractionModeChange(e.detail.mode, e.detail.key, e.detail.arrayPath)}
+      on:reloadSavedConfig={handleFileContentModalReloadSavedConfig}
       on:showInfo={(e) => showInfoModal_func(e.detail.title, e.detail.content)}
     />
   {/if}
@@ -3207,7 +3377,7 @@
             type="button"
             class="mode-btn"
             class:active={previewModalMode === 'list'}
-            on:click={() => (previewModalMode = 'list')}
+            on:click={handlePreviewModalSwitchToList}
           >
             <span class="codicon codicon-list-selection"></span> List ({previewModalItems.length})
           </button>
@@ -3300,15 +3470,38 @@
               <div class="favorites-header">
                 <span class="favorites-title">⭐ Favorite Values</span>
               </div>
+              <div class="favorites-add-row">
+                <input
+                  type="text"
+                  class="favorites-add-input"
+                  placeholder="Add new favorite..."
+                  bind:value={previewModalNewFavoriteValue}
+                  on:keydown={(e) => {
+                    if (e.key === 'Enter') {
+                      e.preventDefault();
+                      addNewFavoriteFromInput();
+                    }
+                  }}
+                />
+                <button
+                  type="button"
+                  class="favorites-add-btn"
+                  on:click={addNewFavoriteFromInput}
+                  disabled={!previewModalNewFavoriteValue.trim()}
+                  title="Add to favorites (Enter)"
+                >
+                  <span class="codicon codicon-plus"></span>
+                </button>
+              </div>
               {#if previewModalValueFavorites.length === 0}
                 <div class="favorites-empty">No favorites saved for this input</div>
               {:else}
                 <div class="favorites-list">
-                  {#each previewModalValueFavorites as fav (fav.value)}
+                  {#each previewModalValueFavorites as fav, index (fav.value)}
                     {@const alreadyInList = previewModalItems.some(
                       (item) => item.value === fav.value
                     )}
-                    <div class="favorite-item">
+                    <div class="favorite-item" class:favorite-item-new={index === 0}>
                       {#if !alreadyInList}
                         <button
                           type="button"
@@ -3365,7 +3558,22 @@
           <div class="preview-list-items">
             {#each previewModalItems as item, index (item.value)}
               {@const isFavorite = previewModalValueFavorites.some((f) => f.value === item.value)}
-              <div class="preview-list-item" class:selected={item.selected}>
+              <!-- svelte-ignore a11y_no_static_element_interactions -->
+              <div
+                class="preview-list-item"
+                class:selected={item.selected}
+                class:dragging={previewModalDragIndex === index}
+                class:drag-over={previewModalDragOverIndex === index}
+                draggable="true"
+                on:dragstart={() => handlePreviewModalDragStart(index)}
+                on:dragover={(e) => handlePreviewModalDragOver(e, index)}
+                on:dragleave={handlePreviewModalDragLeave}
+                on:drop={() => handlePreviewModalDrop(index)}
+                on:dragend={handlePreviewModalDragEnd}
+              >
+                <span class="drag-handle" title="Drag to reorder">
+                  <span class="codicon codicon-gripper"></span>
+                </span>
                 <input
                   type="checkbox"
                   checked={item.selected}
@@ -4813,6 +5021,63 @@
     font-weight: 500;
   }
 
+  .favorites-add-row {
+    display: flex;
+    align-items: stretch; /* Stretch both elements to same height */
+    gap: 6px;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--vscode-widget-border);
+  }
+
+  .favorites-add-input {
+    flex: 1;
+    height: 26px;
+    padding: 0 8px;
+    margin: 0;
+    font-size: 12px;
+    background: var(--vscode-input-background);
+    color: var(--vscode-input-foreground);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 3px;
+    box-sizing: border-box;
+  }
+
+  .favorites-add-input:focus {
+    outline: none;
+    border-color: var(--vscode-focusBorder);
+  }
+
+  .favorites-add-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    padding: 0;
+    margin: 0;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 1px solid var(--vscode-input-border);
+    border-radius: 3px;
+    cursor: pointer;
+    flex-shrink: 0;
+    box-sizing: border-box;
+  }
+
+  .favorites-add-btn:hover:not(:disabled) {
+    background: var(--vscode-button-secondaryHoverBackground);
+  }
+
+  .favorites-add-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .favorites-add-btn .codicon {
+    font-size: 14px;
+    line-height: 14px;
+  }
+
   .favorites-empty {
     padding: 12px;
     text-align: center;
@@ -4836,6 +5101,23 @@
 
   .favorite-item:last-child {
     border-bottom: none;
+  }
+
+  .favorite-item-new {
+    animation: favoriteSlideIn 0.3s ease-out;
+  }
+
+  @keyframes favoriteSlideIn {
+    from {
+      opacity: 0;
+      transform: translateY(-10px);
+      background-color: var(--vscode-list-hoverBackground);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+      background-color: transparent;
+    }
   }
 
   .favorite-add-btn,
@@ -4903,6 +5185,34 @@
   .preview-list-item.selected {
     background: var(--vscode-list-activeSelectionBackground);
     color: var(--vscode-list-activeSelectionForeground);
+  }
+
+  .preview-list-item.dragging {
+    opacity: 0.5;
+    background: var(--vscode-list-hoverBackground);
+  }
+
+  .preview-list-item.drag-over {
+    border-top: 2px solid var(--vscode-focusBorder);
+    margin-top: -2px;
+  }
+
+  .drag-handle {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: grab;
+    color: var(--vscode-foreground);
+    opacity: 0.5;
+    flex-shrink: 0;
+  }
+
+  .drag-handle:hover {
+    opacity: 1;
+  }
+
+  .preview-list-item.dragging .drag-handle {
+    cursor: grabbing;
   }
 
   .preview-list-item input[type='checkbox'] {

@@ -717,6 +717,8 @@ export interface AddFileFavoriteMessage {
   relativePath: string;
   absolutePath: string;
   nickname?: string;
+  /** Optional saved configuration from recent file */
+  config?: FileContentConfig;
 }
 
 /**
