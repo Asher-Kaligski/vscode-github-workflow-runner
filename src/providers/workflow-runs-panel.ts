@@ -38,9 +38,15 @@ import { createErrorResponse, getResponseTypeForMessage } from '../utils/message
 import { Storage } from '../utils/storage';
 
 const AUTO_REFRESH_SECONDS_OPTIONS: number[] = [0, 15, 30, 45, 60, 90, 120, 180];
-// Default to 15 seconds - aligns with sidebar provider and provides
-// responsive monitoring without excessive API usage (~5% of rate limit)
-const DEFAULT_AUTO_REFRESH_SECONDS = 15;
+// Default to 30 seconds - provides responsive monitoring without excessive API usage
+// Adaptive refresh handles faster polling when in-progress/queued runs exist
+const DEFAULT_AUTO_REFRESH_SECONDS = 30;
+
+// Throttle rate limit storage persistence to once per minute (60000ms)
+// This reduces storage write operations while still persisting reasonably fresh data
+// Note: In-memory rate limit values are still updated on every API response for real-time UI
+const RATE_LIMIT_STORAGE_THROTTLE_MS = 60000;
+let lastRateLimitStorageUpdate = 0;
 
 export class WorkflowRunsPanel {
   /**
@@ -63,6 +69,7 @@ export class WorkflowRunsPanel {
   private _currentWorkflowFilter: string | null = null; // Track current workflow filter from webview
   private _currentActorFilter: string | null = null; // Track current actor filter from webview
   private _currentShowBotRuns: boolean = false; // Track current bot runs filter from webview
+  private _webviewReady: boolean = false; // Track if webview has sent webviewReady message
 
   private _webviewMessageListener?: vscode.Disposable;
 
@@ -552,13 +559,20 @@ export class WorkflowRunsPanel {
       async (e) => {
         if (!e.webviewPanel.visible) {
           // Panel is no longer visible, stop auto-refresh
-          this._panel.webview.postMessage({
-            type: 'stopAutoRefresh',
-            success: true,
-          });
+          // Only send if webview is ready to receive messages
+          if (this._webviewReady) {
+            this._panel.webview.postMessage({
+              type: 'stopAutoRefresh',
+              success: true,
+            });
+          }
         } else {
           // Panel became visible again, restore persisted auto-refresh setting
-          await this._sendRestoreAutoRefresh();
+          // Only send if webview has been initialized (received webviewReady)
+          // On first open, initialSettings will handle auto-refresh setup
+          if (this._webviewReady) {
+            await this._sendRestoreAutoRefresh();
+          }
         }
       },
       null,
@@ -568,6 +582,9 @@ export class WorkflowRunsPanel {
 
   public dispose() {
     WorkflowRunsPanel.currentPanel = undefined;
+
+    // Reset webview ready state
+    this._webviewReady = false;
 
     // Clean up our resources
     this._panel.dispose();
@@ -601,6 +618,7 @@ export class WorkflowRunsPanel {
       switch (message.type) {
         case 'webviewReady':
           // Webview signaled it's ready to receive data
+          this._webviewReady = true;
           await this._sendInitialSettings();
           await this._sendWorkflows();
           await this._sendWatchedRuns(); // Load watched runs from storage
@@ -792,6 +810,40 @@ export class WorkflowRunsPanel {
           break;
         }
 
+        case 'updateAdaptiveRefreshSettings': {
+          const { adaptiveRefreshEnabled, adaptiveFastRefreshSeconds } = (message.data || {}) as {
+            adaptiveRefreshEnabled?: boolean;
+            adaptiveFastRefreshSeconds?: number;
+          };
+
+          // Build update object with only provided values
+          const updates: {
+            adaptiveRefreshEnabled?: boolean;
+            adaptiveFastRefreshSeconds?: number;
+          } = {};
+
+          if (typeof adaptiveRefreshEnabled === 'boolean') {
+            updates.adaptiveRefreshEnabled = adaptiveRefreshEnabled;
+          }
+          if (
+            typeof adaptiveFastRefreshSeconds === 'number' &&
+            Number.isFinite(adaptiveFastRefreshSeconds) &&
+            adaptiveFastRefreshSeconds >= 5 &&
+            adaptiveFastRefreshSeconds <= 10
+          ) {
+            updates.adaptiveFastRefreshSeconds = adaptiveFastRefreshSeconds;
+          }
+
+          if (Object.keys(updates).length > 0) {
+            try {
+              await Storage.updateWorkflowRunsPanelSettings(updates);
+            } catch (error) {
+              console.error('Failed to persist adaptive refresh settings:', error);
+            }
+          }
+          break;
+        }
+
         case 'updateDateFilter': {
           const { from, to } = (message.data || {}) as {
             from?: string;
@@ -858,23 +910,6 @@ export class WorkflowRunsPanel {
           break;
         }
 
-        case 'requestCancelWorkflowRun': {
-          const { runId, runName } = (message.data || {}) as {
-            runId: number;
-            runName?: string;
-          };
-          const confirm = await vscode.window.showWarningMessage(
-            `Cancel "${runName || `run #${runId}`}"?`,
-            { modal: true },
-            'Cancel Run',
-            'Dismiss'
-          );
-          if (confirm === 'Cancel Run') {
-            await this._cancelWorkflowRun({ runId });
-          }
-          break;
-        }
-
         case 'openSidebarWithWorkflow':
           // Focus the sidebar view without forcing an instructional toast
           await vscode.commands.executeCommand(
@@ -898,7 +933,7 @@ export class WorkflowRunsPanel {
           );
           break;
 
-        // DISABLED: Interactive log viewer - temporarily disabled in v1.2.0
+        // DISABLED: Interactive log viewer - temporarily disabled for separate PR
         // case 'viewJobLogsInteractive':
         //   await this._viewJobLogsInteractive(
         //     message.data as { jobId: number; jobName: string; runId: number }
@@ -947,7 +982,7 @@ export class WorkflowRunsPanel {
           await this._getJobDetails(message.data as { jobId: number; runId: number });
           break;
 
-        // DISABLED: Step log viewing - temporarily disabled in v1.2.0
+        // DISABLED: Step log viewing - temporarily disabled for separate PR
         // case 'viewStepLogs':
         //   await this._viewStepLogs(
         //     message.data as {
@@ -1348,6 +1383,47 @@ export class WorkflowRunsPanel {
           }
           break;
         }
+
+        // Handle request cancellation from webview
+        // This is called when filters change rapidly to invalidate stale requests
+        case 'cancelPendingRequests': {
+          const { workflowGeneration, filterGeneration } = (message.data || {}) as {
+            workflowGeneration?: number;
+            filterGeneration?: number;
+          };
+          console.log('[WorkflowRunsPanel] Cancelling pending requests:', {
+            workflowGeneration,
+            filterGeneration,
+          });
+          // Currently we just log this - actual request cancellation would require
+          // AbortController for fetch requests, which is a larger change.
+          // The webview uses generation counters to ignore stale responses.
+          break;
+        }
+
+        // Handle rate limit settings update from webview
+        case 'updateRateLimitSettings': {
+          const { rateLimitProtectionEnabled, rateLimitThreshold } = (message.data || {}) as {
+            rateLimitProtectionEnabled?: boolean;
+            rateLimitThreshold?: number;
+          };
+          console.log('[WorkflowRunsPanel] Rate limit settings updated:', {
+            rateLimitProtectionEnabled,
+            rateLimitThreshold,
+          });
+          // Persist the settings to storage
+          try {
+            const panelSettings = await Storage.getWorkflowRunsPanelSettings();
+            await Storage.updateWorkflowRunsPanelSettings({
+              ...panelSettings,
+              rateLimitProtectionEnabled,
+              rateLimitThreshold,
+            });
+          } catch (error) {
+            console.error('[WorkflowRunsPanel] Failed to persist rate limit settings:', error);
+          }
+          break;
+        }
       }
     } catch (error) {
       // Log the error and send an error response to the webview
@@ -1455,6 +1531,37 @@ export class WorkflowRunsPanel {
           ? panelSettings.showProgressIndicators
           : true;
 
+      // Extract adaptive refresh settings with defaults
+      const adaptiveRefreshEnabled =
+        typeof panelSettings.adaptiveRefreshEnabled === 'boolean'
+          ? panelSettings.adaptiveRefreshEnabled
+          : true; // Enabled by default
+      const adaptiveFastRefreshSeconds =
+        typeof panelSettings.adaptiveFastRefreshSeconds === 'number' &&
+        Number.isFinite(panelSettings.adaptiveFastRefreshSeconds) &&
+        panelSettings.adaptiveFastRefreshSeconds >= 5 &&
+        panelSettings.adaptiveFastRefreshSeconds <= 10
+          ? panelSettings.adaptiveFastRefreshSeconds
+          : 10; // Default to 10 seconds
+
+      // Extract rate limit protection settings with defaults
+      const rateLimitProtectionEnabled =
+        typeof panelSettings.rateLimitProtectionEnabled === 'boolean'
+          ? panelSettings.rateLimitProtectionEnabled
+          : true; // Enabled by default
+      const rateLimitThreshold =
+        typeof panelSettings.rateLimitThreshold === 'number' &&
+        Number.isFinite(panelSettings.rateLimitThreshold) &&
+        panelSettings.rateLimitThreshold >= 50 &&
+        panelSettings.rateLimitThreshold <= 90
+          ? panelSettings.rateLimitThreshold
+          : 70; // Default to 70%
+
+      // NOTE: We intentionally do NOT load persisted rate limit info here.
+      // Rate limit display should show actual values from real API responses only,
+      // not stale cached values from previous sessions. The display will show
+      // "Unknown" until the first API response is received with rate limit headers.
+
       // CRITICAL FIX: Do NOT apply persisted date filters to the initial load.
       // Date filters from previous sessions can prevent any runs from being
       // fetched if the date range has no matching runs. Instead, always start
@@ -1475,6 +1582,10 @@ export class WorkflowRunsPanel {
           autoRefreshSeconds,
           showWorkflowToastNotifications,
           showProgressIndicators,
+          adaptiveRefreshEnabled,
+          adaptiveFastRefreshSeconds,
+          rateLimitProtectionEnabled,
+          rateLimitThreshold,
         }
       );
 
@@ -1492,6 +1603,13 @@ export class WorkflowRunsPanel {
           dateFilterMaxTotalRuns,
           showWorkflowToastNotifications,
           showProgressIndicators,
+          adaptiveRefreshEnabled,
+          adaptiveFastRefreshSeconds,
+          rateLimitProtectionEnabled,
+          rateLimitThreshold,
+          // NOTE: rateLimitInfo is intentionally NOT included here.
+          // Rate limit should only show real values from actual API responses,
+          // not cached data from previous sessions. Display starts as "Unknown".
         },
       });
     } catch (error) {
@@ -1527,16 +1645,36 @@ export class WorkflowRunsPanel {
           ? persistedAutoRefreshSeconds
           : DEFAULT_AUTO_REFRESH_SECONDS;
 
+      // Extract adaptive refresh settings with defaults
+      const adaptiveRefreshEnabled =
+        typeof panelSettings.adaptiveRefreshEnabled === 'boolean'
+          ? panelSettings.adaptiveRefreshEnabled
+          : true; // Enabled by default
+      const adaptiveFastRefreshSeconds =
+        typeof panelSettings.adaptiveFastRefreshSeconds === 'number' &&
+        Number.isFinite(panelSettings.adaptiveFastRefreshSeconds) &&
+        panelSettings.adaptiveFastRefreshSeconds >= 5 &&
+        panelSettings.adaptiveFastRefreshSeconds <= 10
+          ? panelSettings.adaptiveFastRefreshSeconds
+          : 10; // Default to 10 seconds
+
       console.log(
         '[WorkflowRunsPanel] _sendRestoreAutoRefresh: Restoring auto-refresh to',
         autoRefreshSeconds,
-        'seconds'
+        'seconds, adaptive:',
+        adaptiveRefreshEnabled,
+        'fast interval:',
+        adaptiveFastRefreshSeconds
       );
 
       this._panel.webview.postMessage({
         type: 'restoreAutoRefresh',
         success: true,
-        data: { autoRefreshSeconds },
+        data: {
+          autoRefreshSeconds,
+          adaptiveRefreshEnabled,
+          adaptiveFastRefreshSeconds,
+        },
       });
     } catch (error) {
       console.error('Failed to restore auto-refresh setting:', error);
@@ -1544,7 +1682,11 @@ export class WorkflowRunsPanel {
       this._panel.webview.postMessage({
         type: 'restoreAutoRefresh',
         success: true,
-        data: { autoRefreshSeconds: DEFAULT_AUTO_REFRESH_SECONDS },
+        data: {
+          autoRefreshSeconds: DEFAULT_AUTO_REFRESH_SECONDS,
+          adaptiveRefreshEnabled: true,
+          adaptiveFastRefreshSeconds: 10,
+        },
       });
     }
   }
@@ -1622,10 +1764,26 @@ export class WorkflowRunsPanel {
    */
   private async _cancelWorkflowRun(data: { runId: number }) {
     const runId = data.runId;
+
+    console.log('[CancelWorkflow] Backend received cancel request:', { runId, data });
+
+    // Validate runId is present and valid
+    if (!runId || typeof runId !== 'number') {
+      console.error('[CancelWorkflow] Invalid runId received:', { runId, type: typeof runId });
+      this._panel.webview.postMessage({
+        type: 'cancelWorkflowRunResponse',
+        success: false,
+        data: { runId },
+        error: 'Invalid run ID provided',
+      });
+      return;
+    }
+
     try {
       // Validate Git context before any GitHub API operation
       const isValidContext = await ensureGitContextValidOrWarn('cancelWorkflowRun');
       if (!isValidContext) {
+        console.warn('[CancelWorkflow] Git context validation failed for runId:', runId);
         this._panel.webview.postMessage({
           type: 'gitContextMismatch',
           success: false,
@@ -1636,6 +1794,7 @@ export class WorkflowRunsPanel {
 
       const repoInfo = await getRepositoryInfo();
       if (!repoInfo) {
+        console.error('[CancelWorkflow] Could not get repository info for runId:', runId);
         this._panel.webview.postMessage({
           type: 'cancelWorkflowRunResponse',
           success: false,
@@ -1645,35 +1804,51 @@ export class WorkflowRunsPanel {
         return;
       }
 
+      console.log('[CancelWorkflow] Calling GitHub API to cancel run:', {
+        owner: repoInfo.owner,
+        repo: repoInfo.name,
+        runId,
+      });
+
       const result = await cancelWorkflowRun(repoInfo.owner, repoInfo.name, runId);
 
+      console.log('[CancelWorkflow] GitHub API response:', { runId, result });
+
       if (result.success) {
+        console.log('[CancelWorkflow] Successfully cancelled run:', runId);
         this._panel.webview.postMessage({
           type: 'cancelWorkflowRunResponse',
           success: true,
           data: { runId, status: 'cancelled' },
         });
-        vscode.window.showInformationMessage('✅ Workflow run cancelled successfully');
+        vscode.window.showInformationMessage(`✅ Workflow run #${runId} cancelled successfully`);
         // Don't do a full reload - the webview will update the run status
         // based on the cancelWorkflowRunResponse message above
       } else {
+        console.error('[CancelWorkflow] Failed to cancel run:', { runId, error: result.error });
         this._panel.webview.postMessage({
           type: 'cancelWorkflowRunResponse',
           success: false,
           data: { runId },
           error: result.error || 'Failed to cancel workflow run',
         });
-        vscode.window.showErrorMessage(`❌ Failed to cancel workflow run: ${result.error}`);
+        vscode.window.showErrorMessage(
+          `❌ Failed to cancel workflow run #${runId}: ${result.error}`
+        );
       }
     } catch (error) {
       const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+      console.error('[CancelWorkflow] Exception while cancelling run:', {
+        runId,
+        error: errorMessage,
+      });
       this._panel.webview.postMessage({
         type: 'cancelWorkflowRunResponse',
         success: false,
         data: { runId },
         error: errorMessage,
       });
-      vscode.window.showErrorMessage(`❌ Error cancelling workflow run: ${errorMessage}`);
+      vscode.window.showErrorMessage(`❌ Error cancelling workflow run #${runId}: ${errorMessage}`);
     }
   }
 
@@ -1919,22 +2094,41 @@ export class WorkflowRunsPanel {
    * This is used during auto-refresh when "Watched Runs Only" filter is active.
    */
   private async _backgroundRefreshWatchedRuns(data: { watchedRunIds: number[] }) {
+    // Helper to send response - ensures webview always gets a response
+    // to clear its isBackgroundRefreshInProgress flag
+    const sendResponse = (
+      success: boolean,
+      runs?: unknown[],
+      skipped?: string,
+      rateLimitInfo?: { remaining: number; limit: number; reset: number }
+    ) => {
+      this._panel.webview.postMessage({
+        type: 'backgroundRefreshWatchedRunsResponse',
+        success,
+        data: runs ? { runs, rateLimitInfo } : undefined,
+        skipped, // Optional: reason why refresh was skipped (for debugging)
+      });
+    };
+
     try {
       const authenticated = await TokenManager.getGithubToken();
       if (!authenticated) {
         console.log('[WorkflowRunsPanel] Background refresh skipped: not authenticated');
+        sendResponse(false, undefined, 'not authenticated');
         return;
       }
 
       const repoConfig = await getRepositoryConfig();
       if (!repoConfig.owner || !repoConfig.name) {
         console.log('[WorkflowRunsPanel] Background refresh skipped: no repository config');
+        sendResponse(false, undefined, 'no repository config');
         return;
       }
 
       const { watchedRunIds } = data;
       if (!watchedRunIds || watchedRunIds.length === 0) {
         console.log('[WorkflowRunsPanel] Background refresh skipped: no watched runs');
+        sendResponse(false, undefined, 'no watched runs');
         return;
       }
 
@@ -1948,12 +2142,17 @@ export class WorkflowRunsPanel {
       // Note: GitHub API doesn't support fetching multiple runs by ID in a single request
       const { getWorkflowRun } = await import('../api/workflow-monitor');
       const updatedRuns = [];
+      let latestRateLimitInfo: { remaining: number; limit: number; reset: number } | undefined;
 
       for (const runId of watchedRunIds) {
         try {
-          const run = await getWorkflowRun(repoConfig.owner, repoConfig.name, runId);
-          if (run) {
-            updatedRuns.push(run);
+          const result = await getWorkflowRun(repoConfig.owner, repoConfig.name, runId);
+          if (result) {
+            updatedRuns.push(result.run);
+            // Keep track of the latest rate limit info from any API response
+            if (result.rateLimitInfo) {
+              latestRateLimitInfo = result.rateLimitInfo;
+            }
           }
         } catch (error) {
           console.error(
@@ -1965,19 +2164,37 @@ export class WorkflowRunsPanel {
         }
       }
 
-      console.log('[WorkflowRunsPanel] Background refresh: fetched', updatedRuns.length, 'runs');
+      // Persist rate limit info to storage (throttled to once per minute)
+      if (latestRateLimitInfo && typeof latestRateLimitInfo.remaining === 'number') {
+        const now = Date.now();
+        if (now - lastRateLimitStorageUpdate >= RATE_LIMIT_STORAGE_THROTTLE_MS) {
+          lastRateLimitStorageUpdate = now;
+          Storage.updateRateLimitTracker({
+            remaining: latestRateLimitInfo.remaining,
+            limit: latestRateLimitInfo.limit,
+            resetTimestamp: latestRateLimitInfo.reset,
+          }).catch((err) => {
+            console.error('[WorkflowRunsPanel] Failed to persist rate limit info:', err);
+          });
+        }
+      }
 
-      this._panel.webview.postMessage({
-        type: 'backgroundRefreshWatchedRunsResponse',
-        success: true,
-        data: { runs: updatedRuns },
-      });
+      console.log(
+        '[WorkflowRunsPanel] Background refresh: fetched',
+        updatedRuns.length,
+        'runs',
+        latestRateLimitInfo
+          ? `(Rate limit: ${latestRateLimitInfo.remaining}/${latestRateLimitInfo.limit})`
+          : ''
+      );
+      sendResponse(true, updatedRuns, undefined, latestRateLimitInfo);
     } catch (error) {
       console.error(
         '[WorkflowRunsPanel] Background refresh error:',
         error instanceof Error ? error.message : 'Unknown error'
       );
-      // Don't send error to webview - this is a background operation
+      // Send error response so webview can clear its isBackgroundRefreshInProgress flag
+      sendResponse(false, undefined, error instanceof Error ? error.message : 'Unknown error');
     }
   }
 
@@ -1987,16 +2204,40 @@ export class WorkflowRunsPanel {
    * This is used during auto-refresh to silently update the runs list.
    */
   private async _backgroundRefreshAllRuns() {
+    // Helper to send response - ensures webview always gets a response
+    // to clear its isBackgroundRefreshInProgress flag
+    const sendResponse = (
+      success: boolean,
+      data?: {
+        runs: unknown[];
+        totalCount: number;
+        perPage: number;
+        repository: { owner: string; name: string };
+        truncated?: boolean;
+        rateLimitInfo?: { remaining: number; limit: number; reset: number };
+      },
+      skipped?: string
+    ) => {
+      this._panel.webview.postMessage({
+        type: 'backgroundRefreshAllRunsResponse',
+        success,
+        data,
+        skipped, // Optional: reason why refresh was skipped (for debugging)
+      });
+    };
+
     try {
       const authenticated = await TokenManager.getGithubToken();
       if (!authenticated) {
         console.log('[WorkflowRunsPanel] Background refresh all skipped: not authenticated');
+        sendResponse(false, undefined, 'not authenticated');
         return;
       }
 
       const repoConfig = await getRepositoryConfig();
       if (!repoConfig.owner || !repoConfig.name) {
         console.log('[WorkflowRunsPanel] Background refresh all skipped: no repository config');
+        sendResponse(false, undefined, 'no repository config');
         return;
       }
 
@@ -2051,24 +2292,48 @@ export class WorkflowRunsPanel {
       if (result) {
         const truncated = hasDateFilter && (result as { truncated?: boolean }).truncated === true;
 
-        this._panel.webview.postMessage({
-          type: 'backgroundRefreshAllRunsResponse',
-          success: true,
-          data: {
-            runs: result.runs,
-            totalCount: result.totalCount,
-            perPage: config.monitoring.maxRuns,
-            repository: { owner: repoConfig.owner, name: repoConfig.name },
-            truncated,
-          },
+        // Include rate limit info if available
+        const rateLimitInfo = (
+          result as { rateLimitInfo?: { remaining: number; limit: number; reset: number } }
+        ).rateLimitInfo;
+
+        // Persist rate limit info to storage (throttled to once per minute)
+        // This is for tracking/reference purposes - the UI display is updated
+        // from actual API responses, not loaded from storage on startup
+        if (rateLimitInfo && typeof rateLimitInfo.remaining === 'number') {
+          const now = Date.now();
+          if (now - lastRateLimitStorageUpdate >= RATE_LIMIT_STORAGE_THROTTLE_MS) {
+            lastRateLimitStorageUpdate = now;
+            Storage.updateRateLimitTracker({
+              remaining: rateLimitInfo.remaining,
+              limit: rateLimitInfo.limit,
+              resetTimestamp: rateLimitInfo.reset,
+            }).catch((err) => {
+              console.error('[WorkflowRunsPanel] Failed to persist rate limit info:', err);
+            });
+          }
+        }
+
+        sendResponse(true, {
+          runs: result.runs,
+          totalCount: result.totalCount,
+          perPage: config.monitoring.maxRuns,
+          repository: { owner: repoConfig.owner, name: repoConfig.name },
+          truncated,
+          rateLimitInfo,
         });
+      } else {
+        // API returned null - send failure response so webview can clear its state
+        console.log('[WorkflowRunsPanel] Background refresh all: API returned no result');
+        sendResponse(false, undefined, 'API returned no result');
       }
     } catch (error) {
       console.error(
         '[WorkflowRunsPanel] Background refresh all error:',
         error instanceof Error ? error.message : 'Unknown error'
       );
-      // Don't send error to webview - this is a background operation
+      // Send error response so webview can clear its isBackgroundRefreshInProgress flag
+      sendResponse(false, undefined, error instanceof Error ? error.message : 'Unknown error');
     }
   }
 
@@ -3442,11 +3707,12 @@ export class WorkflowRunsPanel {
       }
 
       // Fetch run details to get workflow_id
-      const run = await getWorkflowRun(repoInfo.owner, repoInfo.name, runId);
-      if (!run) {
+      const runResult = await getWorkflowRun(repoInfo.owner, repoInfo.name, runId);
+      if (!runResult) {
         await this._rerunWorkflow({ runId });
         return;
       }
+      const run = runResult.run;
 
       // Resolve workflow file path from workflow_id
       const workflowMeta = await getWorkflowById(repoInfo.owner, repoInfo.name, run.workflow_id);
@@ -3577,11 +3843,12 @@ export class WorkflowRunsPanel {
       }
 
       // Fetch run details to get workflow_id and branch
-      const run = await getWorkflowRun(repoInfo.owner, repoInfo.name, runId);
-      if (!run) {
+      const runResult = await getWorkflowRun(repoInfo.owner, repoInfo.name, runId);
+      if (!runResult) {
         await this._rerunWorkflow({ runId });
         return;
       }
+      const run = runResult.run;
 
       // Resolve workflow file path from workflow_id
       const workflowMeta = await getWorkflowById(repoInfo.owner, repoInfo.name, run.workflow_id);
@@ -3644,10 +3911,11 @@ export class WorkflowRunsPanel {
       return null;
     }
 
-    const run = await getWorkflowRun(repoInfo.owner, repoInfo.name, runId);
-    if (!run) {
+    const runResult = await getWorkflowRun(repoInfo.owner, repoInfo.name, runId);
+    if (!runResult) {
       return null;
     }
+    const run = runResult.run;
 
     const workflowMeta = await getWorkflowById(repoInfo.owner, repoInfo.name, run.workflow_id);
     if (!workflowMeta || !workflowMeta.path) {

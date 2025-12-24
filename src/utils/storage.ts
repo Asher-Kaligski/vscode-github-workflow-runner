@@ -16,6 +16,7 @@ const MARKED_WORKFLOWS_KEY = 'markedWorkflows';
 const WATCHED_RUNS_KEY = 'watchedRuns';
 const WORKFLOW_RUNS_PANEL_SETTINGS_KEY = 'workflowRunsPanelSettings';
 const GIT_CONTEXT_KEY = 'lastValidatedGitContext';
+const RATE_LIMIT_TRACKER_KEY = 'rateLimitTracker';
 const MAX_HISTORY_ENTRIES = 100;
 const MAX_WATCHED_RUNS_PER_REPO = 20;
 
@@ -28,6 +29,22 @@ export interface GitContextSnapshot {
   repo: string;
   branch: string | null;
   validatedAt: string;
+}
+
+/**
+ * Persisted rate limit information for tracking API usage across sessions.
+ * Note: This is stored for reference but NOT loaded on initial panel display.
+ * The panel shows "Unknown" until real API responses provide actual values.
+ */
+export interface RateLimitTracker {
+  /** Number of remaining API requests allowed */
+  remaining: number;
+  /** Total API request limit (usually 5000 for authenticated users) */
+  limit: number;
+  /** Unix timestamp (seconds) when the rate limit will reset */
+  resetTimestamp: number;
+  /** ISO timestamp when this information was last updated */
+  lastUpdatedAt: string;
 }
 
 type WorkflowRunsPanelSettings = {
@@ -51,6 +68,27 @@ type WorkflowRunsPanelSettings = {
    * Show inline job progress for running workflows.
    */
   showProgressIndicators?: boolean;
+  /**
+   * Enable adaptive refresh: speeds up polling when in-progress/queued runs exist.
+   * When enabled, uses adaptiveFastRefreshSeconds when active runs are detected,
+   * otherwise falls back to autoRefreshSeconds. Defaults to true.
+   */
+  adaptiveRefreshEnabled?: boolean;
+  /**
+   * Fast refresh interval (in seconds) used when adaptive refresh is enabled
+   * and active runs are detected. Valid range: 5-10 seconds. Defaults to 10.
+   */
+  adaptiveFastRefreshSeconds?: number;
+  /**
+   * Whether automatic rate limit protection is enabled.
+   * When enabled, auto-refresh will be throttled when API usage reaches the threshold.
+   */
+  rateLimitProtectionEnabled?: boolean;
+  /**
+   * Percentage threshold (50-90) at which rate limit protection activates.
+   * Defaults to 90%.
+   */
+  rateLimitThreshold?: number;
 };
 
 /**
@@ -662,5 +700,61 @@ export class Storage {
    */
   static async clearLastValidatedGitContext(): Promise<void> {
     await this.context.globalState.update(GIT_CONTEXT_KEY, null);
+  }
+
+  // ========================================================================
+  // Rate Limit Tracking Methods
+  // ========================================================================
+
+  /**
+   * Get the persisted rate limit information.
+   * Returns null if no rate limit info has been recorded yet.
+   * Note: This is for reference/logging purposes. The panel UI does NOT
+   * load this on startup - it shows "Unknown" until real API responses arrive.
+   */
+  static async getRateLimitTracker(): Promise<RateLimitTracker | null> {
+    const tracker = this.context.globalState.get<RateLimitTracker | null>(
+      RATE_LIMIT_TRACKER_KEY,
+      null
+    );
+
+    // Check if the stored data is stale (reset time has passed)
+    if (tracker && tracker.resetTimestamp) {
+      const now = Math.floor(Date.now() / 1000);
+      if (now >= tracker.resetTimestamp) {
+        // Rate limit has reset, return null to indicate unknown
+        console.log('[Storage] Rate limit has reset, clearing stale tracker');
+        return null;
+      }
+    }
+
+    return tracker;
+  }
+
+  /**
+   * Update the persisted rate limit information.
+   * Call this after receiving API responses with rate limit headers.
+   */
+  static async updateRateLimitTracker(data: {
+    remaining: number;
+    limit: number;
+    resetTimestamp: number;
+  }): Promise<void> {
+    const tracker: RateLimitTracker = {
+      remaining: data.remaining,
+      limit: data.limit,
+      resetTimestamp: data.resetTimestamp,
+      lastUpdatedAt: new Date().toISOString(),
+    };
+
+    console.log('[Storage] Updating rate limit tracker:', tracker);
+    await this.context.globalState.update(RATE_LIMIT_TRACKER_KEY, tracker);
+  }
+
+  /**
+   * Clear the persisted rate limit information.
+   */
+  static async clearRateLimitTracker(): Promise<void> {
+    await this.context.globalState.update(RATE_LIMIT_TRACKER_KEY, null);
   }
 }

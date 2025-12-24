@@ -2,6 +2,85 @@
 
 All notable changes to the "github-workflow-runner" extension will be documented in this file.
 
+## [1.4.0] - 2025-12-24
+
+### ✨ New Features
+
+- **Cancel Workflow Confirmation Modal:** Added a detailed confirmation dialog before canceling workflow runs.
+  - Displays workflow name, branch, and author for verification
+  - Prevents accidental cancellation of important runs
+  - Clear "Dismiss" and "Cancel Run" action buttons
+  - Keyboard accessible (Escape to close)
+
+- **Adaptive Auto-Refresh:** Intelligent polling that adjusts based on workflow activity.
+  - Automatically speeds up refresh interval (5-10s configurable) when in-progress or queued runs are detected
+  - Falls back to your main auto-refresh interval when all runs are stable
+  - Configurable fast refresh interval via slider in Settings panel
+  - Enable/disable toggle with informative help modal
+  - Visual indicator shows when adaptive refresh is active ("⚡ Faster refresh active due to in-progress runs")
+  - Balances responsiveness with API quota preservation
+
+- **Real-Time Rate Limit Monitoring:** Track GitHub API usage directly in the Settings panel.
+  - Live display of remaining API requests with color-coded progress bar (green → yellow → red)
+  - Shows exact remaining/limit values (e.g., "4,521 / 5,000")
+  - Displays time until rate limit resets
+  - Updates automatically with each API response
+
+- **Rate Limit Protection:** Automatic throttling to prevent hitting API limits.
+  - Configurable threshold (50-90%, default 70%) at which protection activates
+  - When enabled, auto-refresh is paused to preserve API quota
+  - Warning indicator appears in API Usage tab when threshold is exceeded
+  - Toggle to enable/disable protection with persistent settings
+
+- **Health Monitor Notification Banner:** Detects and helps recover from unresponsive panel states.
+  - Automatically detects stuck loading states and stale timers
+  - Displays informative banner with specific issue details
+  - Three recovery actions: Reset State, Refresh Data, Restart Auto-refresh
+  - Respects user activity to avoid false positives
+  - Dismissible with automatic re-detection if issue persists
+
+- **Filter Help Modals:** Added help buttons to Watched Runs and Favorites filter messages.
+  - Explains what each filter mode does
+  - Describes which filters are disabled and why
+  - Accessible via ℹ️ icon next to filter status messages
+
+- **Memory Management System:** Improved performance and resource usage for workflow runs.
+  - Clears per-run state (expanded sections, job data) when runs are no longer visible
+  - Limits cache entries to prevent memory bloat during long sessions
+  - Automatic cleanup during background refresh cycles
+  - Reduces memory footprint when monitoring many workflow runs
+
+### 🎨 Enhancements
+
+- **Improved Workflow Filtering:** Enhanced filtering logic for watched and favorites runs.
+  - More accurate filtering when combining multiple filter criteria
+  - Better handling of edge cases with watched runs
+  - Consistent sorting behavior across filter modes
+
+- **Enhanced Disabled Filter Visual Feedback:** Clearer indication when filters are disabled.
+  - Dashed borders on disabled filter controls
+  - Lock icon overlay indicating the filter cannot be changed
+  - Reduced opacity for disabled state
+  - Tooltip explaining why the filter is disabled
+
+- **Settings Panel Improvements:** Better organization and discoverability of settings.
+  - API Usage tab now shows real-time rate limit data
+  - Improved slider controls for adaptive refresh interval
+  - Better visual hierarchy in General tab
+
+### 🔧 Technical Improvements
+
+- Refactored code structure for improved readability and maintainability
+- Added debouncing for adaptive refresh recalculation to prevent timer thrashing
+- Protection against concurrent background refresh calls during fast refresh intervals
+- New storage utilities for persisting adaptive refresh, rate limit, and memory management settings
+- Throttled filter recalculation to handle rapid API responses gracefully
+- Added `requestAnimationFrame` for job and artifact rendering to improve performance
+- Generation counters to invalidate stale API responses during rapid filter changes
+- Rate limit information extracted from GitHub API response headers
+- Improved error handling with detailed console logging for cancel workflow operations
+- Webview ready state tracking to prevent premature message sending
+
 ## [1.3.1] - 2025-12-22
 
 ### 🐛 Fixed

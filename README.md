@@ -55,6 +55,10 @@ Mark frequently used workflows as favorites for instant access. Pin workflows to
 
 - Live status updates with color-coded indicators
 - **Interactive job dependencies graph** with execution stages
+- **Adaptive auto-refresh** — speeds up polling when workflows are running _(New in v1.4.0)_
+- **Cancel confirmation modal** — prevents accidental cancellation with detailed verification _(New in v1.4.0)_
+- **Real-time API rate limit monitoring** — track GitHub API usage with visual progress bar _(New in v1.4.0)_
+- **Rate limit protection** — automatic throttling to prevent hitting API limits _(New in v1.4.0)_
 - Filter by workflow, branch, PR, or marked workflows
 - View logs directly in VS Code editor
 - Download artifacts with one click
@@ -126,7 +130,7 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 | [Job Dependencies Graph](#job-dependencies-graph) | Visualize job execution stages                |
 | [Job Step Details](#job-step-details)             | Step-by-step execution details                |
 | [Workflow Summary](#workflow-summary)             | GitHub step summaries and annotations         |
-| [Settings Panel](#settings-panel)                 | Configure refresh, limits, and notifications  |
+| [Settings Panel](#settings-panel)                 | General, Notifications, and API Usage tabs    |
 
 ### Workflow Dispatch
 
@@ -204,9 +208,19 @@ _**Preview/Edit Modal** — View and edit multi-value inputs in list format with
 
 ### Settings Panel
 
-![Settings Panel](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/settings-panel.png)
+The Settings Panel provides three tabs for configuring different aspects of the extension:
 
-> Configure refresh intervals, run limits, and date filters with intuitive in-panel settings. Toggle between General and Notifications tabs.
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/settings-general-tab.png" width="350" alt="Settings General Tab">
+
+_**General Tab** — Configure auto-refresh intervals, adaptive refresh (speeds up polling when workflows are running), run limits, and date filters_
+
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/settings-notifications-tab.png" width="350" alt="Settings Notifications Tab">
+
+_**Notifications Tab** — Control toast notifications and progress indicators for workflow events_
+
+<img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/settings-api-usage-tab.png" width="350" alt="Settings API Usage Tab">
+
+_**API Usage Tab** — Monitor GitHub API rate limits in real-time with color-coded progress bar, see remaining requests and reset time, and configure automatic rate limit protection (threshold 50-90%)_
 
 ---
 
@@ -214,32 +228,33 @@ _**Preview/Edit Modal** — View and edit multi-value inputs in list format with
 
 ### 🔧 Workflow Runs Panel
 
-| Feature                    | Description                                                                   |
-| -------------------------- | ----------------------------------------------------------------------------- |
-| **Job Dependencies Graph** | Visualize job dependencies with an interactive graph showing execution stages |
-| **Matrix Job Groups**      | Matrix jobs are intelligently grouped with collapsible views for each variant |
-| **Job Steps Details**      | Click on any job to view step-by-step breakdown with status and duration      |
-| **Workflow Summary**       | View GitHub step summaries with build metadata and error details              |
-| **View Logs**              | Open workflow run logs directly in VS Code editor                             |
-| **View Jobs & Steps**      | Expand any run to see individual jobs with status, duration, and step details |
-| **Download Artifacts**     | Download workflow artifacts as ZIP files                                      |
-| **Rerun Workflows**        | Rerun all jobs or only failed jobs                                            |
-| **Cancel Runs**            | Cancel in-progress workflows with loading states and error handling           |
+| Feature                    | Description                                                                          |
+| -------------------------- | ------------------------------------------------------------------------------------ |
+| **Job Dependencies Graph** | Visualize job dependencies with an interactive graph showing execution stages        |
+| **Matrix Job Groups**      | Matrix jobs are intelligently grouped with collapsible views for each variant        |
+| **Job Steps Details**      | Click on any job to view step-by-step breakdown with status and duration             |
+| **Workflow Summary**       | View GitHub step summaries with build metadata and error details                     |
+| **View Logs**              | Open workflow run logs directly in VS Code editor                                    |
+| **View Jobs & Steps**      | Expand any run to see individual jobs with status, duration, and step details        |
+| **Download Artifacts**     | Download workflow artifacts as ZIP files                                             |
+| **Rerun Workflows**        | Rerun all jobs or only failed jobs                                                   |
+| **Cancel Runs**            | Cancel in-progress workflows with detailed confirmation modal (name, branch, author) |
 
 ### 🔍 Advanced Filtering & Auto-Refresh
 
-| Feature                  | Description                                              |
-| ------------------------ | -------------------------------------------------------- |
-| **Filter by Status**     | Success, Failure, In Progress, Queued, Cancelled         |
-| **Filter by Actor**      | "My Runs" or "All Users"                                 |
-| **Filter by Date Range** | Predefined (Today, Last 7/30 Days) or custom date ranges |
-| **Filter by Workflow**   | Focus on runs from a specific workflow                   |
-| **Search by Text**       | Search runs by branch name, commit, or PR number         |
-| **Show Bot Runs**        | Include or exclude runs triggered by bot accounts        |
-| **Favorites Only**       | Show only runs from workflows marked as favorite         |
-| **Pagination**           | Configure runs per page (10/20/30/50/100)                |
-| **Progressive Loading**  | Fetches up to 10,000 runs with smart caching             |
-| **Auto-Refresh**         | Configurable interval (15s–3m) with smart pause          |
+| Feature                  | Description                                                        |
+| ------------------------ | ------------------------------------------------------------------ |
+| **Filter by Status**     | Success, Failure, In Progress, Queued, Cancelled                   |
+| **Filter by Actor**      | "My Runs" or "All Users"                                           |
+| **Filter by Date Range** | Predefined (Today, Last 7/30 Days) or custom date ranges           |
+| **Filter by Workflow**   | Focus on runs from a specific workflow                             |
+| **Search by Text**       | Search runs by branch name, commit, or PR number                   |
+| **Show Bot Runs**        | Include or exclude runs triggered by bot accounts                  |
+| **Favorites Only**       | Show only runs from workflows marked as favorite                   |
+| **Pagination**           | Configure runs per page (10/20/30/50/100)                          |
+| **Progressive Loading**  | Fetches up to 10,000 runs with smart caching                       |
+| **Auto-Refresh**         | Configurable interval (15s–3m) with smart pause                    |
+| **Adaptive Refresh**     | Automatically speeds up polling (5-10s) when workflows are running |
 
 ### 👁️ Watched Runs
 
@@ -282,6 +297,35 @@ _**Preview/Edit Modal** — View and edit multi-value inputs in list format with
 - **Non-Intrusive** — Stay informed without switching contexts
 - **Workflow Toast Notifications** — Toast messages in the top-right corner for workflow start/complete/fail events
 - **Progress Indicators** — Inline job progress display (e.g., "2/5 jobs completed")
+
+### ⚡ Adaptive Auto-Refresh _(New in v1.4.0)_
+
+- **Smart Polling** — Automatically increases refresh frequency when in-progress or queued runs are detected
+- **Configurable Fast Interval** — Set your preferred fast refresh rate (5-10 seconds) via Settings panel slider
+- **Visual Indicator** — Shows "⚡ Faster refresh active" when adaptive mode is engaged
+- **API-Friendly** — Falls back to normal interval when workflows complete, preserving API quota
+- **Toggle Control** — Enable/disable with a single click in the Settings panel
+
+### 🧠 Memory Management _(New in v1.4.0)_
+
+- **Automatic Cleanup** — Clears per-run state for runs no longer visible in the panel
+- **Cache Limiting** — Prevents memory bloat during long monitoring sessions
+- **Background Optimization** — Cleanup runs during refresh cycles without impacting UX
+
+### 📊 Rate Limit Monitoring _(New in v1.4.0)_
+
+- **Real-Time Display** — See remaining API requests and total limit (e.g., "4,521 / 5,000")
+- **Visual Progress Bar** — Color-coded indicator (green → yellow → red) based on usage
+- **Reset Time** — Shows when your rate limit will reset
+- **Automatic Protection** — Optional throttling when usage exceeds configurable threshold (50-90%)
+- **Persistent Settings** — Rate limit protection preferences are saved across sessions
+
+### 🏥 Health Monitor _(New in v1.4.0)_
+
+- **Automatic Detection** — Identifies stuck loading states and stale timers
+- **Recovery Actions** — Reset State, Refresh Data, and Restart Auto-refresh buttons
+- **Smart Suppression** — Respects user activity to avoid false positive notifications
+- **Dismissible Banner** — Can be dismissed but will return if issues persist
 
 ## ⚙️ Configuration
 
