@@ -212,7 +212,7 @@ The Settings Panel provides three tabs for configuring different aspects of the 
 
 <img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/settings-general-tab.png" width="350" alt="Settings General Tab">
 
-_**General Tab** — Configure auto-refresh intervals, adaptive refresh (speeds up polling when workflows are running), run limits, and date filters_
+_**General Tab** — Configure workflow runs per page, run limits, and date filters_
 
 <img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/settings-notifications-tab.png" width="350" alt="Settings Notifications Tab">
 
@@ -220,7 +220,7 @@ _**Notifications Tab** — Control toast notifications and progress indicators f
 
 <img src="https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/settings-api-usage-tab.png" width="350" alt="Settings API Usage Tab">
 
-_**API Usage Tab** — Monitor GitHub API rate limits in real-time with color-coded progress bar, see remaining requests and reset time, and configure automatic rate limit protection (threshold 50-90%)_
+_**API Usage Tab** — Configure auto-refresh intervals with adaptive refresh (speeds up polling when workflows are running), monitor GitHub API rate limits in real-time with color-coded progress bar, and configure automatic rate limit protection (threshold 50-90%)_
 
 ---
 
