@@ -23,6 +23,3 @@ node_modules/**
 
 # Do not package development scripts
 scripts/**
-
-# Do not package development scripts
-scripts/**
