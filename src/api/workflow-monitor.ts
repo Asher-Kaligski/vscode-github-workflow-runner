@@ -5,6 +5,50 @@ import { TokenManager } from '../utils/token-manager';
 import type { WorkflowRun, WorkflowJob } from '../types/workflow-types';
 
 /**
+ * Rate limit information from GitHub API responses
+ */
+export interface RateLimitInfo {
+  remaining: number;
+  limit: number;
+  reset: number; // Unix timestamp in seconds
+}
+
+/**
+ * Global rate limit tracker - updated on each API response
+ */
+let lastRateLimitInfo: RateLimitInfo | null = null;
+
+/**
+ * Extract rate limit information from GitHub API response headers
+ */
+export function extractRateLimitFromResponse(response: Response): RateLimitInfo | null {
+  const remaining = response.headers.get('X-RateLimit-Remaining');
+  const limit = response.headers.get('X-RateLimit-Limit');
+  const reset = response.headers.get('X-RateLimit-Reset');
+
+  if (remaining && limit && reset) {
+    const info: RateLimitInfo = {
+      remaining: parseInt(remaining, 10),
+      limit: parseInt(limit, 10),
+      reset: parseInt(reset, 10),
+    };
+
+    // Update global tracker
+    lastRateLimitInfo = info;
+
+    return info;
+  }
+  return null;
+}
+
+/**
+ * Get the last known rate limit information
+ */
+export function getLastRateLimitInfo(): RateLimitInfo | null {
+  return lastRateLimitInfo;
+}
+
+/**
  * Fetch workflow runs for a repository.
  *
  * IMPORTANT: Due to known GitHub Actions API reliability issues with
@@ -33,7 +77,7 @@ export async function getWorkflowRuns(
     createdFrom?: Date;
     createdTo?: Date;
   } = {}
-): Promise<{ runs: WorkflowRun[]; totalCount: number } | null> {
+): Promise<{ runs: WorkflowRun[]; totalCount: number; rateLimitInfo?: RateLimitInfo } | null> {
   try {
     const token = await TokenManager.getGithubToken();
     if (!token) {
@@ -76,6 +120,9 @@ export async function getWorkflowRuns(
       },
     });
 
+    // Extract and track rate limit info from response
+    const rateLimitInfo = extractRateLimitFromResponse(response);
+
     if (!response.ok) {
       console.error('Failed to fetch workflow runs:', response.status, response.statusText);
       return null;
@@ -90,12 +137,14 @@ export async function getWorkflowRuns(
       '[getWorkflowRuns] Received:',
       data.workflow_runs?.length || 0,
       'runs, total_count:',
-      data.total_count || 0
+      data.total_count || 0,
+      rateLimitInfo ? `(Rate limit: ${rateLimitInfo.remaining}/${rateLimitInfo.limit})` : ''
     );
 
     return {
       runs: data.workflow_runs || [],
       totalCount: data.total_count || 0,
+      rateLimitInfo: rateLimitInfo ?? undefined,
     };
   } catch (error) {
     console.error('Error fetching workflow runs:', error);
@@ -151,7 +200,7 @@ export async function getWorkflowRun(
   owner: string,
   repo: string,
   runId: number
-): Promise<WorkflowRun | null> {
+): Promise<{ run: WorkflowRun; rateLimitInfo?: RateLimitInfo } | null> {
   try {
     const token = await TokenManager.getGithubToken();
     if (!token) {
@@ -168,11 +217,15 @@ export async function getWorkflowRun(
       },
     });
 
+    // Extract rate limit info from response headers (updates global tracker)
+    const rateLimitInfo = extractRateLimitFromResponse(response);
+
     if (!response.ok) {
       return null;
     }
 
-    return (await response.json()) as WorkflowRun;
+    const run = (await response.json()) as WorkflowRun;
+    return { run, rateLimitInfo: rateLimitInfo ?? undefined };
   } catch (error) {
     console.error('Error fetching workflow run:', error);
     return null;

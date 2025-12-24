@@ -217,7 +217,6 @@
               <span class="step-name" title={step.name}>{step.name}</span>
               {#if getStepDuration(step)}<span class="step-duration">{getStepDuration(step)}</span
                 >{/if}
-              <!-- DISABLED: Step log viewing - temporarily disabled in v1.2.0
               {#if onViewStepLogs && canViewStepLogs(step)}
                 <button
                   class="step-logs-button"
@@ -233,7 +232,6 @@
                   {/if}
                 </button>
               {/if}
-              -->
               <!-- DISABLED: Step comparison - temporarily disabled in v1.2.0
               {#if onCompareStepLogs && canViewStepLogs(step) && job.jobId !== undefined}
                 {#if isCompareSource(step)}
@@ -317,12 +315,11 @@
             <span class="codicon codicon-sync spinning"></span>
             Loading...
           {:else}
-            <span class="codicon codicon-file-code"></span>
+            <span class="codicon codicon-output"></span>
             View Logs
           {/if}
         </button>
       {/if}
-      <!-- DISABLED: Separate View Raw Logs button - now using onViewLogs with raw logs (v1.2.0)
       {#if onViewRawLogs}
         <button
           class="secondary-button"
@@ -339,7 +336,6 @@
           {/if}
         </button>
       {/if}
-      -->
       <button class="primary-button" on:click={onClose} type="button">Close</button>
     </div>
   </div>

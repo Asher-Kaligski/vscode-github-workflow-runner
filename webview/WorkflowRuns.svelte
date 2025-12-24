@@ -59,14 +59,26 @@
     }
   }
 
-  const MAX_TOTAL_RUNS_OPTIONS: number[] = [1000, 2000, 3000, 5000, 10000];
-  const WORKFLOW_LOAD_LIMIT_OPTIONS: number[] = [10, 20, 30, 50, 100];
+  const MAX_TOTAL_RUNS_OPTIONS: number[] = [1000, 2000, 3000, 4000, 5000];
+  const WORKFLOW_LOAD_LIMIT_OPTIONS: number[] = [10, 20, 30, 40, 50];
+  // Full options including 0 (Off) for validation and persistence
   const AUTO_REFRESH_SECONDS_OPTIONS: number[] = [0, 15, 30, 45, 60, 90, 120, 180];
+  // Slider options exclude 0 - checkbox controls on/off state
+  const AUTO_REFRESH_SLIDER_OPTIONS: number[] = [15, 30, 45, 60, 90, 120, 180];
   const DEFAULT_MAX_TOTAL_RUNS = 2000;
   const DEFAULT_WORKFLOW_LOAD_LIMIT = 20;
-  // Default to 15 seconds - aligns with sidebar provider and provides
-  // responsive monitoring without excessive API usage (~5% of rate limit)
-  const DEFAULT_AUTO_REFRESH_SECONDS = 15;
+  // Default to 30 seconds - provides responsive monitoring without excessive API usage
+  // Adaptive refresh handles faster polling when in-progress/queued runs exist
+  const DEFAULT_AUTO_REFRESH_SECONDS = 30;
+
+  // Adaptive refresh configuration
+  const DEFAULT_ADAPTIVE_REFRESH_ENABLED = true; // Enabled by default
+  const DEFAULT_ADAPTIVE_FAST_REFRESH_SECONDS = 10; // Default fast interval
+  const MIN_ADAPTIVE_FAST_REFRESH_SECONDS = 5; // Minimum allowed (slider minimum)
+  const MAX_ADAPTIVE_FAST_REFRESH_SECONDS = 10; // Maximum allowed (slider maximum)
+
+  // Health issue types for granular cooldown tracking
+  type HealthIssueType = 'loading' | 'refreshing' | 'dateFilter' | 'apiResponse' | 'autoRefresh';
 
   let runs: WorkflowRun[] = [];
   let filteredRuns: WorkflowRun[] = [];
@@ -75,7 +87,18 @@
   let refreshInterval: number | null = null;
   let highlightedRunId: number | null = null;
   let autoRefreshSeconds = DEFAULT_AUTO_REFRESH_SECONDS;
+  let previousAutoRefreshSeconds = DEFAULT_AUTO_REFRESH_SECONDS; // Store previous value for toggle
   let autoRefreshPaused = false; // Pause auto-refresh when opening external resources
+  let adaptiveRefreshActive = false; // True when using faster polling due to active runs
+  let adaptiveRefreshEnabled = DEFAULT_ADAPTIVE_REFRESH_ENABLED; // User preference for adaptive refresh
+  let adaptiveFastRefreshSeconds = DEFAULT_ADAPTIVE_FAST_REFRESH_SECONDS; // User-configurable fast interval (5-10s)
+
+  // Debounce timer for adaptive refresh recalculation to prevent timer thrashing
+  let adaptiveRefreshDebounceId: number | null = null;
+  const ADAPTIVE_REFRESH_DEBOUNCE_MS = 500;
+
+  // Protection against concurrent background refresh calls
+  let isBackgroundRefreshInProgress = false;
 
   // Track status changes for background updates
   // Map<runId, { oldStatus: string, newStatus: string, timestamp: number }>
@@ -86,7 +109,7 @@
   let statusFilter = 'all';
   let refreshing = false;
   let showRefreshSettings = false;
-  let settingsActiveTab: 'general' | 'notifications' = 'general'; // Active tab in settings dropdown
+  let settingsActiveTab: 'general' | 'notifications' | 'ratelimit' = 'general'; // Active tab in settings dropdown
   let totalCount = 0; // Total number of runs available (server-side count)
   let currentPage = 1; // Current client-side page over filteredRuns
   let loadingMore = false; // Loading more runs from the backend via an explicit user action
@@ -148,6 +171,76 @@
   const WORKFLOW_FETCH_TIMEOUT_MS = 30000; // 30 seconds
   // Threshold (ms) for detecting stuck loading state in message handler
   const STUCK_LOADING_THRESHOLD_MS = 30000; // 30 seconds
+
+  // Throttle state for filterRuns to prevent excessive recomputation during rapid refreshes
+  let filterRunsThrottleId: number | null = null;
+  let filterRunsPending = false;
+  const FILTER_RUNS_THROTTLE_MS = 100; // Minimum interval between filterRuns calls
+
+  // Flag to track if a filter operation is currently in progress
+  // This prevents concurrent filter modifications that can corrupt Svelte's internal state
+  let filterOperationInProgress = false;
+
+  // Render key to force complete DOM re-creation when arrays change.
+  // This prevents Svelte's internal linked-list corruption during rapid updates.
+  // Incrementing this key forces {#key} blocks to fully re-render.
+  let visibleRunsRenderKey = 0;
+
+  // GitHub API Rate Limit Tracking
+  // GitHub allows 5,000 requests/hour for authenticated users
+  const GITHUB_RATE_LIMIT_MAX = 5000;
+  const RATE_LIMIT_WARNING_50_THRESHOLD = 0.5; // Show first warning at 50% usage
+  const RATE_LIMIT_WARNING_75_THRESHOLD = 0.75; // Show urgent warning at 75% usage
+  // Configurable auto-throttling threshold options (percentage of limit used)
+  const RATE_LIMIT_THRESHOLD_OPTIONS = [50, 60, 70, 80, 90];
+  const DEFAULT_RATE_LIMIT_THRESHOLD = 70; // Default threshold at 70% usage
+  let rateLimitRemaining: number | null = null;
+  let rateLimitLimit: number | null = null;
+  let rateLimitResetTime: Date | null = null;
+  let rateLimitWarning50Shown = false; // Track if 50% warning was shown
+  let rateLimitWarning75Shown = false; // Track if 75% warning was shown
+  let rateLimitProtectionEnabled = true; // User preference for automatic throttling
+  let rateLimitThreshold = DEFAULT_RATE_LIMIT_THRESHOLD; // User-configurable threshold (50-90%)
+  let rateLimitProtectionActive = false; // True when rate limit protection is engaged
+  let rateLimitBackoffMultiplier = 1; // Exponential backoff multiplier (1x, 2x, 4x, etc.)
+
+  // Panel Health Monitoring System
+  // Detects unresponsive/stuck states and provides recovery options
+  const HEALTH_CHECK_INTERVAL_MS = 20000; // Check panel health every 20 seconds
+  const LOADING_TIMEOUT_MS = 60000; // Loading state timeout (60 seconds)
+  const REFRESHING_TIMEOUT_MS = 45000; // Refreshing state timeout (45 seconds)
+  const DATE_FILTER_TIMEOUT_MS = 90000; // Date filter fetch timeout (90 seconds)
+  const API_RESPONSE_TIMEOUT_MS = 300000; // No API response timeout (5 minutes)
+  const HEALTH_NOTIFICATION_COOLDOWN_MS = 120000; // Minimum time between health notifications (2 minutes)
+  const USER_ACTIVITY_GRACE_PERIOD_MS = 180000; // Don't show modal if user was active in last 3 minutes
+  const USER_ACTION_COOLDOWN_MS = 600000; // Extended cooldown after user takes action from modal (10 minutes)
+
+  let healthCheckInterval: number | null = null; // Timer for health check loop
+  // Note: loadingStartTime is declared above in watchdog section, reused for health monitoring
+  let refreshingStartTime: number | null = null; // Timestamp when refreshing started
+  let dateFilterStartTime: number | null = null; // Timestamp when date filter fetch started
+  let lastSuccessfulApiResponse: number = Date.now(); // Timestamp of last successful API response
+  // Granular health notification cooldowns - track separately per issue type
+  // This allows different health issues to be reported independently
+  let healthNotificationCooldowns: Record<HealthIssueType, number> = {
+    loading: 0,
+    refreshing: 0,
+    dateFilter: 0,
+    apiResponse: 0,
+    autoRefresh: 0,
+  };
+  let healthNotificationDismissed = false; // Whether user dismissed the current health notification
+  let panelUnresponsive = false; // Whether panel is currently detected as unresponsive
+  let unresponsiveReason: string | null = null; // Reason for unresponsiveness detection
+  let currentHealthIssueType: HealthIssueType | null = null; // Current issue type being shown
+  let lastAutoRefreshTime: number | null = null; // Timestamp of last auto-refresh execution
+  let expectedNextAutoRefresh: number | null = null; // Expected time of next auto-refresh
+  let lastUserActivity: number = Date.now(); // Timestamp of last user interaction with the panel
+  let lastUserActionFromModal: number = 0; // Timestamp of last recovery action taken from health modal
+
+  // Request generation tracking for cancelling stale requests
+  // This is separate from workflowSwitchGeneration to handle filter changes
+  let filterChangeGeneration = 0;
 
   // Default to "All Users" so the initial render matches the common entry points
   // (View Workflow Runs / View Last Run / Dispatch / Rerun) which all request
@@ -241,9 +334,16 @@
     }
 
     // Cancel pending workflow switch debounce
+    // When we cancel a pending workflow switch, we must also reset the associated state
+    // (isManualWorkflowFetch, pendingWorkflowId) because the debounced callback that would
+    // have set pendingWorkflowId properly is being cancelled. Without this reset, subsequent
+    // getWorkflowRuns responses may be incorrectly filtered out or the UI may become stuck.
     if (workflowSwitchDebounceId !== null) {
       window.clearTimeout(workflowSwitchDebounceId);
       workflowSwitchDebounceId = null;
+      // Reset the manual workflow fetch state since the pending operation was cancelled
+      isManualWorkflowFetch = false;
+      pendingWorkflowId = null;
     }
 
     // Cancel pending initial filter timeout
@@ -258,11 +358,83 @@
     // Increment generation to invalidate any in-flight progressive fetch callbacks
     workflowSwitchGeneration++;
 
+    // Increment filter change generation to invalidate stale filter-triggered requests
+    filterChangeGeneration++;
+
     // Cancel workflow fetch watchdog
     if (workflowFetchWatchdogId !== null) {
       window.clearTimeout(workflowFetchWatchdogId);
       workflowFetchWatchdogId = null;
     }
+
+    // Cancel pending filterRuns throttle
+    if (filterRunsThrottleId !== null) {
+      window.clearTimeout(filterRunsThrottleId);
+      filterRunsThrottleId = null;
+      filterRunsPending = false;
+    }
+
+    // Notify backend to cancel any pending requests
+    vscode.postMessage({
+      type: 'cancelPendingRequests',
+      data: {
+        workflowGeneration: workflowSwitchGeneration,
+        filterGeneration: filterChangeGeneration,
+      },
+    });
+  }
+
+  /**
+   * Cancel pending requests on rapid filter changes.
+   * This is called when filters change to invalidate stale requests.
+   */
+  function cancelPendingFilterRequests() {
+    // Increment filter generation to mark all pending filter requests as stale
+    filterChangeGeneration++;
+
+    console.log(
+      '[WorkflowRuns] Filter changed - incrementing filterChangeGeneration to',
+      filterChangeGeneration
+    );
+  }
+
+  /**
+   * Clear per-run state data (jobs, artifacts, dependencies, etc.) to free memory.
+   * Called when switching workflows to prevent unbounded memory growth from
+   * accumulated per-run data across different workflow views.
+   */
+  function clearPerRunState() {
+    // Clear expansion state
+    expandedRuns.clear();
+    expandedRuns = expandedRuns;
+
+    // Clear job data
+    runJobs.clear();
+    runJobs = runJobs;
+    loadingJobs.clear();
+    loadingJobs = loadingJobs;
+
+    // Clear job dependency graph state
+    runJobDefinitions.clear();
+    runJobDefinitions = runJobDefinitions;
+    loadingJobDependencies.clear();
+    loadingJobDependencies = loadingJobDependencies;
+    showDependencyGraph.clear();
+    showDependencyGraph = showDependencyGraph;
+
+    // Clear artifacts state
+    runArtifacts.clear();
+    runArtifacts = runArtifacts;
+    loadingArtifacts.clear();
+    loadingArtifacts = loadingArtifacts;
+    showArtifacts.clear();
+    showArtifacts = showArtifacts;
+
+    // Clear summary state
+    showSummary.clear();
+    showSummary = showSummary;
+
+    console.log('[WorkflowRuns] Cleared per-run state data');
   }
 
   /**
@@ -491,6 +663,73 @@
     markedWorkflows.includes(w.path)
   ).length;
 
+  // Reactive: Rate limit display values for real-time updates
+  // These must be reactive to ensure the UI updates when rate limit data changes
+  $: rateLimitStatusText =
+    rateLimitRemaining !== null && rateLimitLimit !== null
+      ? `${rateLimitRemaining.toLocaleString()} / ${rateLimitLimit.toLocaleString()}`
+      : 'Unknown';
+
+  $: rateLimitUsagePercent =
+    rateLimitRemaining !== null && rateLimitLimit !== null && rateLimitLimit > 0
+      ? ((rateLimitLimit - rateLimitRemaining) / rateLimitLimit) * 100
+      : 0;
+
+  $: rateLimitColorClass = (() => {
+    if (rateLimitUsagePercent >= 90) return 'rate-limit-critical';
+    if (rateLimitUsagePercent >= 75) return 'rate-limit-warning';
+    if (rateLimitUsagePercent >= 50) return 'rate-limit-caution';
+    return 'rate-limit-good';
+  })();
+
+  $: rateLimitResetTimeText = rateLimitResetTime
+    ? rateLimitResetTime.toLocaleTimeString()
+    : 'Unknown';
+
+  $: rateLimitRemainingPercent = Math.round(100 - rateLimitUsagePercent);
+
+  // Reactive: Auto-refresh label for the slider value display.
+  // Always shows the user's configured interval to match the slider position.
+  // The adaptive refresh status is shown separately in the note below the slider.
+  $: autoRefreshLabelText = (() => {
+    if (
+      typeof autoRefreshSeconds !== 'number' ||
+      !Number.isFinite(autoRefreshSeconds) ||
+      autoRefreshSeconds <= 0
+    ) {
+      return 'Off';
+    }
+
+    // Format based on user's configured interval (not the effective adaptive interval)
+    if (autoRefreshSeconds < 60) {
+      return `${autoRefreshSeconds}s`;
+    }
+
+    switch (autoRefreshSeconds) {
+      case 60:
+        return '1m';
+      case 90:
+        return '1m 30s';
+      case 120:
+        return '2m';
+      case 180:
+        return '3m';
+      default:
+        return `${autoRefreshSeconds}s`;
+    }
+  })();
+
+  // Reactive: Check if "Increase Interval" button should be disabled (at max)
+  $: isAtMaxRefreshInterval = (() => {
+    // Get the maximum interval from slider options
+    const maxOption = Math.max(...AUTO_REFRESH_SLIDER_OPTIONS);
+    // Button is disabled if already at max, or if no valid higher options exist
+    const validHigherOptions = AUTO_REFRESH_SLIDER_OPTIONS.filter(
+      (opt) => opt >= 60 && opt > autoRefreshSeconds
+    );
+    return autoRefreshSeconds >= maxOption || validHigherOptions.length === 0;
+  })();
+
   // Reactive: Reset "Favorites Only" filter when no favorites are available
   // This prevents the checkbox from being checked but disabled
   $: if (availableMarkedWorkflowsCount === 0 && showFavoritesOnly) {
@@ -515,12 +754,16 @@
     watchedRuns
   );
 
-  // Reactive: reset pagination when the workflow selection changes so that
-  // we always show the first page for the newly selected workflow.
+  // Reactive: reset pagination and clear per-run state when the workflow selection changes.
+  // This ensures we show the first page for the newly selected workflow and frees memory
+  // from expanded runs, loaded jobs, artifacts, etc. from the previous workflow.
   $: {
     if (workflowFilter !== previousWorkflowFilter) {
       currentPage = 1;
       previousWorkflowFilter = workflowFilter;
+      // Clear per-run state (expanded runs, jobs, artifacts, etc.) to free memory
+      // This prevents unbounded growth as users switch between workflows
+      clearPerRunState();
     }
   }
 
@@ -661,6 +904,41 @@
   // Explicitly depend on filteredRuns to ensure updates
   $: totalPagesNumber = getTotalPages(filteredRuns, workflowLoadLimit);
 
+  // Reactive: Track loading state changes for health monitoring
+  $: {
+    if (loading) {
+      recordLoadingStart();
+    } else {
+      recordLoadingEnd();
+    }
+  }
+
+  // Reactive: Track refreshing state changes for health monitoring
+  $: {
+    if (refreshing) {
+      recordRefreshingStart();
+    } else {
+      recordRefreshingEnd();
+    }
+  }
+
+  // Reactive: Track date filter fetch state for health monitoring
+  $: {
+    if (fetchingDateFilteredRuns) {
+      recordDateFilterStart();
+    } else {
+      recordDateFilterEnd();
+    }
+  }
+
+  // Reactive: Memoized computation for max runs warning visibility
+  // Avoids calling shouldShowMaxRunsWarning() multiple times in templates with identical params
+  $: showMaxRunsWarningMemo = shouldShowMaxRunsWarning(
+    filteredRuns.length,
+    runs.length,
+    totalRunsFetched
+  );
+
   // Motion preference
   reduceMotion = !!(
     window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches
@@ -670,6 +948,8 @@
   let expandedRuns = new Set<number>(); // Set of expanded run IDs
   let runJobs = new Map<number, WorkflowJob[]>(); // Map of run ID to jobs
   let loadingJobs = new Set<number>(); // Set of run IDs currently loading jobs
+  // Render key for jobs list - forces DOM re-creation to prevent Svelte corruption
+  let jobsRenderKey = new Map<number, number>(); // Map of run ID to render key
 
   // Job dependency graph state
   let runJobDefinitions = new Map<number, WorkflowJobDefinition[]>(); // Map of run ID to job definitions
@@ -680,6 +960,8 @@
   let runArtifacts = new Map<number, any[]>(); // Map of run ID to artifacts
   let loadingArtifacts = new Set<number>(); // Set of run IDs currently loading artifacts
   let showArtifacts = new Set<number>(); // Set of run IDs with artifacts section visible
+  // Render key for artifacts list - forces DOM re-creation to prevent Svelte corruption
+  let artifactsRenderKey = new Map<number, number>(); // Map of run ID to render key
 
   // Summary state
   let showSummary = new Set<number>(); // Set of run IDs with summary section visible
@@ -709,6 +991,13 @@
   let dispatchConfirmTitle = '';
   let dispatchConfirmBranch: string | null = null;
   let dispatchConfirmInputs: Record<string, unknown> = {};
+
+  // Cancel confirmation modal state
+  let showCancelConfirmModal = false;
+  let cancelConfirmRunId: number | null = null;
+  let cancelConfirmRunName: string = '';
+  let cancelConfirmRunBranch: string = '';
+  let cancelConfirmRunAuthor: string = '';
 
   // Job steps modal state (for jobs list view)
   let selectedJobForStepsModal: JobGraphNode | null = null;
@@ -784,8 +1073,11 @@
     repository: { owner: string; name: string } | null;
   }
   // Map of workflow path -> cache
+  // Limited to MAX_CACHE_ENTRIES to prevent unbounded memory growth
   let workflowRunsCache: Map<string, WorkflowRunsCache> = new Map();
   const CACHE_EXPIRATION_MS = 3 * 60 * 1000; // 3 minutes
+  const MAX_CACHE_ENTRIES = 5; // Limit number of cached workflows to prevent memory bloat
+  const MAX_CACHED_RUNS_PER_WORKFLOW = 500; // Limit runs per cache entry
 
   // Scroll threshold (pixels) after which Active Filters auto-collapses
   const SCROLL_THRESHOLD = 50;
@@ -855,6 +1147,9 @@
     // Start auto-refresh if enabled
     startAutoRefresh();
 
+    // Start health monitoring system
+    startHealthMonitoring();
+
     // Trigger welcome wave animation if allowed
     triggerWorkflowRunsWaveIfAllowed();
 
@@ -863,21 +1158,127 @@
       window.removeEventListener('click', handleWorkflowDropdownClickOutside);
       window.removeEventListener('scroll', handleScroll);
       stopAutoRefresh();
+      stopHealthMonitoring();
     };
   });
 
   onDestroy(() => {
     stopAutoRefresh();
+    stopHealthMonitoring();
   });
 
   /**
-   * Start auto-refresh timer
+   * Check if there are any active (in_progress or queued) runs that warrant faster polling.
+   * Considers visible runs to avoid unnecessary fast polling when active runs are filtered out.
    */
+  function hasActiveRuns(): boolean {
+    // Check visible runs first (what user sees), fall back to all runs
+    const runsToCheck = visibleRuns.length > 0 ? visibleRuns : runs;
+    return runsToCheck.some((run) => run.status === 'in_progress' || run.status === 'queued');
+  }
+
+  /**
+   * Calculate the effective refresh interval based on adaptive logic and rate limit protection.
+   * Returns faster interval when active runs exist and adaptive refresh is enabled,
+   * applies backoff when rate limit protection is active,
+   * returns user's main preference otherwise.
+   */
+  function getEffectiveRefreshInterval(): number {
+    if (autoRefreshSeconds === 0) {
+      return 0; // Auto-refresh disabled
+    }
+
+    let baseInterval = autoRefreshSeconds;
+
+    // Only use adaptive fast polling if:
+    // 1. Adaptive refresh is enabled by the user
+    // 2. There are active runs
+    // 3. User's main interval is slower than the fast interval
+    // 4. Rate limit protection is NOT active (don't speed up when throttled)
+    if (
+      adaptiveRefreshEnabled &&
+      hasActiveRuns() &&
+      autoRefreshSeconds > adaptiveFastRefreshSeconds &&
+      !rateLimitProtectionActive
+    ) {
+      baseInterval = adaptiveFastRefreshSeconds;
+    }
+
+    // Apply rate limit protection backoff if active
+    if (rateLimitProtectionActive && rateLimitProtectionEnabled) {
+      // Apply exponential backoff: interval * multiplier (2x, 4x, etc.)
+      // Cap at 4x the base interval to avoid excessively long waits
+      const maxMultiplier = 4;
+      const effectiveMultiplier = Math.min(rateLimitBackoffMultiplier, maxMultiplier);
+      baseInterval = Math.max(baseInterval * effectiveMultiplier, 60); // Minimum 60s when throttled
+
+      console.log('[WorkflowRuns] Rate limit protection applied:', {
+        originalInterval: autoRefreshSeconds,
+        multiplier: effectiveMultiplier,
+        effectiveInterval: baseInterval,
+      });
+    }
+
+    return baseInterval;
+  }
+
+  /**
+   * Start auto-refresh timer with adaptive interval support.
+   * Uses faster polling (10s) when in-progress/queued runs exist,
+   * falls back to user's selected interval when all runs are stable.
+   */
+  /**
+   * Get the IDs of currently visible runs for scoped refresh.
+   * Returns visible runs plus any runs with expanded UI (jobs, graph, summary).
+   */
+  function getVisibleRunIdsForRefresh(): number[] {
+    const visibleRunIds = new Set<number>();
+
+    // Add currently visible runs in the pagination slice
+    for (const run of visibleRuns) {
+      visibleRunIds.add(run.id);
+    }
+
+    // Also include runs with expanded UI that may need updates
+    // even if they're not currently visible (scrolled out of view)
+    for (const runId of expandedRuns) {
+      visibleRunIds.add(runId);
+    }
+    for (const runId of showDependencyGraph) {
+      visibleRunIds.add(runId);
+    }
+    for (const runId of showSummary) {
+      visibleRunIds.add(runId);
+    }
+
+    return Array.from(visibleRunIds);
+  }
+
   function startAutoRefresh() {
     stopAutoRefresh(); // Clear any existing interval
 
     if (autoRefreshSeconds > 0) {
+      const effectiveInterval = getEffectiveRefreshInterval();
+      adaptiveRefreshActive = effectiveInterval < autoRefreshSeconds;
+
+      console.log('[WorkflowRuns] Starting auto-refresh:', {
+        userInterval: autoRefreshSeconds,
+        effectiveInterval,
+        adaptiveRefreshActive,
+        adaptiveRefreshEnabled,
+      });
+
       refreshInterval = window.setInterval(() => {
+        // Record auto-refresh execution for health monitoring
+        recordAutoRefreshExecution();
+
+        // Skip if a background refresh is already in progress to prevent
+        // request pile-up during fast refresh intervals (5-10s)
+        if (isBackgroundRefreshInProgress) {
+          console.log('[WorkflowRuns] Skipping auto-refresh - previous request still in progress');
+          return;
+        }
+
         // Avoid overlapping with explicit background fetches or temporary
         // pauses (for example when viewing logs or artifacts), or while
         // the panel is already busy loading data (initial load, manual
@@ -889,6 +1290,9 @@
           !refreshing &&
           !fetchingDateFilteredRuns
         ) {
+          // Mark that a background refresh is starting
+          isBackgroundRefreshInProgress = true;
+
           // Always use background refresh for auto-refresh to avoid showing
           // loading indicators and preserve UI state (scroll position, etc.)
           // When "Watched Runs Only" filter is active, use the specialized
@@ -899,12 +1303,18 @@
               data: { watchedRunIds: Array.from(watchedRuns) },
             });
           } else {
+            // Send visible run IDs for scoped refresh to reduce API calls
+            // The backend will prioritize these runs but may also fetch new runs
+            const visibleRunIds = getVisibleRunIdsForRefresh();
             vscode.postMessage({
               type: 'backgroundRefreshAllRuns',
+              data: { visibleRunIds },
             });
           }
         }
-      }, autoRefreshSeconds * 1000);
+      }, effectiveInterval * 1000);
+    } else {
+      adaptiveRefreshActive = false;
     }
   }
 
@@ -921,9 +1331,9 @@
 
     const clampedIndex = Math.min(
       Math.max(Math.trunc(index), 0),
-      AUTO_REFRESH_SECONDS_OPTIONS.length - 1
+      AUTO_REFRESH_SLIDER_OPTIONS.length - 1
     );
-    const nextSeconds = AUTO_REFRESH_SECONDS_OPTIONS[clampedIndex];
+    const nextSeconds = AUTO_REFRESH_SLIDER_OPTIONS[clampedIndex];
     if (
       typeof nextSeconds !== 'number' ||
       !Number.isFinite(nextSeconds) ||
@@ -934,6 +1344,8 @@
     }
 
     autoRefreshIndex = clampedIndex;
+    // When slider changes, also store as previous value and enable auto-refresh
+    previousAutoRefreshSeconds = nextSeconds;
     updateAutoRefresh(nextSeconds);
   }
 
@@ -946,6 +1358,48 @@
 
       refreshInterval = null;
     }
+  }
+
+  /**
+   * Recalculate adaptive refresh interval based on current run states.
+   * Called after runs are updated to adjust polling frequency dynamically.
+   * Only restarts the timer if the effective interval has changed.
+   *
+   * IMPORTANT: This function is debounced to prevent timer thrashing when
+   * multiple API responses arrive rapidly (e.g., during fast refresh with
+   * multiple active runs). Without debouncing, each response would trigger
+   * a timer restart, potentially causing the panel to freeze.
+   */
+  function recalculateAdaptiveRefresh() {
+    if (autoRefreshSeconds === 0 || autoRefreshPaused) {
+      return; // Auto-refresh disabled or paused
+    }
+
+    // Clear any pending debounce to prevent stale calculations
+    if (adaptiveRefreshDebounceId !== null) {
+      window.clearTimeout(adaptiveRefreshDebounceId);
+      adaptiveRefreshDebounceId = null;
+    }
+
+    // Debounce the actual recalculation to prevent timer thrashing
+    adaptiveRefreshDebounceId = window.setTimeout(() => {
+      adaptiveRefreshDebounceId = null;
+
+      const currentEffectiveInterval = getEffectiveRefreshInterval();
+      const wasAdaptive = adaptiveRefreshActive;
+      const shouldBeAdaptive = currentEffectiveInterval < autoRefreshSeconds;
+
+      // Only restart if adaptive state changed (to avoid unnecessary timer resets)
+      if (wasAdaptive !== shouldBeAdaptive) {
+        console.log(
+          '[WorkflowRuns] Adaptive refresh (debounced):',
+          shouldBeAdaptive
+            ? `activating fast refresh (${currentEffectiveInterval}s)`
+            : `reverting to user interval (${autoRefreshSeconds}s)`
+        );
+        startAutoRefresh();
+      }
+    }, ADAPTIVE_REFRESH_DEBOUNCE_MS);
   }
 
   /**
@@ -979,6 +1433,897 @@
         showProgressIndicators,
       },
     });
+  }
+
+  /**
+   * Update rate limit tracking from API response data.
+   * Called when receiving responses that include rate limit headers.
+   */
+  function updateRateLimit(rateLimitData: {
+    remaining?: number;
+    limit?: number;
+    reset?: number | string;
+  }) {
+    const previousRemaining = rateLimitRemaining;
+
+    if (typeof rateLimitData.remaining === 'number') {
+      rateLimitRemaining = rateLimitData.remaining;
+    }
+    if (typeof rateLimitData.limit === 'number') {
+      rateLimitLimit = rateLimitData.limit;
+    }
+    if (rateLimitData.reset) {
+      const resetTime =
+        typeof rateLimitData.reset === 'number'
+          ? new Date(rateLimitData.reset * 1000)
+          : new Date(rateLimitData.reset);
+      if (!isNaN(resetTime.getTime())) {
+        rateLimitResetTime = resetTime;
+      }
+    }
+
+    // Check if rate limit has reset (remaining increased significantly)
+    // This happens when the hour window rolls over
+    if (
+      previousRemaining !== null &&
+      rateLimitRemaining !== null &&
+      rateLimitRemaining > previousRemaining + 100
+    ) {
+      console.log('[WorkflowRuns] Rate limit appears to have reset:', {
+        previous: previousRemaining,
+        current: rateLimitRemaining,
+      });
+      resetRateLimitWarnings();
+      // Restart auto-refresh with normal interval
+      if (autoRefreshSeconds > 0) {
+        startAutoRefresh();
+      }
+    }
+
+    // Check if usage dropped below critical threshold, disable protection
+    // Use configurable threshold - exit at 90% of the threshold (10% hysteresis)
+    if (rateLimitProtectionActive && rateLimitRemaining !== null && rateLimitLimit !== null) {
+      const usagePercent = 1 - rateLimitRemaining / rateLimitLimit;
+      const exitThreshold = (rateLimitThreshold / 100) * 0.9; // Exit at 90% of entry threshold
+      if (usagePercent < exitThreshold) {
+        rateLimitProtectionActive = false;
+        rateLimitBackoffMultiplier = 1;
+        console.log('[WorkflowRuns] Rate limit protection deactivated, resuming normal refresh');
+        showToast('Rate limit protection deactivated - normal refresh resumed', 'info', 3000);
+        if (autoRefreshSeconds > 0) {
+          startAutoRefresh();
+        }
+      }
+    }
+
+    // Check if we should show a warning
+    checkRateLimitWarning();
+  }
+
+  /**
+   * Check if rate limit usage is approaching thresholds and show appropriate warnings.
+   * Implements tiered warning system at 50%, 75%, and 90% usage.
+   */
+  function checkRateLimitWarning() {
+    if (rateLimitRemaining === null || rateLimitLimit === null || rateLimitLimit === 0) {
+      return;
+    }
+
+    const usagePercent = 1 - rateLimitRemaining / rateLimitLimit;
+    const resetTimeStr = rateLimitResetTime ? rateLimitResetTime.toLocaleTimeString() : 'soon';
+    const configuredThreshold = rateLimitThreshold / 100; // Convert percentage to decimal
+
+    // Check for configurable threshold usage - enable rate limit protection
+    if (usagePercent >= configuredThreshold && rateLimitProtectionEnabled) {
+      if (!rateLimitProtectionActive) {
+        rateLimitProtectionActive = true;
+        rateLimitBackoffMultiplier = 2; // Start with 2x backoff
+
+        showToast(
+          `⚠️ Rate limit protection active: Only ${rateLimitRemaining} requests remaining (${rateLimitThreshold}% threshold reached). ` +
+            `Background refreshes are being throttled. Resets at ${resetTimeStr}.`,
+          'warning',
+          10000
+        );
+
+        console.warn('[WorkflowRuns] Rate limit protection activated:', {
+          remaining: rateLimitRemaining,
+          limit: rateLimitLimit,
+          usagePercent: (usagePercent * 100).toFixed(1) + '%',
+          threshold: rateLimitThreshold + '%',
+        });
+
+        // Restart auto-refresh to apply throttled interval
+        startAutoRefresh();
+      } else {
+        // Increase backoff if still approaching limits
+        if (rateLimitBackoffMultiplier < 4) {
+          rateLimitBackoffMultiplier = Math.min(rateLimitBackoffMultiplier * 2, 4);
+          startAutoRefresh();
+        }
+      }
+      return; // Skip lower warnings if protection is active
+    }
+
+    // Check for 75% usage - urgent warning
+    if (usagePercent >= RATE_LIMIT_WARNING_75_THRESHOLD && !rateLimitWarning75Shown) {
+      rateLimitWarning75Shown = true;
+
+      const suggestedInterval = Math.max(60, autoRefreshSeconds * 2);
+
+      showToast(
+        `🚨 API Rate Limit: ${rateLimitRemaining}/${rateLimitLimit} requests remaining (${Math.round((1 - usagePercent) * 100)}%). ` +
+          `Consider disabling auto-refresh or increasing interval to ${suggestedInterval}s. Resets at ${resetTimeStr}.`,
+        'warning',
+        12000
+      );
+
+      console.warn('[WorkflowRuns] Rate limit 75% warning:', {
+        remaining: rateLimitRemaining,
+        limit: rateLimitLimit,
+        usagePercent: (usagePercent * 100).toFixed(1) + '%',
+      });
+      return;
+    }
+
+    // Check for 50% usage - first warning with suggestions
+    if (usagePercent >= RATE_LIMIT_WARNING_50_THRESHOLD && !rateLimitWarning50Shown) {
+      rateLimitWarning50Shown = true;
+
+      const currentInterval = autoRefreshSeconds > 0 ? autoRefreshSeconds : 30;
+      const suggestedInterval = Math.max(60, currentInterval * 2);
+
+      showToast(
+        `⚡ API Rate Limit: ${rateLimitRemaining}/${rateLimitLimit} requests remaining (${Math.round((1 - usagePercent) * 100)}%). ` +
+          `Consider reducing auto-refresh from ${currentInterval}s to ${suggestedInterval}s. Resets at ${resetTimeStr}.`,
+        'info',
+        10000
+      );
+
+      console.log('[WorkflowRuns] Rate limit 50% warning:', {
+        remaining: rateLimitRemaining,
+        limit: rateLimitLimit,
+        usagePercent: (usagePercent * 100).toFixed(1) + '%',
+      });
+    }
+  }
+
+  /**
+   * Handle quick action to increase refresh interval from rate limit warning.
+   * Jumps to the next valid option in AUTO_REFRESH_SECONDS_OPTIONS that is >= 60s.
+   */
+  function increaseRefreshInterval() {
+    // Find the next higher option in AUTO_REFRESH_SECONDS_OPTIONS
+    // Only consider options >= 60 seconds for rate limit protection
+    const validHigherOptions = AUTO_REFRESH_SLIDER_OPTIONS.filter(
+      (opt) => opt >= 60 && opt > autoRefreshSeconds
+    );
+
+    if (validHigherOptions.length === 0) {
+      // Already at max, use the highest available option
+      const maxOption = Math.max(...AUTO_REFRESH_SLIDER_OPTIONS);
+      showToast(`Already at maximum interval (${maxOption} seconds)`, 'info', 3000);
+      return;
+    }
+
+    const newInterval = validHigherOptions[0]; // First option that's higher
+    updateAutoRefresh(newInterval);
+    showToast(
+      `Auto-refresh interval increased to ${formatAutoRefreshLabel(newInterval)}`,
+      'info',
+      3000
+    );
+  }
+
+  /**
+   * Handle quick action to disable auto-refresh from rate limit warning.
+   */
+  function disableAutoRefreshForRateLimit() {
+    // Store current interval before disabling
+    if (autoRefreshSeconds > 0) {
+      previousAutoRefreshSeconds = autoRefreshSeconds;
+    }
+    updateAutoRefresh(0);
+    showToast('Auto-refresh disabled to preserve API quota', 'info', 3000);
+  }
+
+  /**
+   * Handle quick action to enable auto-refresh (restore previous interval).
+   */
+  function enableAutoRefreshFromRateLimit() {
+    // Restore previous interval, or use default if none stored
+    const intervalToRestore =
+      previousAutoRefreshSeconds > 0 ? previousAutoRefreshSeconds : DEFAULT_AUTO_REFRESH_SECONDS;
+    updateAutoRefresh(intervalToRestore);
+    showToast(`Auto-refresh enabled (${formatAutoRefreshLabel(intervalToRestore)})`, 'info', 3000);
+  }
+
+  /**
+   * Toggle auto-refresh on/off via checkbox.
+   * Stores the previous interval when disabling, restores it when enabling.
+   */
+  function handleAutoRefreshToggle(event: Event) {
+    const target = event.target as HTMLInputElement | null;
+    if (!target) return;
+
+    if (target.checked) {
+      // Enable auto-refresh - restore previous interval
+      const intervalToRestore =
+        previousAutoRefreshSeconds > 0 ? previousAutoRefreshSeconds : DEFAULT_AUTO_REFRESH_SECONDS;
+      updateAutoRefresh(intervalToRestore);
+    } else {
+      // Disable auto-refresh - store current interval first
+      if (autoRefreshSeconds > 0) {
+        previousAutoRefreshSeconds = autoRefreshSeconds;
+      }
+      updateAutoRefresh(0);
+    }
+  }
+
+  /**
+   * Reset rate limit warning flags when rate limit resets.
+   * Called when we detect the reset time has passed.
+   */
+  function resetRateLimitWarnings() {
+    rateLimitWarning50Shown = false;
+    rateLimitWarning75Shown = false;
+    rateLimitProtectionActive = false;
+    rateLimitBackoffMultiplier = 1;
+  }
+
+  /**
+   * Check if rate limit has reset and clear warning flags.
+   */
+  function checkRateLimitReset() {
+    if (rateLimitResetTime && new Date() > rateLimitResetTime) {
+      resetRateLimitWarnings();
+    }
+  }
+
+  // Note: Rate limit display functions (getRateLimitStatus, getRateLimitUsagePercent,
+  // getRateLimitColorClass, getFormattedResetTime) have been replaced with reactive
+  // variables (rateLimitStatusText, rateLimitUsagePercent, rateLimitColorClass,
+  // rateLimitResetTimeText, rateLimitRemainingPercent) defined near line 633
+  // to ensure real-time UI updates when rate limit data changes.
+
+  /**
+   * Toggle rate limit protection setting.
+   */
+  function toggleRateLimitProtection(event: Event) {
+    const target = event.target as HTMLInputElement | null;
+    if (!target) return;
+    rateLimitProtectionEnabled = target.checked;
+
+    // Persist to extension storage
+    vscode.postMessage({
+      type: 'updateRateLimitSettings',
+      data: { rateLimitProtectionEnabled },
+    });
+
+    if (rateLimitProtectionEnabled) {
+      showToast(
+        `Rate limit protection enabled - will auto-throttle at ${rateLimitThreshold}% usage`,
+        'info',
+        3000
+      );
+    } else {
+      showToast('Rate limit protection disabled - requests will not be throttled', 'info', 3000);
+      rateLimitProtectionActive = false;
+      rateLimitBackoffMultiplier = 1;
+    }
+  }
+
+  /**
+   * Handle changes to the rate limit threshold selector.
+   * Updates local state and persists the preference.
+   */
+  function handleRateLimitThresholdChange(event: Event) {
+    const target = event.target as HTMLSelectElement | null;
+    if (!target) return;
+
+    const newThreshold = parseInt(target.value, 10);
+    if (!RATE_LIMIT_THRESHOLD_OPTIONS.includes(newThreshold)) return;
+
+    rateLimitThreshold = newThreshold;
+
+    // Persist to extension storage
+    vscode.postMessage({
+      type: 'updateRateLimitSettings',
+      data: { rateLimitProtectionEnabled, rateLimitThreshold },
+    });
+
+    showToast(`Auto-throttling threshold set to ${rateLimitThreshold}%`, 'info', 3000);
+
+    // If protection is already active and new threshold is higher than current usage, deactivate
+    if (rateLimitProtectionActive && rateLimitRemaining !== null && rateLimitLimit !== null) {
+      const currentUsage = 1 - rateLimitRemaining / rateLimitLimit;
+      if (currentUsage < rateLimitThreshold / 100) {
+        rateLimitProtectionActive = false;
+        rateLimitBackoffMultiplier = 1;
+        showToast('Rate limit protection deactivated due to threshold change', 'info', 3000);
+        if (autoRefreshSeconds > 0) {
+          startAutoRefresh();
+        }
+      }
+    }
+  }
+
+  /**
+   * Show help modal with information about auto-throttling.
+   */
+  function showAutoThrottlingHelp() {
+    helpModalTitle = 'Auto-Throttling';
+    helpModalContent = `
+<h4>How Auto-Throttling Works</h4>
+<p>Auto-throttling automatically reduces API request frequency when your usage approaches the configured threshold.</p>
+
+<h4>Threshold Setting</h4>
+<p>The threshold (${rateLimitThreshold}%) determines when protection activates:</p>
+<ul>
+  <li><strong>50%</strong> - Conservative, protects early (2,500 requests remaining)</li>
+  <li><strong>70%</strong> - Moderate protection (1,500 requests remaining)</li>
+  <li><strong>90%</strong> - Aggressive, maximizes usage (500 requests remaining)</li>
+</ul>
+
+<h4>What Happens When Active</h4>
+<ul>
+  <li>Auto-refresh interval is multiplied by a backoff factor (2x, 4x)</li>
+  <li>Minimum 60 second intervals are enforced</li>
+  <li>Manual refreshes are still allowed</li>
+  <li>Protection deactivates when usage drops below ${Math.round(rateLimitThreshold * 0.9)}%</li>
+</ul>
+
+<h4>Rate Limit Info</h4>
+<p>GitHub allows 5,000 authenticated API requests per hour. The limit resets hourly.</p>
+`;
+    showHelpModal = true;
+  }
+
+  /**
+   * Handle changes to the "Enable Adaptive Refresh" checkbox.
+   * Updates local state and persists the preference.
+   */
+  function handleAdaptiveRefreshEnabledChange(event: Event) {
+    const target = event.target as HTMLInputElement | null;
+    if (!target) {
+      return;
+    }
+
+    adaptiveRefreshEnabled = target.checked;
+    startAutoRefresh(); // Apply the change immediately
+
+    vscode.postMessage({
+      type: 'updateAdaptiveRefreshSettings',
+      data: {
+        adaptiveRefreshEnabled: adaptiveRefreshEnabled,
+        adaptiveFastRefreshSeconds: adaptiveFastRefreshSeconds,
+      },
+    });
+  }
+
+  /**
+   * Handle changes to the adaptive fast refresh interval slider.
+   * Updates local state and persists the preference.
+   */
+  function handleAdaptiveFastRefreshSliderChange(event: Event) {
+    const target = event.target as HTMLInputElement | null;
+    if (!target) {
+      return;
+    }
+
+    const value = Number(target.value);
+    if (!Number.isFinite(value)) {
+      return;
+    }
+
+    // Clamp to valid range
+    const clampedValue = Math.min(
+      Math.max(Math.round(value), MIN_ADAPTIVE_FAST_REFRESH_SECONDS),
+      MAX_ADAPTIVE_FAST_REFRESH_SECONDS
+    );
+
+    adaptiveFastRefreshSeconds = clampedValue;
+    startAutoRefresh(); // Apply the change immediately
+
+    vscode.postMessage({
+      type: 'updateAdaptiveRefreshSettings',
+      data: {
+        adaptiveRefreshEnabled: adaptiveRefreshEnabled,
+        adaptiveFastRefreshSeconds: adaptiveFastRefreshSeconds,
+      },
+    });
+  }
+
+  /**
+   * Show help modal with information about adaptive refresh.
+   */
+  function showAdaptiveRefreshSettingsHelp() {
+    helpModalTitle = 'Adaptive Refresh';
+    helpModalContent = `
+      <p><strong>Adaptive Refresh</strong> automatically speeds up polling when in-progress or queued runs are detected.</p>
+      <p>When enabled:</p>
+      <ul>
+        <li>Uses the <strong>fast refresh interval</strong> (configurable: 5-10 seconds) when active runs exist</li>
+        <li>Falls back to your <strong>main auto-refresh interval</strong> when all runs are stable</li>
+      </ul>
+      <p>When disabled:</p>
+      <ul>
+        <li>Always uses your main auto-refresh interval, regardless of run states</li>
+      </ul>
+      <p><strong>⚡ GitHub API Rate Limits:</strong></p>
+      <ul>
+        <li>GitHub allows ~5,000 requests per hour for authenticated users</li>
+        <li>At 5s intervals: ~720 requests/hour (~14% of quota)</li>
+        <li>At 10s intervals: ~360 requests/hour (~7% of quota)</li>
+      </ul>
+      <p>Adaptive refresh helps balance responsiveness with API quota preservation by only using faster polling when needed.</p>
+      <p><strong>Note:</strong> Adaptive refresh requires auto-refresh to be enabled. When auto-refresh is disabled, adaptive refresh has no effect.</p>
+    `;
+    showHelpModal = true;
+  }
+
+  /**
+   * Show help modal with information about API rate limits.
+   */
+  function showRateLimitStatusHelp() {
+    helpModalTitle = 'API Rate Limit (Live)';
+    helpModalContent = `
+      <p><strong>What are GitHub API rate limits?</strong></p>
+      <p>GitHub imposes limits on how many API requests you can make to prevent abuse and ensure fair usage:</p>
+      <ul>
+        <li><strong>5,000 requests per hour</strong> for authenticated users (using personal access tokens)</li>
+        <li>GitHub uses a <strong>sliding window</strong> that starts from your first API request</li>
+        <li>The "Resets at" time shows when your current window expires (exactly 1 hour after it started)</li>
+        <li>All GitHub Actions API calls count toward this limit</li>
+      </ul>
+
+      <p><strong>How does this extension track usage?</strong></p>
+      <ul>
+        <li>Every API response includes rate limit headers</li>
+        <li>The extension displays remaining requests and usage percentage</li>
+        <li>Shows "Unknown" until the first API call is made in the current session</li>
+      </ul>
+
+      <p><strong>What happens when limits are approached?</strong></p>
+      <ul>
+        <li>At <strong>50% usage</strong>: Info notification with suggestions to reduce refresh frequency</li>
+        <li>At <strong>75% usage</strong>: Warning notification urging action</li>
+        <li>At <strong>90% usage</strong>: Protection mode activates, auto-throttling refresh intervals</li>
+      </ul>
+
+      <p><strong>Why is rate limit protection important?</strong></p>
+      <ul>
+        <li>Prevents hitting the hard limit (which causes all requests to fail for the remainder of the hour)</li>
+        <li>Ensures you can continue using GitHub APIs for other activities</li>
+        <li>Automatically backs off when usage is high, then resumes normal operation</li>
+      </ul>
+
+      <p><strong>How does adaptive refresh affect API usage?</strong></p>
+      <ul>
+        <li>5-second intervals: ~720 requests/hour (~14% of quota)</li>
+        <li>10-second intervals: ~360 requests/hour (~7% of quota)</li>
+        <li>30-second intervals: ~120 requests/hour (~2% of quota)</li>
+        <li>Adaptive refresh only uses fast polling when needed, reducing overall usage</li>
+      </ul>
+    `;
+    showHelpModal = true;
+  }
+
+  // ============================================================================
+  // Panel Health Monitoring System
+  // ============================================================================
+
+  /**
+   * Start the health monitoring system.
+   * Runs a check every HEALTH_CHECK_INTERVAL_MS to detect unresponsive states.
+   */
+  function startHealthMonitoring() {
+    stopHealthMonitoring(); // Clear any existing interval
+
+    healthCheckInterval = window.setInterval(() => {
+      checkPanelHealth();
+    }, HEALTH_CHECK_INTERVAL_MS);
+
+    console.log('[WorkflowRuns] Health monitoring started');
+  }
+
+  /**
+   * Stop the health monitoring system.
+   */
+  function stopHealthMonitoring() {
+    if (healthCheckInterval !== null) {
+      window.clearInterval(healthCheckInterval);
+      healthCheckInterval = null;
+    }
+  }
+
+  /**
+   * Record user activity/interaction with the panel.
+   * This is used to suppress health notifications when user is actively using the panel.
+   * Activity includes: clicking runs, changing filters, scrolling, expanding sections, etc.
+   */
+  function recordUserActivity() {
+    lastUserActivity = Date.now();
+    // If there's an active unresponsive state, clear it since user is actively engaged
+    if (panelUnresponsive && !loading && !refreshing && !fetchingDateFilteredRuns) {
+      clearUnresponsiveState();
+    }
+  }
+
+  /**
+   * Check if user has been recently active (within grace period).
+   * Used to suppress health notifications when user is actively using the panel.
+   */
+  function isUserRecentlyActive(): boolean {
+    return Date.now() - lastUserActivity < USER_ACTIVITY_GRACE_PERIOD_MS;
+  }
+
+  /**
+   * Check if user recently took action from health modal (within extended cooldown).
+   * After user clicks action buttons or dismisses, give extended time before showing again.
+   */
+  function isInUserActionCooldown(): boolean {
+    return Date.now() - lastUserActionFromModal < USER_ACTION_COOLDOWN_MS;
+  }
+
+  /**
+   * Check if a specific health issue type is in cooldown.
+   * Uses granular per-issue-type cooldowns to allow different health
+   * problems to be reported independently.
+   */
+  function isHealthIssueCoolingDown(issueType: HealthIssueType): boolean {
+    const now = Date.now();
+    return now - healthNotificationCooldowns[issueType] < HEALTH_NOTIFICATION_COOLDOWN_MS;
+  }
+
+  /**
+   * Check panel health and detect unresponsive states.
+   * Called periodically by the health monitoring timer.
+   * Uses granular cooldowns to allow different health issues to be reported independently.
+   * Considers user activity and extended cooldowns from modal actions.
+   */
+  function checkPanelHealth() {
+    const now = Date.now();
+
+    // Skip health checks if user is in extended cooldown from modal action
+    if (isInUserActionCooldown()) {
+      return;
+    }
+
+    // Skip health checks if user has been recently active
+    // This prevents annoying the user when they're actively using the panel
+    if (isUserRecentlyActive()) {
+      return;
+    }
+
+    // Check for stuck loading state (> 60 seconds)
+    if (loading && loadingStartTime !== null && !isHealthIssueCoolingDown('loading')) {
+      const loadingDuration = now - loadingStartTime;
+      if (loadingDuration > LOADING_TIMEOUT_MS) {
+        setUnresponsiveState(
+          `Loading state has been active for ${Math.round(loadingDuration / 1000)} seconds`,
+          'loading'
+        );
+        return;
+      }
+    }
+
+    // Check for stuck refreshing state (> 45 seconds)
+    if (refreshing && refreshingStartTime !== null && !isHealthIssueCoolingDown('refreshing')) {
+      const refreshingDuration = now - refreshingStartTime;
+      if (refreshingDuration > REFRESHING_TIMEOUT_MS) {
+        setUnresponsiveState(
+          `Refresh operation has been running for ${Math.round(refreshingDuration / 1000)} seconds`,
+          'refreshing'
+        );
+        return;
+      }
+    }
+
+    // Check for stuck date filter fetch (> 90 seconds)
+    if (
+      fetchingDateFilteredRuns &&
+      dateFilterStartTime !== null &&
+      !isHealthIssueCoolingDown('dateFilter')
+    ) {
+      const dateFilterDuration = now - dateFilterStartTime;
+      if (dateFilterDuration > DATE_FILTER_TIMEOUT_MS) {
+        setUnresponsiveState(
+          `Date filter fetch has been running for ${Math.round(dateFilterDuration / 1000)} seconds`,
+          'dateFilter'
+        );
+        return;
+      }
+    }
+
+    // Check for no API responses during active usage (> 5 minutes)
+    // Only check if auto-refresh is enabled and we're not in a loading state
+    if (
+      autoRefreshSeconds > 0 &&
+      !loading &&
+      !refreshing &&
+      now - lastSuccessfulApiResponse > API_RESPONSE_TIMEOUT_MS &&
+      !isHealthIssueCoolingDown('apiResponse')
+    ) {
+      const minutesSinceResponse = Math.round((now - lastSuccessfulApiResponse) / 60000);
+      setUnresponsiveState(
+        `No API responses received in the last ${minutesSinceResponse} minutes`,
+        'apiResponse'
+      );
+      return;
+    }
+
+    // Check if auto-refresh has stopped unexpectedly
+    // Only check if auto-refresh should be running but hasn't triggered
+    if (
+      autoRefreshSeconds > 0 &&
+      refreshInterval !== null &&
+      lastAutoRefreshTime !== null &&
+      expectedNextAutoRefresh !== null &&
+      !isHealthIssueCoolingDown('autoRefresh')
+    ) {
+      // Allow some grace period (2x the expected interval) before flagging
+      const gracePeriod = autoRefreshSeconds * 2000;
+      if (now > expectedNextAutoRefresh + gracePeriod) {
+        const missedSeconds = Math.round((now - expectedNextAutoRefresh) / 1000);
+        setUnresponsiveState(
+          `Auto-refresh appears to have stopped (${missedSeconds}s overdue)`,
+          'autoRefresh'
+        );
+        return;
+      }
+    }
+
+    // If we got here, panel is healthy - clear any previous unresponsive state
+    if (panelUnresponsive && !healthNotificationDismissed) {
+      clearUnresponsiveState();
+    }
+  }
+
+  /**
+   * Set the panel as unresponsive and show notification.
+   * Records the issue type for granular cooldown tracking.
+   *
+   * @param reason - Human-readable description of the issue
+   * @param issueType - Category of health issue for cooldown tracking
+   */
+  function setUnresponsiveState(reason: string, issueType: HealthIssueType) {
+    if (panelUnresponsive && healthNotificationDismissed) {
+      // User dismissed the notification, don't show again for same issue
+      return;
+    }
+
+    panelUnresponsive = true;
+    unresponsiveReason = reason;
+    currentHealthIssueType = issueType;
+    healthNotificationCooldowns[issueType] = Date.now();
+    healthNotificationDismissed = false;
+
+    console.warn('[WorkflowRuns] Panel unresponsive detected:', {
+      reason,
+      issueType,
+      loading,
+      refreshing,
+      fetchingDateFilteredRuns,
+      loadingStartTime,
+      refreshingStartTime,
+      dateFilterStartTime,
+      lastSuccessfulApiResponse,
+      autoRefreshSeconds,
+      refreshInterval,
+    });
+  }
+
+  /**
+   * Clear the unresponsive state.
+   */
+  function clearUnresponsiveState() {
+    panelUnresponsive = false;
+    unresponsiveReason = null;
+    currentHealthIssueType = null;
+    healthNotificationDismissed = false;
+  }
+
+  /**
+   * Record timestamp when loading state starts.
+   * Called when loading is set to true.
+   */
+  function recordLoadingStart() {
+    if (!loadingStartTime) {
+      loadingStartTime = Date.now();
+    }
+  }
+
+  /**
+   * Clear loading timestamp when loading completes.
+   * Called when loading is set to false.
+   */
+  function recordLoadingEnd() {
+    loadingStartTime = null;
+    // Also record successful API response
+    recordSuccessfulApiResponse();
+  }
+
+  /**
+   * Record timestamp when refreshing state starts.
+   */
+  function recordRefreshingStart() {
+    if (!refreshingStartTime) {
+      refreshingStartTime = Date.now();
+    }
+  }
+
+  /**
+   * Clear refreshing timestamp when refresh completes.
+   */
+  function recordRefreshingEnd() {
+    refreshingStartTime = null;
+    recordSuccessfulApiResponse();
+  }
+
+  /**
+   * Record timestamp when date filter fetch starts.
+   */
+  function recordDateFilterStart() {
+    if (!dateFilterStartTime) {
+      dateFilterStartTime = Date.now();
+    }
+  }
+
+  /**
+   * Clear date filter timestamp when fetch completes.
+   */
+  function recordDateFilterEnd() {
+    dateFilterStartTime = null;
+    recordSuccessfulApiResponse();
+  }
+
+  /**
+   * Record a successful API response.
+   * Updates the timestamp used for API response timeout detection.
+   */
+  function recordSuccessfulApiResponse() {
+    lastSuccessfulApiResponse = Date.now();
+    // Clear unresponsive state if we're receiving responses again
+    if (panelUnresponsive && !loading && !refreshing && !fetchingDateFilteredRuns) {
+      clearUnresponsiveState();
+    }
+  }
+
+  /**
+   * Record auto-refresh execution and calculate expected next refresh.
+   */
+  function recordAutoRefreshExecution() {
+    const now = Date.now();
+    lastAutoRefreshTime = now;
+    const effectiveInterval = getEffectiveRefreshInterval();
+    expectedNextAutoRefresh = now + effectiveInterval * 1000;
+  }
+
+  // ============================================================================
+  // Panel Health Recovery Functions
+  // ============================================================================
+
+  /**
+   * Reset panel state - clears all loading flags and resets to idle state.
+   * This is a recovery action for when the panel gets stuck in a loading state.
+   */
+  function resetPanelState() {
+    console.log('[WorkflowRuns] Resetting panel state...');
+
+    // Record user action from modal for extended cooldown
+    lastUserActionFromModal = Date.now();
+    recordUserActivity();
+
+    // Clear all loading flags
+    loading = false;
+    refreshing = false;
+    fetchingDateFilteredRuns = false;
+    loadingMore = false;
+    progressiveFetching = false;
+
+    // Clear timestamps
+    loadingStartTime = null;
+    refreshingStartTime = null;
+    dateFilterStartTime = null;
+
+    // Clear any pending operations
+    cancelPendingOperations();
+
+    // Reset generation counters to prevent stale responses from affecting UI
+    workflowSwitchGeneration++;
+    filterChangeGeneration++;
+
+    // Clear unresponsive state
+    clearUnresponsiveState();
+
+    // Record this as a successful recovery (resets API response timestamp)
+    lastSuccessfulApiResponse = Date.now();
+
+    showToast('Panel state has been reset', 'info', 3000);
+
+    console.log('[WorkflowRuns] Panel state reset complete');
+  }
+
+  /**
+   * Force a complete data refresh from the GitHub API.
+   * This re-fetches all workflow runs and resets the UI state.
+   */
+  function forceDataRefresh() {
+    console.log('[WorkflowRuns] Forcing complete data refresh...');
+
+    // First reset the panel state
+    resetPanelState();
+
+    // Then trigger a full refresh
+    loading = true;
+    recordLoadingStart();
+
+    // Request fresh data from the backend
+    vscode.postMessage({
+      type: 'getWorkflowRuns',
+      data: {
+        workflow: workflowFilter === 'all' ? undefined : workflowFilter,
+        per_page: workflowLoadLimit,
+        page: 1,
+        actor: actorFilter === 'all' || actorFilter === 'me' ? undefined : actorFilter,
+        includeBotRuns: showBotRuns,
+      },
+    });
+
+    showToast('Refreshing data from GitHub...', 'info', 3000);
+
+    console.log('[WorkflowRuns] Data refresh request sent');
+  }
+
+  /**
+   * Restart the auto-refresh timer.
+   * This is a recovery action when auto-refresh appears to have stopped.
+   */
+  function restartAutoRefresh() {
+    console.log('[WorkflowRuns] Restarting auto-refresh...');
+
+    // Record user action from modal for extended cooldown
+    lastUserActionFromModal = Date.now();
+    recordUserActivity();
+
+    // Clear unresponsive state
+    clearUnresponsiveState();
+
+    // Update the auto-refresh cooldown specifically to prevent the health check
+    // from immediately re-triggering the modal after restart. Without this,
+    // the next health check (in ~20s) would see that auto-refresh tracking
+    // variables are reset and potentially show the modal again.
+    // Using granular cooldown allows other health issues to still be detected.
+    healthNotificationCooldowns.autoRefresh = Date.now();
+
+    // Reset tracking timestamps BEFORE restarting so the health check
+    // doesn't see stale "overdue" values
+    lastAutoRefreshTime = null;
+    expectedNextAutoRefresh = null;
+
+    // Restart the auto-refresh timer
+    startAutoRefresh();
+
+    showToast(`Auto-refresh restarted (${autoRefreshSeconds}s interval)`, 'info', 3000);
+
+    console.log('[WorkflowRuns] Auto-refresh restarted');
+  }
+
+  /**
+   * Dismiss the health notification without taking recovery action.
+   * Sets extended cooldown to prevent notification from reappearing too soon.
+   */
+  function dismissHealthNotification() {
+    console.log('[WorkflowRuns] Health notification dismissed by user');
+
+    // Record user action from modal for extended cooldown
+    lastUserActionFromModal = Date.now();
+    recordUserActivity();
+
+    healthNotificationDismissed = true;
+    // Keep panelUnresponsive = true so we don't auto-clear immediately
+    // The notification will auto-clear when the underlying issue resolves
   }
 
   /**
@@ -1197,20 +2542,26 @@
 
   /**
    * Map the auto-refresh interval value onto the slider index used by the UI.
+   * Uses AUTO_REFRESH_SLIDER_OPTIONS which excludes 0 (Off).
+   * When value is 0 (Off), returns the index of the previousAutoRefreshSeconds.
    */
   function getAutoRefreshOptionIndex(value: number | null | undefined): number {
+    // If value is 0 or invalid, use previous or default interval for slider position
     const safeValue =
-      typeof value === 'number' && Number.isFinite(value) && value >= 0
+      typeof value === 'number' && Number.isFinite(value) && value > 0
         ? value
-        : DEFAULT_AUTO_REFRESH_SECONDS;
+        : previousAutoRefreshSeconds > 0
+          ? previousAutoRefreshSeconds
+          : DEFAULT_AUTO_REFRESH_SECONDS;
 
-    const foundIndex = AUTO_REFRESH_SECONDS_OPTIONS.indexOf(safeValue);
+    const foundIndex = AUTO_REFRESH_SLIDER_OPTIONS.indexOf(safeValue);
     if (foundIndex !== -1) {
       return foundIndex;
     }
 
-    const fallbackIndex = AUTO_REFRESH_SECONDS_OPTIONS.indexOf(DEFAULT_AUTO_REFRESH_SECONDS);
-    return fallbackIndex >= 0 ? fallbackIndex : 0;
+    // Find the closest option
+    const fallbackIndex = AUTO_REFRESH_SLIDER_OPTIONS.indexOf(DEFAULT_AUTO_REFRESH_SECONDS);
+    return fallbackIndex >= 0 ? fallbackIndex : 1; // Default to 30s (index 1) if not found
   }
 
   /**
@@ -1231,27 +2582,29 @@
 
   /**
    * Format the auto-refresh interval for human-readable display.
+   * Always shows the user's configured interval to match the slider position.
    */
   function formatAutoRefreshLabel(seconds: number | null | undefined): string {
     if (typeof seconds !== 'number' || !Number.isFinite(seconds) || seconds <= 0) {
       return 'Off';
     }
 
+    // Format based on user's configured interval (not the effective adaptive interval)
     if (seconds < 60) {
-      return `${seconds} seconds`;
+      return `${seconds}s`;
     }
 
     switch (seconds) {
       case 60:
-        return '1 minute';
+        return '1m';
       case 90:
-        return '1 minute 30 seconds';
+        return '1m 30s';
       case 120:
-        return '2 minutes';
+        return '2m';
       case 180:
-        return '3 minutes';
+        return '3m';
       default:
-        return `${seconds} seconds`;
+        return `${seconds}s`;
     }
   }
 
@@ -1266,6 +2619,44 @@
    */
   function getMaxTotalRuns(): number {
     return hasActiveDateFilter() ? DATE_FILTER_MAX_TOTAL_RUNS : NON_DATE_MAX_TOTAL_RUNS;
+  }
+
+  /**
+   * Determine whether the "max runs reached" warning should be displayed.
+   *
+   * The warning informs users they may have hit the configured maximum and
+   * potentially be missing runs due to hitting the fetch limit.
+   *
+   * Logic:
+   * - Show warning when we've fetched the maximum allowed runs AND there are
+   *   still more runs available on the server (totalCount > fetchedCount)
+   * - The warning is shown regardless of current filter state because users
+   *   filtering by "My Runs", specific workflows, etc. may be missing runs
+   *   that match their criteria but weren't fetched due to hitting the limit
+   *
+   * @param _filteredCount - Number of runs after applying filters (kept for API compatibility)
+   * @param _loadedCount - Total number of runs loaded in memory (kept for API compatibility)
+   * @param fetchedCount - Total runs fetched from API
+   */
+  function shouldShowMaxRunsWarning(
+    _filteredCount: number,
+    _loadedCount: number,
+    fetchedCount: number
+  ): boolean {
+    // Validate fetchedCount
+    if (!Number.isFinite(fetchedCount) || fetchedCount <= 0) {
+      return false;
+    }
+
+    // Get the effective max runs limit based on whether date filter is active
+    const effectiveMaxRuns = getMaxTotalRuns();
+
+    // Show warning if we've hit the fetch limit AND there are more runs on the server
+    // This means there could be runs matching the user's filters that weren't fetched
+    const hitFetchLimit = fetchedCount >= effectiveMaxRuns;
+    const moreRunsExist = totalCount > fetchedCount;
+
+    return hitFetchLimit && moreRunsExist;
   }
 
   /**
@@ -1430,6 +2821,7 @@
    * Marks userManuallyToggledFilters=true so auto-collapse respects user's choice.
    */
   function toggleFiltersExpanded() {
+    recordUserActivity();
     filtersExpanded = !filtersExpanded;
     userManuallyToggledFilters = true;
   }
@@ -1439,6 +2831,7 @@
    * Closes other sections (Graph, Artifacts, Summary) when opening
    */
   function toggleRunExpansion(runId: number) {
+    recordUserActivity();
     if (expandedRuns.has(runId)) {
       expandedRuns.delete(runId);
       expandedRuns = expandedRuns; // Trigger reactivity
@@ -1477,6 +2870,7 @@
    * Closes other sections (Jobs, Artifacts, Summary) when opening
    */
   function toggleDependencyGraph(run: WorkflowRun) {
+    recordUserActivity();
     const runId = run.id;
 
     if (showDependencyGraph.has(runId)) {
@@ -2029,6 +3423,7 @@
    * Toggle artifacts section
    */
   function toggleArtifacts(runId: number) {
+    recordUserActivity();
     if (showArtifacts.has(runId)) {
       showArtifacts.delete(runId);
       showArtifacts = showArtifacts; // Trigger reactivity
@@ -2108,6 +3503,7 @@
    * Toggle summary section
    */
   function toggleSummary(runId: number) {
+    recordUserActivity();
     if (showSummary.has(runId)) {
       showSummary.delete(runId);
       showSummary = showSummary; // Trigger reactivity
@@ -2336,6 +3732,83 @@
   }
 
   /**
+   * Show help modal with information about watched runs feature.
+   */
+  function showWatchedRunsHelp() {
+    helpModalTitle = 'Watched Runs Only';
+    helpModalContent = `
+<h4>⏱️ How Watched Runs Work</h4>
+<p>Watched runs let you track specific workflow runs regardless of their age or other filters.</p>
+
+<h4>Managing Watched Runs</h4>
+<ul>
+  <li><strong>Watch a run:</strong> Click the <span class="codicon codicon-watch"></span> Watch button on any workflow run to start watching it.</li>
+  <li><strong>Unwatch a run:</strong> Click the Watching button again on a watched run to stop watching it.</li>
+  <li><strong>View all watched runs:</strong> Enable the "Watched Runs Only" checkbox to see only your watched runs.</li>
+  <li><strong>Manage watched runs:</strong> When "Watched Runs Only" is enabled, use the "Manage" button to see and remove watched runs.</li>
+</ul>
+
+<h4>Important Behavior</h4>
+<ul>
+  <li><strong>Overrides all filters:</strong> When "Watched Runs Only" is enabled, all other filters (status, actor, workflow, date, search, favorites) are ignored.</li>
+  <li><strong>Limit:</strong> You can watch up to <strong>${MAX_WATCHED_RUNS_PER_REPO}</strong> runs per repository.</li>
+  <li><strong>Persistence:</strong> Watched runs are saved and persist across VS Code sessions.</li>
+  <li><strong>Cross-workflow:</strong> Watched runs can span multiple workflows, so the workflow filter is disabled when this mode is active.</li>
+</ul>
+
+<h4>💡 Tips</h4>
+<ul>
+  <li>Watch runs you want to monitor closely, even if they're older than your date range.</li>
+  <li>Use watched runs to track important deployments or long-running jobs.</li>
+  <li>Watched runs are refreshed when you enable "Watched Runs Only" to ensure you see current status.</li>
+</ul>
+`.trim();
+    showHelpModal = true;
+  }
+
+  /**
+   * Show help modal with information about favorites feature.
+   */
+  function showFavoritesHelp() {
+    helpModalTitle = 'Favorites Only';
+    helpModalContent = `
+<h4>⭐ How Workflow Favorites Work</h4>
+<p>Favorites let you quickly filter to runs from your most important workflows.</p>
+
+<h4>Managing Favorites</h4>
+<ul>
+  <li><strong>Add a favorite:</strong> Open the workflow dropdown and click the ☆ star icon next to any workflow to mark it as a favorite.</li>
+  <li><strong>Remove a favorite:</strong> Click the ★ star icon next to a favorited workflow to remove it from favorites.</li>
+  <li><strong>View favorite runs only:</strong> Enable the "Favorites Only" checkbox to show only runs from favorited workflows.</li>
+</ul>
+
+<h4>Where to Find the Star Icon</h4>
+<p>The star icon (★/☆) appears next to each workflow in the workflow filter dropdown:</p>
+<ol>
+  <li>Click on the workflow search/filter field</li>
+  <li>Look for the star icon on the right side of each workflow row</li>
+  <li>Click the star to toggle favorite status</li>
+</ol>
+
+<h4>Important Behavior</h4>
+<ul>
+  <li><strong>Cross-workflow:</strong> Favorites Only shows runs from all favorited workflows, so the workflow dropdown filter is disabled when active.</li>
+  <li><strong>Persistence:</strong> Favorites are saved and persist across VS Code sessions.</li>
+  <li><strong>Sorting:</strong> Favorited workflows appear at the top of the workflow dropdown for easy access.</li>
+  <li><strong>Combined with other filters:</strong> Unlike "Watched Runs Only", favorites can be combined with status, actor, date, and search filters.</li>
+</ul>
+
+<h4>💡 Tips</h4>
+<ul>
+  <li>Favorite your most frequently monitored workflows for quick access.</li>
+  <li>Combine with status filter to see all failures from your favorite workflows.</li>
+  <li>Use with the actor filter to see your runs across all favorite workflows.</li>
+</ul>
+`.trim();
+    showHelpModal = true;
+  }
+
+  /**
    * Filter available workflows based on search query and sort favorites first.
    * When isWorkflowSearchActive is false, we ignore workflowSearchQuery and show all workflows
    * so the selected workflow label in the input does not act as a filter.
@@ -2457,6 +3930,7 @@
    * Select workflow from dropdown
    */
   function selectWorkflowFromDropdown(workflow: { path: string; name: string; filename: string }) {
+    recordUserActivity();
     workflowFilter = workflow.path;
     workflowSearchQuery = workflow.name;
     isWorkflowSearchActive = false;
@@ -2469,6 +3943,7 @@
    * Clear workflow filter
    */
   function clearWorkflowFilter() {
+    recordUserActivity();
     // Cancel all pending operations from previous workflow
     cancelPendingOperations();
 
@@ -2504,12 +3979,18 @@
   }
 
   /**
-   * Handle click outside workflow dropdown
+   * Handle click outside workflow dropdown and settings dropdown.
+   * Closes dropdowns when user clicks outside of them.
    */
   function handleWorkflowDropdownClickOutside(event: MouseEvent) {
     const target = event.target as HTMLElement;
+    // Close workflow dropdown if click is outside
     if (!target.closest('.workflow-filter-combobox')) {
       workflowDropdownOpen = false;
+    }
+    // Close settings dropdown if click is outside
+    if (!target.closest('.refresh-settings-wrapper')) {
+      showRefreshSettings = false;
     }
   }
 
@@ -2519,11 +4000,20 @@
    * Rule: When UNCHECKED → do NOT change Actor Filter (user can view All Users or My Runs without bots)
    */
   function handleShowBotRunsChange() {
+    // Cancel any pending requests from previous filter state
+    cancelPendingFilterRequests();
+
     if (showBotRuns) {
       // User just checked "Show Bot Runs" → switch to "All Users" if not already
       if (actorFilter !== 'all') {
         actorFilter = 'all';
         console.log('[WorkflowRuns] Show Bot Runs enabled: switching to All Users');
+        // Provide clear feedback about the automatic filter change
+        showToast(
+          'Actor filter switched to "All Users" – bot runs are only visible with All Users',
+          'info',
+          4000
+        );
       }
     } else {
       // User unchecked "Show Bot Runs" → do NOT change Actor Filter
@@ -2540,6 +4030,15 @@
    * the "Watched Runs Only" view fast and focused.
    */
   function handleShowWatchedOnlyChange() {
+    // When "Watched Runs Only" is enabled, reset the workflow filter to "all"
+    // because watched runs can span multiple workflows
+    if (showWatchedOnly) {
+      workflowFilter = 'all';
+      workflowSearchQuery = '';
+      isWorkflowSearchActive = false;
+      workflowDropdownOpen = false;
+    }
+
     filterRuns();
 
     if (showWatchedOnly && watchedRuns.size > 0) {
@@ -2551,16 +4050,39 @@
   }
 
   /**
+   * Handle "Favorites Only" checkbox change.
+   * When enabled, reset the workflow filter since favorites can span multiple workflows.
+   */
+  function handleShowFavoritesOnlyChange() {
+    // When "Favorites Only" is enabled, reset the workflow filter to "all"
+    // because favorite workflows show runs from multiple workflows
+    if (showFavoritesOnly) {
+      workflowFilter = 'all';
+      workflowSearchQuery = '';
+      isWorkflowSearchActive = false;
+      workflowDropdownOpen = false;
+    }
+
+    filterRuns();
+  }
+
+  /**
    * Handle actor filter dropdown change with one-way coupling.
    * Rule: When "My Runs" selected → automatically uncheck "Show Bot Runs" (My Runs never shows bots)
    * Rule: When "All Users" selected → do NOT change "Show Bot Runs" (All Users can show with or without bots)
    */
   function handleActorFilterChange() {
+    recordUserActivity();
+    // Cancel any pending requests from previous filter state
+    cancelPendingFilterRequests();
+
     if (actorFilter === 'me') {
       // User selected "My Runs" → uncheck bot runs if checked
       if (showBotRuns) {
         showBotRuns = false;
         console.log('[WorkflowRuns] Actor filter changed to My Runs: disabling bot runs');
+        // Provide clear feedback about the automatic filter change
+        showToast('"Show Bot Runs" disabled – My Runs filter excludes bot accounts', 'info', 4000);
       }
     } else if (actorFilter === 'all') {
       // User selected "All Users" → do NOT change bot runs checkbox
@@ -2576,6 +4098,7 @@
    * Toggle watch status for a workflow run
    */
   function toggleRunWatch(runId: number, event: Event) {
+    recordUserActivity();
     event.stopPropagation();
     let nowWatched: boolean;
     if (watchedRuns.has(runId)) {
@@ -2794,27 +4317,64 @@
   }
 
   /**
-   * Save runs to workflow-specific cache
+   * Evict oldest cache entries if we've exceeded MAX_CACHE_ENTRIES.
+   * Uses LRU (Least Recently Used) strategy based on lastFetchTimestamp.
+   */
+  function evictOldestCacheEntries() {
+    if (workflowRunsCache.size <= MAX_CACHE_ENTRIES) {
+      return;
+    }
+
+    // Sort entries by lastFetchTimestamp (oldest first)
+    const entries = Array.from(workflowRunsCache.entries()).sort(
+      (a, b) => a[1].lastFetchTimestamp - b[1].lastFetchTimestamp
+    );
+
+    // Remove oldest entries until we're at the limit
+    const entriesToRemove = entries.slice(0, workflowRunsCache.size - MAX_CACHE_ENTRIES);
+    for (const [key] of entriesToRemove) {
+      workflowRunsCache.delete(key);
+      console.log('[WorkflowRuns] Evicted cache entry for workflow:', key);
+    }
+  }
+
+  /**
+   * Save runs to workflow-specific cache.
+   * Enforces MAX_CACHE_ENTRIES limit and truncates runs to MAX_CACHED_RUNS_PER_WORKFLOW.
    */
   function saveToCache(
     workflowPath: string,
-    runs: WorkflowRun[],
+    runsToCache: WorkflowRun[],
     totalCount: number,
     repository: { owner: string; name: string } | null
   ) {
     const now = Date.now();
+
+    // Limit the number of runs stored in cache to prevent memory bloat
+    // Keep the most recent runs (array is sorted by created_at descending)
+    const truncatedRuns =
+      runsToCache.length > MAX_CACHED_RUNS_PER_WORKFLOW
+        ? runsToCache.slice(0, MAX_CACHED_RUNS_PER_WORKFLOW)
+        : runsToCache;
+
     workflowRunsCache.set(workflowPath, {
-      runs,
+      runs: truncatedRuns,
       totalCount,
       lastFetchTimestamp: now,
       cacheTimestamp: now,
       repository,
     });
+
+    // Evict old entries if cache is full
+    evictOldestCacheEntries();
+
     console.log(
       '[WorkflowRuns] Saved runs to cache for workflow:',
       workflowPath,
-      runs.length,
-      'runs'
+      truncatedRuns.length,
+      'runs (truncated from',
+      runsToCache.length,
+      ')'
     );
   }
 
@@ -2985,6 +4545,11 @@
           dateFilterMaxTotalRuns?: number;
           showWorkflowToastNotifications?: boolean;
           showProgressIndicators?: boolean;
+          adaptiveRefreshEnabled?: boolean;
+          adaptiveFastRefreshSeconds?: number;
+          rateLimitProtectionEnabled?: boolean;
+          rateLimitThreshold?: number;
+          // NOTE: rateLimitInfo is intentionally not included - we only show real API values
         };
 
         const {
@@ -2996,6 +4561,10 @@
           dateFilterMaxTotalRuns: savedDateFilterMaxTotalRuns,
           showWorkflowToastNotifications: savedWorkflowToast,
           showProgressIndicators: savedProgress,
+          adaptiveRefreshEnabled: savedAdaptiveEnabled,
+          adaptiveFastRefreshSeconds: savedAdaptiveFast,
+          rateLimitProtectionEnabled: savedRateLimitProtection,
+          rateLimitThreshold: savedRateLimitThreshold,
         } = settings;
 
         if (typeof savedLimit === 'number' && Number.isFinite(savedLimit) && savedLimit > 0) {
@@ -3037,6 +4606,38 @@
           autoRefreshSeconds = DEFAULT_AUTO_REFRESH_SECONDS;
         }
         autoRefreshIndex = getAutoRefreshOptionIndex(autoRefreshSeconds);
+
+        // Initialize adaptive refresh settings (default to enabled with 10s fast interval)
+        adaptiveRefreshEnabled =
+          typeof savedAdaptiveEnabled === 'boolean' ? savedAdaptiveEnabled : true;
+        if (
+          typeof savedAdaptiveFast === 'number' &&
+          Number.isFinite(savedAdaptiveFast) &&
+          savedAdaptiveFast >= MIN_ADAPTIVE_FAST_REFRESH_SECONDS &&
+          savedAdaptiveFast <= MAX_ADAPTIVE_FAST_REFRESH_SECONDS
+        ) {
+          adaptiveFastRefreshSeconds = savedAdaptiveFast;
+        } else {
+          adaptiveFastRefreshSeconds = DEFAULT_ADAPTIVE_FAST_REFRESH_SECONDS;
+        }
+
+        // Initialize rate limit settings
+        rateLimitProtectionEnabled =
+          typeof savedRateLimitProtection === 'boolean' ? savedRateLimitProtection : true;
+        if (
+          typeof savedRateLimitThreshold === 'number' &&
+          RATE_LIMIT_THRESHOLD_OPTIONS.includes(savedRateLimitThreshold)
+        ) {
+          rateLimitThreshold = savedRateLimitThreshold;
+        } else {
+          rateLimitThreshold = DEFAULT_RATE_LIMIT_THRESHOLD;
+        }
+
+        // NOTE: Rate limit info is NOT loaded from persisted data.
+        // Display will show "Unknown" until the first API response is received.
+        // This ensures we only show actual values from real GitHub API calls,
+        // not stale cached data from previous sessions.
+
         startAutoRefresh();
 
         // Initialize notification settings (default to true if not set)
@@ -3389,8 +4990,15 @@
       showDispatchConfirmModal = true;
     } else if (message.type === 'cancelWorkflowRunResponse') {
       const runId = message.data?.runId;
+      console.log('[CancelWorkflow] Received cancelWorkflowRunResponse:', {
+        runId,
+        success: message.success,
+        error: message.error,
+      });
+
       if (runId) {
         if (message.success) {
+          console.log('[CancelWorkflow] Successfully updated UI for cancelled run:', runId);
           // Mark as successfully cancelled
           cancellationState.cancelledRuns.add(runId);
           cancellationState.cancellingRuns.delete(runId);
@@ -3404,6 +5012,7 @@
             runs = runs; // Trigger reactivity
           }
         } else {
+          console.error('[CancelWorkflow] Cancellation failed for run:', runId, message.error);
           // Mark as failed
           cancellationState.failedCancellations.set(
             runId,
@@ -3412,6 +5021,8 @@
           cancellationState.cancellingRuns.delete(runId);
           cancellationState = cancellationState; // Trigger reactivity
         }
+      } else {
+        console.warn('[CancelWorkflow] Received response without runId:', message);
       }
     } else if (message.type === 'rerunWorkflowResponse') {
       const responseRunId: number | undefined = message.data?.runId;
@@ -3584,8 +5195,14 @@
 
         if (message.success) {
           const jobs = message.data?.jobs || [];
-          runJobs.set(runId, jobs);
-          runJobs = runJobs; // Trigger reactivity
+          // Use requestAnimationFrame to batch DOM updates and prevent mid-render corruption
+          requestAnimationFrame(() => {
+            runJobs.set(runId, jobs);
+            // Increment render key to force DOM re-creation
+            jobsRenderKey.set(runId, (jobsRenderKey.get(runId) || 0) + 1);
+            jobsRenderKey = jobsRenderKey;
+            runJobs = runJobs; // Trigger reactivity
+          });
 
           // Update job steps modal if it's open and showing a job from this run
           if (
@@ -3618,8 +5235,14 @@
           // Also update jobs if included in response
           if (message.data?.jobs) {
             const jobs = message.data.jobs;
-            runJobs.set(runId, jobs);
-            runJobs = runJobs; // Trigger reactivity
+            // Use requestAnimationFrame to batch DOM updates and prevent mid-render corruption
+            requestAnimationFrame(() => {
+              runJobs.set(runId, jobs);
+              // Increment render key to force DOM re-creation
+              jobsRenderKey.set(runId, (jobsRenderKey.get(runId) || 0) + 1);
+              jobsRenderKey = jobsRenderKey;
+              runJobs = runJobs; // Trigger reactivity
+            });
 
             loadingJobs.delete(runId);
             loadingJobs = loadingJobs; // Trigger reactivity
@@ -3650,8 +5273,15 @@
         loadingArtifacts = loadingArtifacts; // Trigger reactivity
 
         if (message.success) {
-          runArtifacts.set(runId, message.data?.artifacts || []);
-          runArtifacts = runArtifacts; // Trigger reactivity
+          const artifacts = message.data?.artifacts || [];
+          // Use requestAnimationFrame to batch DOM updates and prevent mid-render corruption
+          requestAnimationFrame(() => {
+            runArtifacts.set(runId, artifacts);
+            // Increment render key to force DOM re-creation
+            artifactsRenderKey.set(runId, (artifactsRenderKey.get(runId) || 0) + 1);
+            artifactsRenderKey = artifactsRenderKey;
+            runArtifacts = runArtifacts; // Trigger reactivity
+          });
         }
       }
     } else if (message.type === 'getRunParametersResponse') {
@@ -3785,13 +5415,34 @@
         showToast(message.error, 'error', 4000);
       }
     } else if (message.type === 'backgroundRefreshWatchedRunsResponse') {
+      // Clear the in-progress flag since the background refresh has completed
+      isBackgroundRefreshInProgress = false;
+
+      // Log if refresh was skipped or failed (for debugging)
+      if (!message.success) {
+        const reason = message.skipped || 'unknown error';
+        console.log('[WorkflowRuns] Background refresh watched runs skipped/failed:', reason);
+      }
+
       if (message.success && message.data) {
         const updatedRuns = message.data.runs || [];
+        const rateLimitInfo = message.data.rateLimitInfo as
+          | { remaining: number; limit: number; reset: number }
+          | undefined;
+
         console.log(
           '[WorkflowRuns] Background refresh: received',
           updatedRuns.length,
-          'watched runs'
+          'watched runs',
+          rateLimitInfo
+            ? `(Rate limit: ${rateLimitInfo.remaining}/${rateLimitInfo.limit})`
+            : '(no rate limit info)'
         );
+
+        // Update rate limit tracking from API response
+        if (rateLimitInfo) {
+          updateRateLimit(rateLimitInfo);
+        }
 
         // Skip processing if we're in the middle of a workflow switch
         // This prevents stale status changes from appearing during the transition
@@ -3870,29 +5521,46 @@
         buildAvailableWorkflows();
         filterRuns();
 
-        // Refresh jobs for watched runs that are in-progress OR have just completed
-        // (to ensure job statuses are updated when a workflow finishes)
+        // Recalculate adaptive refresh based on updated run states
+        recalculateAdaptiveRefresh();
+
+        // Refresh jobs for watched runs that have visible job UI
+        // Limit the number of concurrent requests to avoid API overload
+        let jobRefreshCount = 0;
+        const MAX_JOB_REFRESHES_PER_CYCLE = 10;
+        const refreshedRunIds = new Set<number>();
+
         for (const run of updatedRuns as WorkflowRun[]) {
+          if (jobRefreshCount >= MAX_JOB_REFRESHES_PER_CYCLE) {
+            break;
+          }
+
           const runId = run.id;
+          const hasVisibleJobUI =
+            showDependencyGraph.has(runId) ||
+            expandedRuns.has(runId) ||
+            showSummary.has(runId) ||
+            runJobs.has(runId);
+
           const needsJobRefresh =
-            // Always refresh in-progress/queued runs
-            run.status === 'in_progress' ||
-            run.status === 'queued' ||
-            // Refresh completed runs if they have jobs visible (graph, jobs list, or summary)
-            (run.status === 'completed' &&
-              (showDependencyGraph.has(runId) ||
-                expandedRuns.has(runId) ||
-                showSummary.has(runId) ||
-                runJobs.has(runId)));
+            // Only refresh if run has visible job UI
+            hasVisibleJobUI &&
+            (run.status === 'in_progress' || run.status === 'queued' || run.status === 'completed');
 
           if (needsJobRefresh) {
             vscode.postMessage({ type: 'getWorkflowRunJobs', data: { runId } });
+            refreshedRunIds.add(runId);
+            jobRefreshCount++;
           }
         }
 
         // Also refresh jobs if the modal is open showing a job from a watched run
-        // (even if the run has completed, so the modal shows updated status)
-        if (selectedJobForStepsModal && selectedJobRunIdForSteps) {
+        if (
+          selectedJobForStepsModal &&
+          selectedJobRunIdForSteps &&
+          jobRefreshCount < MAX_JOB_REFRESHES_PER_CYCLE &&
+          !refreshedRunIds.has(selectedJobRunIdForSteps)
+        ) {
           const modalRunUpdated = updatedRuns.find(
             (r: WorkflowRun) => r.id === selectedJobRunIdForSteps
           );
@@ -3905,9 +5573,23 @@
         }
       }
     } else if (message.type === 'backgroundRefreshAllRunsResponse') {
+      // Clear the in-progress flag since the background refresh has completed
+      isBackgroundRefreshInProgress = false;
+
+      // Log if refresh was skipped or failed (for debugging)
+      if (!message.success) {
+        const reason = message.skipped || 'unknown error';
+        console.log('[WorkflowRuns] Background refresh skipped/failed:', reason);
+      }
+
       if (message.success && message.data) {
         const newRuns = message.data.runs || [];
         console.log('[WorkflowRuns] Background refresh all: received', newRuns.length, 'runs');
+
+        // Update rate limit tracking if included in response
+        if (message.data.rateLimitInfo) {
+          updateRateLimit(message.data.rateLimitInfo);
+        }
 
         // Skip processing if we're in the middle of a workflow switch
         // This prevents stale notifications from appearing during the transition
@@ -4062,9 +5744,12 @@
         });
 
         // Add any new runs that weren't in the existing list
+        // IMPORTANT: Batch all new runs into a single array assignment to avoid
+        // triggering excessive Svelte reactivity that can cause "Invalid array length" errors
+        const newRunsToAdd: WorkflowRun[] = [];
         for (const newRun of newRuns) {
           if (!existingRunIds.has(newRun.id)) {
-            runs = [newRun, ...runs];
+            newRunsToAdd.push(newRun);
             newRunsCount++;
             // New runs are also workflow-level events
             // Check if run matches all active filters (workflow, actor, bot)
@@ -4080,6 +5765,10 @@
               matchesActiveFilters: matchesFilters,
             });
           }
+        }
+        // Single reactive assignment for all new runs
+        if (newRunsToAdd.length > 0) {
+          runs = [...newRunsToAdd, ...runs];
         }
 
         // Instead of showing "X runs updated", show specific workflow events
@@ -4111,42 +5800,54 @@
         // Re-filter to update the UI
         filterRuns();
 
+        // Recalculate adaptive refresh based on updated run states
+        recalculateAdaptiveRefresh();
+
+        // Refresh jobs only for VISIBLE runs to avoid overwhelming the API
         // This ensures the mini progress indicator and graph stay updated
-        // Also refresh jobs for runs that just completed to update final job statuses
-        for (const run of runs) {
+        // while limiting the number of concurrent API calls
+        const visibleRunIds = new Set(visibleRuns.map((r) => r.id));
+        let jobRefreshCount = 0;
+        const MAX_JOB_REFRESHES_PER_CYCLE = 10; // Limit concurrent job refreshes
+
+        for (const run of visibleRuns) {
+          if (jobRefreshCount >= MAX_JOB_REFRESHES_PER_CYCLE) {
+            break; // Don't send too many requests at once
+          }
+
           const runId = run.id;
           const needsJobRefresh =
-            // Always refresh in-progress/queued runs
-            run.status === 'in_progress' ||
-            run.status === 'queued' ||
-            // Refresh just-completed runs if they have jobs visible (graph, jobs list, or summary)
-            // or if we have cached job data that needs to be updated
-            (justCompletedRunIds.has(runId) &&
-              (showDependencyGraph.has(runId) ||
-                expandedRuns.has(runId) ||
-                showSummary.has(runId) ||
-                runJobs.has(runId)));
+            // Only refresh if run has visible job UI (expanded, graph, or summary)
+            (run.status === 'in_progress' || run.status === 'queued') &&
+            (showDependencyGraph.has(runId) ||
+              expandedRuns.has(runId) ||
+              showSummary.has(runId) ||
+              runJobs.has(runId));
 
-          if (needsJobRefresh) {
+          // Also refresh just-completed runs if they have jobs visible
+          const isJustCompleted =
+            justCompletedRunIds.has(runId) &&
+            (showDependencyGraph.has(runId) ||
+              expandedRuns.has(runId) ||
+              showSummary.has(runId) ||
+              runJobs.has(runId));
+
+          if (needsJobRefresh || isJustCompleted) {
             vscode.postMessage({ type: 'getWorkflowRunJobs', data: { runId } });
+            jobRefreshCount++;
           }
         }
 
         // Also refresh jobs if the modal is open showing a job from any updated run
         // (even if the run has completed, so the modal shows updated status)
-        if (selectedJobForStepsModal && selectedJobRunIdForSteps) {
+        if (
+          selectedJobForStepsModal &&
+          selectedJobRunIdForSteps &&
+          jobRefreshCount < MAX_JOB_REFRESHES_PER_CYCLE
+        ) {
           const modalRunUpdated = newRunsMap.has(selectedJobRunIdForSteps);
-          // Check if already refreshed above (in-progress/queued OR just-completed with visible jobs)
-          const modalRun = runs.find((r) => r.id === selectedJobRunIdForSteps);
-          const alreadyRefreshed =
-            modalRun &&
-            (modalRun.status === 'in_progress' ||
-              modalRun.status === 'queued' ||
-              (justCompletedRunIds.has(selectedJobRunIdForSteps) &&
-                (showDependencyGraph.has(selectedJobRunIdForSteps) ||
-                  expandedRuns.has(selectedJobRunIdForSteps) ||
-                  showSummary.has(selectedJobRunIdForSteps) ||
-                  runJobs.has(selectedJobRunIdForSteps))));
+          // Check if already refreshed above (only if in visibleRuns)
+          const alreadyRefreshed = visibleRunIds.has(selectedJobRunIdForSteps);
           if (modalRunUpdated && !alreadyRefreshed) {
             vscode.postMessage({
               type: 'getWorkflowRunJobs',
@@ -4186,8 +5887,14 @@
     } else if (message.type === 'restoreAutoRefresh') {
       // Panel became visible again, restore the persisted auto-refresh setting
       if (message.success && message.data) {
-        const { autoRefreshSeconds: restoredSeconds } = message.data as {
+        const {
+          autoRefreshSeconds: restoredSeconds,
+          adaptiveRefreshEnabled: restoredAdaptiveEnabled,
+          adaptiveFastRefreshSeconds: restoredAdaptiveFast,
+        } = message.data as {
           autoRefreshSeconds?: number;
+          adaptiveRefreshEnabled?: boolean;
+          adaptiveFastRefreshSeconds?: number;
         };
         if (
           typeof restoredSeconds === 'number' &&
@@ -4197,8 +5904,20 @@
           console.log('[WorkflowRuns] Restoring auto-refresh to', restoredSeconds, 'seconds');
           autoRefreshSeconds = restoredSeconds;
           autoRefreshIndex = getAutoRefreshOptionIndex(autoRefreshSeconds);
-          startAutoRefresh();
         }
+        // Restore adaptive refresh settings
+        if (typeof restoredAdaptiveEnabled === 'boolean') {
+          adaptiveRefreshEnabled = restoredAdaptiveEnabled;
+        }
+        if (
+          typeof restoredAdaptiveFast === 'number' &&
+          Number.isFinite(restoredAdaptiveFast) &&
+          restoredAdaptiveFast >= MIN_ADAPTIVE_FAST_REFRESH_SECONDS &&
+          restoredAdaptiveFast <= MAX_ADAPTIVE_FAST_REFRESH_SECONDS
+        ) {
+          adaptiveFastRefreshSeconds = restoredAdaptiveFast;
+        }
+        startAutoRefresh();
       }
     } else if (message.type === 'getFilterState') {
       // Extension is requesting current filter state
@@ -4315,10 +6034,29 @@
 
   /**
    * Apply all filters to the in-memory runs and return the filtered list.
+   * Optimized to use a single pass over the array for better performance with large datasets.
    * Accepts options to temporarily skip specific filters (used for smart suggestions).
+   *
+   * Includes defensive checks to prevent "Invalid array length" errors.
    */
   function applyFiltersToRuns(options: FilterComputationOptions = {}): WorkflowRun[] {
-    let filtered = runs;
+    // Defensive check: ensure runs is a valid array
+    if (!Array.isArray(runs)) {
+      console.warn('[WorkflowRuns] applyFiltersToRuns: runs is not an array, returning empty');
+      return [];
+    }
+
+    // Defensive check: limit array size to prevent memory issues
+    const MAX_SAFE_ARRAY_LENGTH = 100000;
+    if (runs.length > MAX_SAFE_ARRAY_LENGTH) {
+      console.warn(
+        '[WorkflowRuns] applyFiltersToRuns: runs array too large (',
+        runs.length,
+        '), truncating to',
+        MAX_SAFE_ARRAY_LENGTH
+      );
+      runs = runs.slice(0, MAX_SAFE_ARRAY_LENGTH);
+    }
 
     const {
       skipStatus,
@@ -4350,152 +6088,115 @@
       return watchedFiltered;
     }
 
-    // Filter out bot runs by default (unless showBotRuns is true)
-    if (!skipBot && !showBotRuns) {
-      filtered = filtered.filter((run) => !run.actor.login.endsWith('[bot]'));
+    // Pre-compute filter criteria to avoid recomputation per item
+    const applyBotFilter = !skipBot && !showBotRuns;
+    const applyActorFilter =
+      !skipActor &&
+      ((actorFilter === 'me' && currentUsername) ||
+        (actorFilter !== 'all' && actorFilter !== 'me'));
+    const targetActor = actorFilter === 'me' ? currentUsername : actorFilter;
+    const applyFavoritesFilter =
+      !skipFavoritesOnly && showFavoritesOnly && markedWorkflows.length > 0;
+    const favoritesSet = applyFavoritesFilter ? new Set(markedWorkflows) : null;
+    const applyWorkflowFilter = !skipWorkflow && workflowFilter !== 'all';
+    const applySearchFilter = !skipSearch && searchQuery.trim();
+    const searchQueryLower = applySearchFilter ? searchQuery.toLowerCase() : '';
+    const applyStatusFilter = !skipStatus && statusFilter !== 'all';
+
+    // Pre-compute date filter criteria
+    const applyDateFilter = !skipDate && (dateFilterFrom || dateFilterTo);
+    let fromDate: Date | null = null;
+    let toDate: Date | null = null;
+    let hasValidFrom = false;
+    let hasValidTo = false;
+
+    if (applyDateFilter) {
+      fromDate = dateFilterFrom ? parseDateTimeLocal(dateFilterFrom) : null;
+      toDate = dateFilterTo ? parseDateTimeLocal(dateFilterTo) : null;
+      hasValidFrom = !!fromDate && !Number.isNaN(fromDate.getTime());
+      hasValidTo = !!toDate && !Number.isNaN(toDate.getTime());
     }
 
-    // Apply actor filter
-    if (!skipActor) {
-      if (actorFilter === 'me' && currentUsername) {
-        filtered = filtered.filter((run) => run.actor.login === currentUsername);
-      } else if (actorFilter !== 'all' && actorFilter !== 'me') {
-        filtered = filtered.filter((run) => run.actor.login === actorFilter);
+    // Single-pass filter combining all criteria for better performance
+    // This reduces the number of iterations from 7-8 passes to 1 pass
+    const filtered = runs.filter((run) => {
+      // Bot filter - exclude bot runs by default
+      if (applyBotFilter && run.actor.login.endsWith('[bot]')) {
+        return false;
       }
-    }
 
-    // Apply favorites filter (show only runs from favorite workflows)
-    if (!skipFavoritesOnly && showFavoritesOnly && markedWorkflows.length > 0) {
-      filtered = filtered.filter((run) => {
-        // Extract workflow path without @branch suffix
-        const workflowPath = run.path.split('@')[0];
-        return markedWorkflows.includes(workflowPath);
-      });
-    }
+      // Actor filter - filter by specific user
+      if (applyActorFilter && run.actor.login !== targetActor) {
+        return false;
+      }
 
-    // Apply workflow filter (by workflow file path)
-    if (!skipWorkflow && workflowFilter !== 'all') {
-      filtered = filtered.filter((run) => {
-        // Extract workflow path without @branch suffix
-        const workflowPath = run.path.split('@')[0];
-        return workflowPath === workflowFilter;
-      });
-    }
+      // Extract workflow path once for favorites and workflow filters
+      const workflowPath =
+        applyFavoritesFilter || applyWorkflowFilter ? run.path.split('@')[0] : '';
 
-    // Apply search filter
-    if (!skipSearch && searchQuery.trim()) {
-      const query = searchQuery.toLowerCase();
-      filtered = filtered.filter(
-        (run) =>
-          run.name.toLowerCase().includes(query) ||
-          run.display_title?.toLowerCase().includes(query) ||
-          run.head_branch.toLowerCase().includes(query) ||
-          run.actor.login.toLowerCase().includes(query)
-      );
-    }
+      // Favorites filter - show only runs from favorite workflows
+      if (applyFavoritesFilter && favoritesSet && !favoritesSet.has(workflowPath)) {
+        return false;
+      }
 
-    // Apply date/time filter (from selected date/time onwards, up to optional end).
-    if (!skipDate && (dateFilterFrom || dateFilterTo)) {
-      // CRITICAL FIX: Use parseDateTimeLocal() to parse datetime-local strings
-      // as local time, not UTC. This fixes the timezone mismatch issue.
-      const fromDate = dateFilterFrom ? parseDateTimeLocal(dateFilterFrom) : null;
-      const toDate = dateFilterTo ? parseDateTimeLocal(dateFilterTo) : null;
+      // Workflow filter - filter by specific workflow
+      if (applyWorkflowFilter && workflowPath !== workflowFilter) {
+        return false;
+      }
 
-      const hasValidFrom = fromDate && !Number.isNaN(fromDate.getTime());
-      const hasValidTo = toDate && !Number.isNaN(toDate.getTime());
+      // Search filter - search across name, title, branch, and actor
+      if (applySearchFilter) {
+        const nameMatch = run.name.toLowerCase().includes(searchQueryLower);
+        const titleMatch = run.display_title?.toLowerCase().includes(searchQueryLower);
+        const branchMatch = run.head_branch.toLowerCase().includes(searchQueryLower);
+        const actorMatch = run.actor.login.toLowerCase().includes(searchQueryLower);
+        if (!nameMatch && !titleMatch && !branchMatch && !actorMatch) {
+          return false;
+        }
+      }
 
-      console.log('[WorkflowRuns] Date Filter Debug:', {
-        dateFilterFrom,
-        dateFilterTo,
-        fromDate: fromDate?.toISOString(),
-        toDate: toDate?.toISOString(),
-        hasValidFrom,
-        hasValidTo,
-        runsBeforeFilter: filtered.length,
-      });
+      // Date filter - filter by date range
+      if (applyDateFilter && (hasValidFrom || hasValidTo)) {
+        const timestamp = run.run_started_at ?? run.created_at;
+        const runDate = new Date(timestamp);
 
-      if (hasValidFrom || hasValidTo) {
-        let filteredOutCount = 0;
-
-        filtered = filtered.filter((run) => {
-          const timestamp = run.run_started_at ?? run.created_at;
-          const runDate = new Date(timestamp);
-
-          if (Number.isNaN(runDate.getTime())) {
-            return true;
-          }
-
-          let shouldInclude = true;
-
+        if (!Number.isNaN(runDate.getTime())) {
           if (hasValidFrom && fromDate && runDate < fromDate) {
-            shouldInclude = false;
-            if (filteredOutCount === 0) {
-              console.log('[WorkflowRuns] Sample run filtered out (before fromDate):', {
-                runId: run.id,
-                timestamp,
-                runDate: runDate.toISOString(),
-                fromDate: fromDate.toISOString(),
-                comparison: `${runDate.toISOString()} < ${fromDate.toISOString()}`,
-              });
-            }
-            filteredOutCount++;
+            return false;
           }
-
           if (hasValidTo && toDate && runDate > toDate) {
-            shouldInclude = false;
-            if (filteredOutCount === 0) {
-              console.log('[WorkflowRuns] Sample run filtered out (after toDate):', {
-                runId: run.id,
-                timestamp,
-                runDate: runDate.toISOString(),
-                toDate: toDate.toISOString(),
-                comparison: `${runDate.toISOString()} > ${toDate.toISOString()}`,
-              });
-            }
-            filteredOutCount++;
+            return false;
           }
-
-          return shouldInclude;
-        });
-
-        console.log('[WorkflowRuns] Date Filter Results:', {
-          runsAfterFilter: filtered.length,
-          filteredOutCount,
-          sampleIncludedRun:
-            filtered.length > 0
-              ? {
-                  id: filtered[0].id,
-                  timestamp: filtered[0].run_started_at ?? filtered[0].created_at,
-                  runDate: new Date(
-                    filtered[0].run_started_at ?? filtered[0].created_at
-                  ).toISOString(),
-                }
-              : null,
-        });
+        }
       }
-    }
 
-    // Apply status filter
-    if (!skipStatus && statusFilter !== 'all') {
-      filtered = filtered.filter((run) => {
+      // Status filter - filter by run status/conclusion
+      if (applyStatusFilter) {
         if (statusFilter === 'completed') {
-          return run.status === 'completed' && run.conclusion === 'success';
+          if (!(run.status === 'completed' && run.conclusion === 'success')) {
+            return false;
+          }
+        } else if (statusFilter === 'failed') {
+          if (!(run.status === 'completed' && run.conclusion === 'failure')) {
+            return false;
+          }
+        } else if (statusFilter === 'in_progress') {
+          if (run.status !== 'in_progress') {
+            return false;
+          }
+        } else if (statusFilter === 'queued') {
+          if (run.status !== 'queued') {
+            return false;
+          }
+        } else if (statusFilter === 'cancelled') {
+          if (!(run.status === 'completed' && run.conclusion === 'cancelled')) {
+            return false;
+          }
         }
-        if (statusFilter === 'failed') {
-          return run.status === 'completed' && run.conclusion === 'failure';
-        }
-        if (statusFilter === 'in_progress') {
-          return run.status === 'in_progress';
-        }
-        if (statusFilter === 'queued') {
-          return run.status === 'queued';
-        }
-        if (statusFilter === 'cancelled') {
-          return run.status === 'completed' && run.conclusion === 'cancelled';
-        }
-        return true;
-      });
-    }
+      }
+
+      return true;
+    });
 
     // This ensures the most recent runs appear at the top regardless of workflow
     if (!skipFavoritesOnly && showFavoritesOnly && markedWorkflows.length > 0) {
@@ -4515,37 +6216,142 @@
   }
 
   /**
+   * Internal implementation of filterRuns that actually performs the filtering.
+   * This is called by the throttled wrapper.
+   *
+   * Includes defensive error handling to prevent crashes during filtering.
+   */
+  function filterRunsImpl() {
+    try {
+      console.log(
+        '[WorkflowRuns] filterRunsImpl called: showWatchedOnly=',
+        showWatchedOnly,
+        'watchedRuns.size=',
+        watchedRuns.size,
+        'runs.length=',
+        runs.length
+      );
+      const baseOptions = getBaseFilterOptionsForCurrentContext();
+      const result = applyFiltersToRuns(baseOptions);
+
+      // Ensure we always get a valid array
+      if (Array.isArray(result)) {
+        filteredRuns = result;
+      } else {
+        console.warn('[WorkflowRuns] filterRunsImpl: applyFiltersToRuns returned non-array');
+        filteredRuns = [];
+      }
+      console.log(
+        '[WorkflowRuns] filterRunsImpl result: filteredRuns.length=',
+        filteredRuns.length
+      );
+    } catch (error) {
+      console.error('[WorkflowRuns] filterRunsImpl error, resetting filteredRuns:', error);
+      filteredRuns = [];
+    }
+  }
+
+  /**
    * Filter runs based on search query, status, actor, workflow, and bot runs.
    *
    * This also updates the current page slice used for rendering so pagination
    * stays in sync after any filter or setting change.
+   *
+   * Uses throttling to prevent excessive recomputation during rapid refreshes
+   * (e.g., with 5-second adaptive refresh intervals).
+   *
+   * Includes defensive guards against concurrent filter operations that can
+   * cause "Invalid array length" errors in Svelte's rendering pipeline.
    */
   function filterRuns() {
-    console.log(
-      '[WorkflowRuns] filterRuns called: showWatchedOnly=',
-      showWatchedOnly,
-      'watchedRuns.size=',
-      watchedRuns.size,
-      'runs.length=',
-      runs.length
-    );
-    const baseOptions = getBaseFilterOptionsForCurrentContext();
-    filteredRuns = applyFiltersToRuns(baseOptions);
-    console.log('[WorkflowRuns] filterRuns result: filteredRuns.length=', filteredRuns.length);
+    // If a throttle is already in progress, mark as pending and return
+    if (filterRunsThrottleId !== null) {
+      filterRunsPending = true;
+      return;
+    }
 
-    // Keep client-side pagination slice in sync with the latest filters.
-    const limit = workflowLoadLimit > 0 ? workflowLoadLimit : 20;
-    const safePage = currentPage > 0 ? currentPage : 1;
-    const start = (safePage - 1) * limit;
-    const end = start + limit;
-    visibleRuns = filteredRuns.slice(start, end);
+    // Prevent concurrent filter operations that can corrupt Svelte's internal state
+    // This can happen when rapid filter changes overlap with background refreshes
+    if (filterOperationInProgress) {
+      filterRunsPending = true;
+      return;
+    }
 
-    smartSuggestions =
-      filteredRuns.length === 0 && runs.length > 0 ? computeSmartSuggestions(baseOptions) : [];
+    filterOperationInProgress = true;
 
-    // After (re)computing the filtered and visible runs, decide whether we
-    // should continue progressive fetching for the current page / view.
-    scheduleProgressiveFetchIfNeeded();
+    try {
+      // Execute immediately
+      filterRunsImpl();
+
+      // Keep client-side pagination slice in sync with the latest filters.
+      // Use defensive bounds checking to prevent "Invalid array length" errors
+      const limit = Math.max(1, workflowLoadLimit > 0 ? workflowLoadLimit : 20);
+      const safePage = Math.max(1, currentPage > 0 ? currentPage : 1);
+
+      // Ensure filteredRuns is a valid array before operations
+      if (!Array.isArray(filteredRuns)) {
+        console.warn('[WorkflowRuns] filteredRuns is not an array, resetting to empty array');
+        filteredRuns = [];
+      }
+
+      // Calculate bounds with overflow protection
+      const filteredLength = filteredRuns.length;
+      const start = Math.max(0, Math.min((safePage - 1) * limit, filteredLength));
+      const end = Math.min(start + limit, filteredLength);
+
+      // Only slice if we have valid bounds
+      // Create new array reference to ensure Svelte detects the change
+      let newVisibleRuns: WorkflowRun[];
+      if (start <= end && start >= 0 && end >= 0) {
+        newVisibleRuns = filteredRuns.slice(start, end);
+      } else {
+        console.warn('[WorkflowRuns] Invalid slice bounds, setting empty visibleRuns:', {
+          start,
+          end,
+          filteredLength,
+        });
+        newVisibleRuns = [];
+      }
+
+      // Use requestAnimationFrame to batch DOM updates and prevent mid-render corruption.
+      // This ensures the previous render cycle completes before we start a new one.
+      requestAnimationFrame(() => {
+        // Increment render key to force {#key} block to fully recreate DOM
+        // This prevents Svelte's internal linked-list corruption
+        visibleRunsRenderKey++;
+        visibleRuns = newVisibleRuns;
+      });
+
+      const baseOptions = getBaseFilterOptionsForCurrentContext();
+      smartSuggestions =
+        filteredRuns.length === 0 && runs.length > 0 ? computeSmartSuggestions(baseOptions) : [];
+
+      // After (re)computing the filtered and visible runs, decide whether we
+      // should continue progressive fetching for the current page / view.
+      scheduleProgressiveFetchIfNeeded();
+    } catch (error) {
+      // Log and recover from any errors during filtering to prevent panel freeze
+      console.error('[WorkflowRuns] Error during filterRuns, recovering:', error);
+      // Reset to safe state using requestAnimationFrame to avoid mid-render corruption
+      requestAnimationFrame(() => {
+        visibleRunsRenderKey++;
+        filteredRuns = [];
+        visibleRuns = [];
+        smartSuggestions = [];
+      });
+    } finally {
+      filterOperationInProgress = false;
+    }
+
+    // Set up throttle - any calls during this window will be coalesced
+    filterRunsThrottleId = window.setTimeout(() => {
+      filterRunsThrottleId = null;
+      // If a call was pending during the throttle window, execute it now
+      if (filterRunsPending) {
+        filterRunsPending = false;
+        filterRuns();
+      }
+    }, FILTER_RUNS_THROTTLE_MS);
   }
 
   /**
@@ -4947,7 +6753,25 @@
     }
 
     if (_showFavoritesOnly && _markedWorkflows.length > 0) {
-      labels.push('Favorites only');
+      // Show the list of favorite workflow names in the Active Filters section
+      // Filter to only include workflows that exist in the current repository (availableWorkflows)
+      // This prevents showing favorites from other repositories in the active filters
+      const currentRepoMarkedWorkflows = _markedWorkflows.filter((path) =>
+        availableWorkflows.some((w) => w.path === path)
+      );
+      const favoriteNames = currentRepoMarkedWorkflows
+        .map((path) => workflowPathToName.get(path) || path.split('/').pop() || path)
+        .filter((name) => name);
+
+      if (favoriteNames.length === 1) {
+        labels.push(`Favorite: ${favoriteNames[0]}`);
+      } else if (favoriteNames.length <= 3) {
+        labels.push(`Favorites: ${favoriteNames.join(', ')}`);
+      } else {
+        // For more than 3 favorites, show first 2 and count
+        const displayNames = favoriteNames.slice(0, 2).join(', ');
+        labels.push(`Favorites: ${displayNames} +${favoriteNames.length - 2} more`);
+      }
     }
 
     if (_workflowFilter !== 'all') {
@@ -5004,14 +6828,64 @@
   }
 
   /**
-   * Cancel workflow run
+   * Cancel workflow run - shows confirmation modal before proceeding.
    */
   function handleCancelRun(run: WorkflowRun) {
-    // Delegate confirmation to the extension host (webview cannot show window.confirm)
-    vscode.postMessage({
-      type: 'requestCancelWorkflowRun',
-      data: { runId: run.id, runName: run.display_title || run.name },
+    // Show confirmation modal with run details
+    cancelConfirmRunId = run.id;
+    cancelConfirmRunName = run.display_title || run.name || `Run #${run.id}`;
+    cancelConfirmRunBranch = run.head_branch || '';
+    cancelConfirmRunAuthor = run.actor?.login || '';
+    showCancelConfirmModal = true;
+
+    console.log('[CancelWorkflow] Modal opened for run:', {
+      runId: run.id,
+      name: cancelConfirmRunName,
+      branch: cancelConfirmRunBranch,
+      author: cancelConfirmRunAuthor,
     });
+  }
+
+  /**
+   * Confirm cancel run - called when user confirms cancellation in modal.
+   */
+  function confirmCancelRun() {
+    if (cancelConfirmRunId === null) {
+      console.warn('[CancelWorkflow] confirmCancelRun called but cancelConfirmRunId is null');
+      return;
+    }
+
+    // Capture the run ID before closing modal to prevent race conditions
+    const runIdToCancel = cancelConfirmRunId;
+
+    console.log('[CancelWorkflow] User confirmed cancellation for run:', runIdToCancel);
+
+    // Mark as cancelling in the state
+    cancellationState.cancellingRuns.add(runIdToCancel);
+    cancellationState = cancellationState; // Trigger reactivity
+
+    // Send cancel request to backend
+    console.log('[CancelWorkflow] Sending cancelWorkflowRun message to backend:', {
+      runId: runIdToCancel,
+    });
+    vscode.postMessage({
+      type: 'cancelWorkflowRun',
+      data: { runId: runIdToCancel },
+    });
+
+    // Close modal and reset state
+    closeCancelConfirmModal();
+  }
+
+  /**
+   * Close cancel confirmation modal and reset state.
+   */
+  function closeCancelConfirmModal() {
+    showCancelConfirmModal = false;
+    cancelConfirmRunId = null;
+    cancelConfirmRunName = '';
+    cancelConfirmRunBranch = '';
+    cancelConfirmRunAuthor = '';
   }
 
   /**
@@ -5126,6 +7000,7 @@
    * Handle status filter change
    */
   function handleStatusFilterChange() {
+    recordUserActivity();
     filterRuns();
   }
 
@@ -5305,42 +7180,23 @@
                   <span class="codicon codicon-bell"></span>
                   <span>Notifications</span>
                 </button>
+                <button
+                  type="button"
+                  class="settings-tab"
+                  class:settings-tab--active={settingsActiveTab === 'ratelimit'}
+                  on:click={() => (settingsActiveTab = 'ratelimit')}
+                >
+                  <span class="codicon codicon-pulse"></span>
+                  <span>API Usage</span>
+                  {#if rateLimitProtectionActive}
+                    <span class="rate-limit-badge">!</span>
+                  {/if}
+                </button>
               </div>
 
               <!-- General Tab Content -->
               {#if settingsActiveTab === 'general'}
                 <div class="settings-tab-content">
-                  <div class="refresh-settings-header">
-                    <span>Auto-Refresh</span>
-                    <button
-                      class="info-icon clickable settings-info-icon"
-                      type="button"
-                      on:click={showAutoRefreshSettingsHelp}
-                      title="Learn more about Auto-Refresh"
-                    >
-                      <span class="codicon codicon-info"></span>
-                    </button>
-                  </div>
-                  <div class="settings-slider-row">
-                    <input
-                      type="range"
-                      min="0"
-                      max={AUTO_REFRESH_SECONDS_OPTIONS.length - 1}
-                      step="1"
-                      value={autoRefreshIndex}
-                      on:input={handleAutoRefreshSliderChange}
-                      title={formatAutoRefreshLabel(autoRefreshSeconds)}
-                    />
-                    <span class="settings-slider-value">
-                      {formatAutoRefreshLabel(autoRefreshSeconds)}
-                    </span>
-                  </div>
-                  <div class="settings-help-text">
-                    Controls how often the panel refreshes runs in the background.
-                  </div>
-
-                  <div class="settings-divider"></div>
-
                   <div class="refresh-settings-header">
                     <span
                       title="Maximum total workflow runs to progressively load when no date filter is active"
@@ -5527,7 +7383,7 @@
                           fetch different runs.
                         </span>
                       </div>
-                    {:else if !hasActiveDateFilter() && totalRunsFetched >= NON_DATE_MAX_TOTAL_RUNS}
+                    {:else if !hasActiveDateFilter() && totalRunsFetched >= NON_DATE_MAX_TOTAL_RUNS && showMaxRunsWarningMemo}
                       <div class="settings-help-text settings-help-text--warning">
                         <span class="codicon codicon-alert"></span>
                         <span>
@@ -5573,6 +7429,265 @@
                   </div>
                   <div class="settings-help-text">
                     Show inline job progress for running workflows (e.g., "2/5 jobs completed").
+                  </div>
+                </div>
+              {/if}
+
+              <!-- API Rate Limit Tab Content -->
+              {#if settingsActiveTab === 'ratelimit'}
+                <div class="settings-tab-content">
+                  <!-- Auto-Refresh Settings -->
+                  <div class="refresh-settings-header">
+                    <span>Auto-Refresh</span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showAutoRefreshSettingsHelp}
+                      title="Learn more about Auto-Refresh"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-checkbox-row settings-checkbox-row--with-info">
+                    <label class="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={autoRefreshSeconds > 0}
+                        on:change={handleAutoRefreshToggle}
+                        title="Enable or disable automatic background refresh"
+                      />
+                      <span>Enable Auto-Refresh</span>
+                    </label>
+                  </div>
+                  <div
+                    class="settings-slider-row"
+                    class:settings-slider-disabled={autoRefreshSeconds === 0}
+                  >
+                    <input
+                      type="range"
+                      min="0"
+                      max={AUTO_REFRESH_SLIDER_OPTIONS.length - 1}
+                      step="1"
+                      value={autoRefreshIndex}
+                      on:input={handleAutoRefreshSliderChange}
+                      title={autoRefreshSeconds > 0
+                        ? autoRefreshLabelText
+                        : `Will be: ${AUTO_REFRESH_SLIDER_OPTIONS[autoRefreshIndex]}s when enabled`}
+                      disabled={autoRefreshSeconds === 0}
+                    />
+                    <span class="settings-slider-value">
+                      {autoRefreshSeconds > 0
+                        ? autoRefreshLabelText
+                        : `${AUTO_REFRESH_SLIDER_OPTIONS[autoRefreshIndex]}s`}
+                    </span>
+                  </div>
+                  <div class="settings-help-text">
+                    Controls how often the panel refreshes runs in the background.
+                  </div>
+
+                  <!-- Adaptive Refresh Settings -->
+                  <div
+                    class="settings-checkbox-row settings-checkbox-row--with-info {autoRefreshSeconds ===
+                    0
+                      ? 'settings-checkbox-row--disabled'
+                      : ''}"
+                  >
+                    <label class="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={adaptiveRefreshEnabled}
+                        on:change={handleAdaptiveRefreshEnabledChange}
+                        disabled={autoRefreshSeconds === 0}
+                      />
+                      <span>Enable Adaptive Refresh</span>
+                    </label>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showAdaptiveRefreshSettingsHelp}
+                      title="Learn more about Adaptive Refresh"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  {#if adaptiveRefreshEnabled && autoRefreshSeconds > 0}
+                    <div class="settings-slider-row" style="margin-top: 6px;">
+                      <span class="settings-slider-label">Fast interval:</span>
+                      <input
+                        type="range"
+                        min={MIN_ADAPTIVE_FAST_REFRESH_SECONDS}
+                        max={MAX_ADAPTIVE_FAST_REFRESH_SECONDS}
+                        step="1"
+                        value={adaptiveFastRefreshSeconds}
+                        on:input={handleAdaptiveFastRefreshSliderChange}
+                        title={`Fast refresh interval: ${adaptiveFastRefreshSeconds} seconds`}
+                        style="flex: 1;"
+                      />
+                      <span class="settings-slider-value">
+                        {adaptiveFastRefreshSeconds}s
+                      </span>
+                    </div>
+                  {/if}
+                  <div class="settings-help-text" style="margin-top: 4px;">
+                    {#if autoRefreshSeconds === 0}
+                      <span class="settings-help-text-muted">
+                        ⚠️ Adaptive refresh requires auto-refresh to be enabled.
+                      </span>
+                    {:else if adaptiveRefreshEnabled}
+                      {#if adaptiveRefreshActive}
+                        <span class="adaptive-refresh-note">
+                          ⚡ Faster refresh ({adaptiveFastRefreshSeconds}s) active due to
+                          in-progress runs.
+                        </span>
+                      {:else if autoRefreshSeconds > adaptiveFastRefreshSeconds}
+                        <span class="adaptive-refresh-note">
+                          Auto-speeds up to {adaptiveFastRefreshSeconds}s when runs are active.
+                        </span>
+                      {/if}
+                    {:else}
+                      <span class="settings-help-text-muted">
+                        Adaptive refresh is disabled. Always uses the main auto-refresh interval.
+                      </span>
+                    {/if}
+                  </div>
+
+                  <div class="settings-divider"></div>
+
+                  <div class="refresh-settings-header refresh-settings-header--with-info">
+                    <span>API Rate Limit (Live)</span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showRateLimitStatusHelp}
+                      title="Learn more about API rate limits"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+
+                  <!-- Rate Limit Progress Bar (reactive values for real-time updates) -->
+                  <div class="rate-limit-display">
+                    <div class="rate-limit-status-row">
+                      <span class="rate-limit-label">Requests:</span>
+                      <span class="rate-limit-value {rateLimitColorClass}"
+                        >{rateLimitStatusText}</span
+                      >
+                    </div>
+                    <div class="rate-limit-progress-container">
+                      <div
+                        class="rate-limit-progress-bar {rateLimitColorClass}"
+                        style="width: {rateLimitRemainingPercent}%"
+                      ></div>
+                    </div>
+                    <div class="rate-limit-status-row">
+                      <span class="rate-limit-label">Resets at:</span>
+                      <span class="rate-limit-value">{rateLimitResetTimeText}</span>
+                    </div>
+                    {#if rateLimitRemaining !== null && rateLimitLimit !== null}
+                      <div class="rate-limit-percentage">
+                        {rateLimitRemainingPercent}% remaining
+                      </div>
+                    {/if}
+                  </div>
+
+                  <div class="settings-divider"></div>
+
+                  <!-- Rate Limit Protection Toggle -->
+                  <div class="refresh-settings-header">
+                    <span>Rate Limit Protection</span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showAutoThrottlingHelp}
+                      title="Learn more about Auto-Throttling"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-checkbox-row settings-checkbox-row--with-info">
+                    <label class="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={rateLimitProtectionEnabled}
+                        on:change={toggleRateLimitProtection}
+                        title="Automatically throttle requests when approaching rate limits"
+                      />
+                      <span>Enable auto-throttling</span>
+                    </label>
+                  </div>
+                  {#if rateLimitProtectionEnabled}
+                    <div class="settings-option-row" style="margin-top: 6px;">
+                      <span class="settings-option-label">Threshold:</span>
+                      <select
+                        class="settings-select"
+                        value={rateLimitThreshold}
+                        on:change={handleRateLimitThresholdChange}
+                        title="API usage percentage at which auto-throttling activates"
+                      >
+                        {#each RATE_LIMIT_THRESHOLD_OPTIONS as threshold (threshold)}
+                          <option value={threshold}>{threshold}%</option>
+                        {/each}
+                      </select>
+                    </div>
+                  {/if}
+                  <div class="settings-help-text">
+                    Automatically reduce request frequency when API usage reaches {rateLimitThreshold}%.
+                  </div>
+
+                  {#if rateLimitProtectionActive}
+                    <div class="settings-help-text settings-help-text--warning">
+                      <span class="codicon codicon-shield"></span>
+                      <span>
+                        Rate limit protection is active. Background refreshes are throttled.
+                      </span>
+                    </div>
+                  {/if}
+
+                  <div class="settings-divider"></div>
+
+                  <!-- Quick Actions -->
+                  <div class="refresh-settings-header">
+                    <span>Quick Actions</span>
+                  </div>
+                  <div class="rate-limit-actions">
+                    <button
+                      type="button"
+                      class="secondary-button rate-limit-action-btn"
+                      class:btn-click-feedback={false}
+                      on:click={increaseRefreshInterval}
+                      disabled={autoRefreshSeconds === 0 || isAtMaxRefreshInterval}
+                      title={isAtMaxRefreshInterval
+                        ? 'Already at maximum interval (180s)'
+                        : 'Increase to the next available refresh interval'}
+                    >
+                      <span class="codicon codicon-watch"></span>
+                      Increase Interval
+                    </button>
+                    {#if autoRefreshSeconds > 0}
+                      <button
+                        type="button"
+                        class="secondary-button rate-limit-action-btn"
+                        on:click={disableAutoRefreshForRateLimit}
+                        title="Disable auto-refresh to preserve API quota"
+                      >
+                        <span class="codicon codicon-stop"></span>
+                        Disable Refresh
+                      </button>
+                    {:else}
+                      <button
+                        type="button"
+                        class="secondary-button rate-limit-action-btn rate-limit-action-btn--enable"
+                        on:click={enableAutoRefreshFromRateLimit}
+                        title="Enable auto-refresh with the previously selected interval"
+                      >
+                        <span class="codicon codicon-play"></span>
+                        Enable Refresh
+                      </button>
+                    {/if}
+                  </div>
+                  <div class="settings-help-text">
+                    GitHub allows 5,000 API requests per hour. Reduce refresh frequency to preserve
+                    quota.
                   </div>
                 </div>
               {/if}
@@ -5631,42 +7746,23 @@
                   <span class="codicon codicon-bell"></span>
                   <span>Notifications</span>
                 </button>
+                <button
+                  type="button"
+                  class="settings-tab"
+                  class:settings-tab--active={settingsActiveTab === 'ratelimit'}
+                  on:click={() => (settingsActiveTab = 'ratelimit')}
+                >
+                  <span class="codicon codicon-pulse"></span>
+                  <span>API Usage</span>
+                  {#if rateLimitProtectionActive}
+                    <span class="rate-limit-badge">!</span>
+                  {/if}
+                </button>
               </div>
 
               <!-- General Tab Content -->
               {#if settingsActiveTab === 'general'}
                 <div class="settings-tab-content">
-                  <div class="refresh-settings-header">
-                    <span>Auto-Refresh</span>
-                    <button
-                      class="info-icon clickable settings-info-icon"
-                      type="button"
-                      on:click={showAutoRefreshSettingsHelp}
-                      title="Learn more about Auto-Refresh"
-                    >
-                      <span class="codicon codicon-info"></span>
-                    </button>
-                  </div>
-                  <div class="settings-slider-row">
-                    <input
-                      type="range"
-                      min="0"
-                      max={AUTO_REFRESH_SECONDS_OPTIONS.length - 1}
-                      step="1"
-                      value={autoRefreshIndex}
-                      on:input={handleAutoRefreshSliderChange}
-                      title={formatAutoRefreshLabel(autoRefreshSeconds)}
-                    />
-                    <span class="settings-slider-value">
-                      {formatAutoRefreshLabel(autoRefreshSeconds)}
-                    </span>
-                  </div>
-                  <div class="settings-help-text">
-                    Controls how often the panel refreshes runs in the background.
-                  </div>
-
-                  <div class="settings-divider"></div>
-
                   <div class="refresh-settings-header">
                     <span
                       title="Maximum total workflow runs to progressively load when no date filter is active"
@@ -5860,6 +7956,265 @@
                   </div>
                 </div>
               {/if}
+
+              <!-- API Rate Limit Tab Content -->
+              {#if settingsActiveTab === 'ratelimit'}
+                <div class="settings-tab-content">
+                  <!-- Auto-Refresh Settings -->
+                  <div class="refresh-settings-header">
+                    <span>Auto-Refresh</span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showAutoRefreshSettingsHelp}
+                      title="Learn more about Auto-Refresh"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-checkbox-row settings-checkbox-row--with-info">
+                    <label class="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={autoRefreshSeconds > 0}
+                        on:change={handleAutoRefreshToggle}
+                        title="Enable or disable automatic background refresh"
+                      />
+                      <span>Enable Auto-Refresh</span>
+                    </label>
+                  </div>
+                  <div
+                    class="settings-slider-row"
+                    class:settings-slider-disabled={autoRefreshSeconds === 0}
+                  >
+                    <input
+                      type="range"
+                      min="0"
+                      max={AUTO_REFRESH_SLIDER_OPTIONS.length - 1}
+                      step="1"
+                      value={autoRefreshIndex}
+                      on:input={handleAutoRefreshSliderChange}
+                      title={autoRefreshSeconds > 0
+                        ? autoRefreshLabelText
+                        : `Will be: ${AUTO_REFRESH_SLIDER_OPTIONS[autoRefreshIndex]}s when enabled`}
+                      disabled={autoRefreshSeconds === 0}
+                    />
+                    <span class="settings-slider-value">
+                      {autoRefreshSeconds > 0
+                        ? autoRefreshLabelText
+                        : `${AUTO_REFRESH_SLIDER_OPTIONS[autoRefreshIndex]}s`}
+                    </span>
+                  </div>
+                  <div class="settings-help-text">
+                    Controls how often the panel refreshes runs in the background.
+                  </div>
+
+                  <!-- Adaptive Refresh Settings -->
+                  <div
+                    class="settings-checkbox-row settings-checkbox-row--with-info {autoRefreshSeconds ===
+                    0
+                      ? 'settings-checkbox-row--disabled'
+                      : ''}"
+                  >
+                    <label class="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={adaptiveRefreshEnabled}
+                        on:change={handleAdaptiveRefreshEnabledChange}
+                        disabled={autoRefreshSeconds === 0}
+                      />
+                      <span>Enable Adaptive Refresh</span>
+                    </label>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showAdaptiveRefreshSettingsHelp}
+                      title="Learn more about Adaptive Refresh"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  {#if adaptiveRefreshEnabled && autoRefreshSeconds > 0}
+                    <div class="settings-slider-row" style="margin-top: 6px;">
+                      <span class="settings-slider-label">Fast interval:</span>
+                      <input
+                        type="range"
+                        min={MIN_ADAPTIVE_FAST_REFRESH_SECONDS}
+                        max={MAX_ADAPTIVE_FAST_REFRESH_SECONDS}
+                        step="1"
+                        value={adaptiveFastRefreshSeconds}
+                        on:input={handleAdaptiveFastRefreshSliderChange}
+                        title={`Fast refresh interval: ${adaptiveFastRefreshSeconds} seconds`}
+                        style="flex: 1;"
+                      />
+                      <span class="settings-slider-value">
+                        {adaptiveFastRefreshSeconds}s
+                      </span>
+                    </div>
+                  {/if}
+                  <div class="settings-help-text" style="margin-top: 4px;">
+                    {#if autoRefreshSeconds === 0}
+                      <span class="settings-help-text-muted">
+                        ⚠️ Adaptive refresh requires auto-refresh to be enabled.
+                      </span>
+                    {:else if adaptiveRefreshEnabled}
+                      {#if adaptiveRefreshActive}
+                        <span class="adaptive-refresh-note">
+                          ⚡ Faster refresh ({adaptiveFastRefreshSeconds}s) active due to
+                          in-progress runs.
+                        </span>
+                      {:else if autoRefreshSeconds > adaptiveFastRefreshSeconds}
+                        <span class="adaptive-refresh-note">
+                          Auto-speeds up to {adaptiveFastRefreshSeconds}s when runs are active.
+                        </span>
+                      {/if}
+                    {:else}
+                      <span class="settings-help-text-muted">
+                        Adaptive refresh is disabled. Always uses the main auto-refresh interval.
+                      </span>
+                    {/if}
+                  </div>
+
+                  <div class="settings-divider"></div>
+
+                  <div class="refresh-settings-header refresh-settings-header--with-info">
+                    <span>API Rate Limit (Live)</span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showRateLimitStatusHelp}
+                      title="Learn more about API rate limits"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+
+                  <!-- Rate Limit Progress Bar (reactive values for real-time updates) -->
+                  <div class="rate-limit-display">
+                    <div class="rate-limit-status-row">
+                      <span class="rate-limit-label">Requests:</span>
+                      <span class="rate-limit-value {rateLimitColorClass}"
+                        >{rateLimitStatusText}</span
+                      >
+                    </div>
+                    <div class="rate-limit-progress-container">
+                      <div
+                        class="rate-limit-progress-bar {rateLimitColorClass}"
+                        style="width: {rateLimitRemainingPercent}%"
+                      ></div>
+                    </div>
+                    <div class="rate-limit-status-row">
+                      <span class="rate-limit-label">Resets at:</span>
+                      <span class="rate-limit-value">{rateLimitResetTimeText}</span>
+                    </div>
+                    {#if rateLimitRemaining !== null && rateLimitLimit !== null}
+                      <div class="rate-limit-percentage">
+                        {rateLimitRemainingPercent}% remaining
+                      </div>
+                    {/if}
+                  </div>
+
+                  <div class="settings-divider"></div>
+
+                  <!-- Rate Limit Protection Toggle -->
+                  <div class="refresh-settings-header">
+                    <span>Rate Limit Protection</span>
+                    <button
+                      class="info-icon clickable settings-info-icon"
+                      type="button"
+                      on:click={showAutoThrottlingHelp}
+                      title="Learn more about Auto-Throttling"
+                    >
+                      <span class="codicon codicon-info"></span>
+                    </button>
+                  </div>
+                  <div class="settings-checkbox-row settings-checkbox-row--with-info">
+                    <label class="settings-checkbox-label">
+                      <input
+                        type="checkbox"
+                        checked={rateLimitProtectionEnabled}
+                        on:change={toggleRateLimitProtection}
+                        title="Automatically throttle requests when approaching rate limits"
+                      />
+                      <span>Enable auto-throttling</span>
+                    </label>
+                  </div>
+                  {#if rateLimitProtectionEnabled}
+                    <div class="settings-option-row" style="margin-top: 6px;">
+                      <span class="settings-option-label">Threshold:</span>
+                      <select
+                        class="settings-select"
+                        value={rateLimitThreshold}
+                        on:change={handleRateLimitThresholdChange}
+                        title="API usage percentage at which auto-throttling activates"
+                      >
+                        {#each RATE_LIMIT_THRESHOLD_OPTIONS as threshold (threshold)}
+                          <option value={threshold}>{threshold}%</option>
+                        {/each}
+                      </select>
+                    </div>
+                  {/if}
+                  <div class="settings-help-text">
+                    Automatically reduce request frequency when API usage reaches {rateLimitThreshold}%.
+                  </div>
+
+                  {#if rateLimitProtectionActive}
+                    <div class="settings-help-text settings-help-text--warning">
+                      <span class="codicon codicon-shield"></span>
+                      <span>
+                        Rate limit protection is active. Background refreshes are throttled.
+                      </span>
+                    </div>
+                  {/if}
+
+                  <div class="settings-divider"></div>
+
+                  <!-- Quick Actions -->
+                  <div class="refresh-settings-header">
+                    <span>Quick Actions</span>
+                  </div>
+                  <div class="rate-limit-actions">
+                    <button
+                      type="button"
+                      class="secondary-button rate-limit-action-btn"
+                      class:btn-click-feedback={false}
+                      on:click={increaseRefreshInterval}
+                      disabled={autoRefreshSeconds === 0 || isAtMaxRefreshInterval}
+                      title={isAtMaxRefreshInterval
+                        ? 'Already at maximum interval (180s)'
+                        : 'Increase to the next available refresh interval'}
+                    >
+                      <span class="codicon codicon-watch"></span>
+                      Increase Interval
+                    </button>
+                    {#if autoRefreshSeconds > 0}
+                      <button
+                        type="button"
+                        class="secondary-button rate-limit-action-btn"
+                        on:click={disableAutoRefreshForRateLimit}
+                        title="Disable auto-refresh to preserve API quota"
+                      >
+                        <span class="codicon codicon-stop"></span>
+                        Disable Refresh
+                      </button>
+                    {:else}
+                      <button
+                        type="button"
+                        class="secondary-button rate-limit-action-btn rate-limit-action-btn--enable"
+                        on:click={enableAutoRefreshFromRateLimit}
+                        title="Enable auto-refresh with the previously selected interval"
+                      >
+                        <span class="codicon codicon-play"></span>
+                        Enable Refresh
+                      </button>
+                    {/if}
+                  </div>
+                  <div class="settings-help-text">
+                    GitHub allows 5,000 API requests per hour. Reduce refresh frequency to preserve
+                    quota.
+                  </div>
+                </div>
+              {/if}
             </div>
           {/if}
         </div>
@@ -5886,7 +8241,7 @@
             runs.
           </span>
         </div>
-      {:else if !hasActiveDateFilter() && totalRunsFetched >= NON_DATE_MAX_TOTAL_RUNS}
+      {:else if !hasActiveDateFilter() && totalRunsFetched >= NON_DATE_MAX_TOTAL_RUNS && showMaxRunsWarningMemo}
         <div class="settings-help-text settings-help-text--warning">
           <span class="codicon codicon-alert"></span>
           <span>
@@ -5895,6 +8250,52 @@
           </span>
         </div>
       {/if}
+    {/if}
+
+    <!-- Watched Runs Only informational message -->
+    {#if showWatchedOnly && watchedRuns.size > 0}
+      <div class="filter-info-message filter-info-message--watched">
+        <div class="filter-info-content">
+          <span class="codicon codicon-watch"></span>
+          <span>
+            <strong>Watched Runs Only:</strong> Showing {filteredRuns.length} of {watchedRuns.size} watched
+            run{watchedRuns.size === 1 ? '' : 's'}. This filter overrides all other filters.
+            {#if watchedRuns.size >= MAX_WATCHED_RUNS_PER_REPO}
+              <em>(Limit reached: {MAX_WATCHED_RUNS_PER_REPO} runs)</em>
+            {/if}
+          </span>
+        </div>
+        <button
+          class="filter-info-help-button"
+          on:click={showWatchedRunsHelp}
+          title="Learn more about watched runs"
+          type="button"
+        >
+          <span class="codicon codicon-question"></span>
+        </button>
+      </div>
+    {/if}
+
+    <!-- Favorites Only informational message -->
+    {#if showFavoritesOnly && !showWatchedOnly && availableMarkedWorkflowsCount > 0}
+      <div class="filter-info-message filter-info-message--favorites">
+        <div class="filter-info-content">
+          <span class="codicon codicon-star-full"></span>
+          <span>
+            <strong>Favorites Only:</strong> Showing runs from {availableMarkedWorkflowsCount} favorite
+            workflow{availableMarkedWorkflowsCount === 1 ? '' : 's'}. Use the ★ icon in the workflow
+            dropdown to manage favorites.
+          </span>
+        </div>
+        <button
+          class="filter-info-help-button"
+          on:click={showFavoritesHelp}
+          title="Learn more about workflow favorites"
+          type="button"
+        >
+          <span class="codicon codicon-question"></span>
+        </button>
+      </div>
     {/if}
 
     <div class="controls-header">
@@ -5918,13 +8319,18 @@
       </button>
     </div>
     <div class="filter-row">
-      <div class="filter-box">
+      <div class="filter-box" class:filter-box--disabled={showWatchedOnly}>
+        {#if showWatchedOnly}
+          <span class="filter-disabled-indicator" title="Disabled: Watched Runs Only is active">
+            <span class="codicon codicon-lock-small"></span>
+          </span>
+        {/if}
         <select
           bind:value={statusFilter}
           on:change={handleStatusFilterChange}
           disabled={loading || showWatchedOnly}
           title={showWatchedOnly
-            ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
+            ? "Disabled: Uncheck 'Watched Runs Only' to enable this filter"
             : 'Filter runs by status (Success, Failed, In Progress, Queued, Cancelled)'}
         >
           <option value="all">All Statuses</option>
@@ -5935,20 +8341,38 @@
           <option value="cancelled">Cancelled</option>
         </select>
       </div>
-      <div class="filter-box">
+      <div class="filter-box" class:filter-box--disabled={showWatchedOnly}>
+        {#if showWatchedOnly}
+          <span class="filter-disabled-indicator" title="Disabled: Watched Runs Only is active">
+            <span class="codicon codicon-lock-small"></span>
+          </span>
+        {/if}
         <select
           bind:value={actorFilter}
           on:change={handleActorFilterChange}
           disabled={loading || showWatchedOnly}
           title={showWatchedOnly
-            ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
+            ? "Disabled: Uncheck 'Watched Runs Only' to enable this filter"
             : "Filter runs by who triggered them. Selecting 'My Runs' automatically hides bot runs."}
         >
           <option value="all">All Users</option>
           <option value="me">My Runs</option>
         </select>
       </div>
-      <div class="filter-box workflow-filter-combobox">
+      <div
+        class="filter-box workflow-filter-combobox"
+        class:filter-box--disabled={showWatchedOnly || showFavoritesOnly}
+      >
+        {#if showWatchedOnly || showFavoritesOnly}
+          <span
+            class="filter-disabled-indicator"
+            title={showWatchedOnly
+              ? 'Disabled: Watched Runs Only is active'
+              : 'Disabled: Favorites Only is active'}
+          >
+            <span class="codicon codicon-lock-small"></span>
+          </span>
+        {/if}
         <div class="combobox-container">
           <div class="combobox-input-wrapper">
             <input
@@ -5957,7 +8381,7 @@
               bind:value={workflowSearchQuery}
               on:input={handleWorkflowSearchInput}
               on:focus={() => {
-                if (!showWatchedOnly) {
+                if (!showWatchedOnly && !showFavoritesOnly) {
                   workflowDropdownOpen = true;
                   // Show all workflows on open while keeping selected text visible
                   const previousQuery = workflowSearchQuery;
@@ -5967,16 +8391,18 @@
                   workflowSearchQuery = previousQuery;
                 }
               }}
-              disabled={loading || showWatchedOnly}
+              disabled={loading || showWatchedOnly || showFavoritesOnly}
               autocomplete="off"
               title={showWatchedOnly
-                ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
-                : 'Filter runs by workflow file; type to search, or leave blank to see all workflows'}
+                ? "Disabled: Uncheck 'Watched Runs Only' to enable this filter"
+                : showFavoritesOnly
+                  ? "Disabled: Uncheck 'Favorites Only' to enable this filter"
+                  : 'Filter runs by workflow file; type to search, or leave blank to see all workflows'}
             />
             <button
               class="dropdown-toggle"
               on:click={() => {
-                if (!showWatchedOnly) {
+                if (!showWatchedOnly && !showFavoritesOnly) {
                   workflowDropdownOpen = !workflowDropdownOpen;
                   if (workflowDropdownOpen) {
                     // Show all workflows on open while keeping selected text visible
@@ -5989,11 +8415,13 @@
                 }
               }}
               title={showWatchedOnly
-                ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
-                : workflowDropdownOpen
-                  ? 'Close dropdown'
-                  : 'Open dropdown'}
-              disabled={loading || showWatchedOnly}
+                ? "Disabled: Uncheck 'Watched Runs Only' to enable this filter"
+                : showFavoritesOnly
+                  ? "Disabled: Uncheck 'Favorites Only' to enable this filter"
+                  : workflowDropdownOpen
+                    ? 'Close dropdown'
+                    : 'Open dropdown'}
+              disabled={loading || showWatchedOnly || showFavoritesOnly}
             >
               {workflowDropdownOpen ? '▲' : '▼'}
             </button>
@@ -6001,10 +8429,12 @@
               <button
                 class="clear-button"
                 on:click={clearWorkflowFilter}
-                disabled={showWatchedOnly}
+                disabled={showWatchedOnly || showFavoritesOnly}
                 title={showWatchedOnly
-                  ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
-                  : 'Clear filter'}>✕</button
+                  ? "Disabled: Uncheck 'Watched Runs Only' to enable this filter"
+                  : showFavoritesOnly
+                    ? "Disabled: Uncheck 'Favorites Only' to enable this filter"
+                    : 'Clear filter'}>✕</button
               >
             {/if}
           </div>
@@ -6059,10 +8489,15 @@
           {/if}
         </div>
       </div>
-      <div class="filter-box checkbox-filter">
+      <div class="filter-box checkbox-filter" class:filter-box--disabled={showWatchedOnly}>
+        {#if showWatchedOnly}
+          <span class="filter-disabled-indicator" title="Disabled: Watched Runs Only is active">
+            <span class="codicon codicon-lock-small"></span>
+          </span>
+        {/if}
         <label
           title={showWatchedOnly
-            ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
+            ? "Disabled: Uncheck 'Watched Runs Only' to enable this filter"
             : 'Include runs triggered by bot accounts (e.g., dependabot, github-actions). Enabling this automatically switches Actor filter to "All Users".'}
           aria-label="Show Bot Runs filter"
         >
@@ -6081,7 +8516,7 @@
         </span>
       </div>
 
-      <div class="filter-box checkbox-filter">
+      <div class="filter-box checkbox-filter watched-runs-filter">
         <label
           title={watchedRuns.size === 0
             ? 'No runs are currently watched. Click the eye icon on any run to start watching it.'
@@ -6106,10 +8541,15 @@
         </span>
       </div>
 
-      <div class="filter-box checkbox-filter">
+      <div class="filter-box checkbox-filter" class:filter-box--disabled={showWatchedOnly}>
+        {#if showWatchedOnly}
+          <span class="filter-disabled-indicator" title="Disabled: Watched Runs Only is active">
+            <span class="codicon codicon-lock-small"></span>
+          </span>
+        {/if}
         <label
           title={showWatchedOnly
-            ? "To enable filters, uncheck the 'Watched Runs Only' checkbox"
+            ? "Disabled: Uncheck 'Watched Runs Only' to enable this filter"
             : availableMarkedWorkflowsCount === 0
               ? 'No favorite workflows yet. Click the star icon (★/☆) next to workflows in the dropdown to add favorites.'
               : 'Show only runs from workflows you have marked as favorites. Mark workflows as favorites using the star icon (★/☆) in the workflow dropdown.'}
@@ -6118,7 +8558,7 @@
           <input
             type="checkbox"
             bind:checked={showFavoritesOnly}
-            on:change={filterRuns}
+            on:change={handleShowFavoritesOnlyChange}
             disabled={loading || availableMarkedWorkflowsCount === 0 || showWatchedOnly}
             aria-describedby="favorites-only-description"
           />
@@ -6392,239 +8832,231 @@
     </div>
   {:else}
     <div class="runs-list">
-      {#each visibleRuns as run (run.id)}
-        <div class="run-item {getStatusClass(run)} {isHighlighted(run) ? 'highlighted' : ''}">
-          {#if isHighlighted(run)}
-            <div class="new-badge">🆕 Just Dispatched</div>
-          {/if}
-          {#if statusChanges.has(run.id)}
-            <div class="status-change-message" transition:slide>
-              <span class="codicon codicon-info"></span>
-              <span>
-                Status updated: {statusChanges.get(run.id)?.oldStatus} → {statusChanges.get(run.id)
-                  ?.newStatus}
-              </span>
-            </div>
-          {/if}
-          <div
-            class="run-content"
-            on:click={() => openRun(run)}
-            role="button"
-            tabindex="0"
-            on:keypress={(e) => e.key === 'Enter' && openRun(run)}
-          >
-            <div class="run-header">
-              <span
-                class={`status-icon codicon ${getStatusCodicon(run)} status-icon--${getStatusClass(run)} ${run.status === 'in_progress' || run.status === 'queued' ? 'spinning-icon' : ''}`}
-              ></span>
-              <div class="run-info">
-                <div class="run-title">
-                  <span class="run-name">{run.display_title || run.name}</span>
-                  {#if getOriginalWorkflowName(run)}
-                    <span
-                      class="run-workflow-name-badge"
-                      title="Original workflow name from YAML file"
-                    >
-                      {getOriginalWorkflowName(run)}
-                    </span>
-                  {/if}
-                </div>
-                <div class="run-meta">
-                  <div class="run-meta-line">
-                    <span class="branch"
-                      ><span class="codicon codicon-git-branch"></span>
-                      <span class="branch-name">
-                        {run.head_branch}
-                      </span></span
-                    >
-                    <span class="separator">•</span>
-                    <span class="actor"
-                      ><span class="codicon codicon-account"></span>
-                      {run.actor.login}</span
-                    >
-                    {#if run.pull_requests && run.pull_requests.length > 0}
+      <!-- Key block forces complete DOM re-creation when visibleRunsRenderKey changes.
+           This prevents Svelte's internal linked-list corruption during rapid array updates. -->
+      {#key visibleRunsRenderKey}
+        {#each visibleRuns as run (run.id)}
+          <div class="run-item {getStatusClass(run)} {isHighlighted(run) ? 'highlighted' : ''}">
+            {#if isHighlighted(run)}
+              <div class="new-badge">🆕 Just Dispatched</div>
+            {/if}
+            {#if statusChanges.has(run.id)}
+              <div class="status-change-message" transition:slide>
+                <span class="codicon codicon-info"></span>
+                <span>
+                  Status updated: {statusChanges.get(run.id)?.oldStatus} → {statusChanges.get(
+                    run.id
+                  )?.newStatus}
+                </span>
+              </div>
+            {/if}
+            <div
+              class="run-content"
+              on:click={() => openRun(run)}
+              role="button"
+              tabindex="0"
+              on:keypress={(e) => e.key === 'Enter' && openRun(run)}
+            >
+              <div class="run-header">
+                <span
+                  class={`status-icon codicon ${getStatusCodicon(run)} status-icon--${getStatusClass(run)} ${run.status === 'in_progress' || run.status === 'queued' ? 'spinning-icon' : ''}`}
+                ></span>
+                <div class="run-info">
+                  <div class="run-title">
+                    <span class="run-name">{run.display_title || run.name}</span>
+                    {#if getOriginalWorkflowName(run)}
+                      <span
+                        class="run-workflow-name-badge"
+                        title="Original workflow name from YAML file"
+                      >
+                        {getOriginalWorkflowName(run)}
+                      </span>
+                    {/if}
+                  </div>
+                  <div class="run-meta">
+                    <div class="run-meta-line">
+                      <span class="branch"
+                        ><span class="codicon codicon-git-branch"></span>
+                        <span class="branch-name">
+                          {run.head_branch}
+                        </span></span
+                      >
                       <span class="separator">•</span>
-                      <span class="pr-number">PR #{run.pull_requests[0].number}</span>
-                    {/if}
-                  </div>
-                  <div class="run-meta-line">
-                    <span class="status-text"
-                      >{run.status === 'completed' ? run.conclusion : run.status}</span
-                    >
-                    <span class="separator">•</span>
-                    {#if run.status === 'in_progress' || run.status === 'queued'}
-                      <span class="duration">{formatDuration(run.created_at)}</span>
-                    {:else if run.updated_at}
-                      <span class="duration">{formatDuration(run.created_at, run.updated_at)}</span>
-                    {/if}
-                    <span class="separator">•</span>
-                    <span class="time">
-                      <span class="codicon codicon-clock"></span>
-                      <span>{formatRelativeTime(run.created_at)}</span>
-                    </span>
-                    <span class="separator">•</span>
-                    <span class="run-number">#{run.run_number}</span>
-                  </div>
-                  <!-- Mini job progress indicator for in-progress runs (controlled by showProgressIndicators) -->
-                  {#if showProgressIndicators && (run.status === 'in_progress' || run.status === 'queued') && runJobs.has(run.id)}
-                    {@const jobs = runJobs.get(run.id) || []}
-                    {@const completedJobs = jobs.filter((j) => j.status === 'completed')}
-                    {@const inProgressJobs = jobs.filter((j) => j.status === 'in_progress')}
-                    <div class="mini-job-progress">
-                      <span class="job-progress-bar">
-                        <span
-                          class="job-progress-fill"
-                          style="width: {jobs.length > 0
-                            ? ((completedJobs.length / jobs.length) * 100).toFixed(0)
-                            : 0}%"
-                        ></span>
-                      </span>
-                      <span class="job-progress-text">
-                        {completedJobs.length}/{jobs.length} jobs
-                      </span>
-                      {#if inProgressJobs.length > 0}
-                        <span class="running-jobs-indicator">
-                          <span class="codicon codicon-sync spinning-icon"></span>
-                          <span class="running-jobs-list">
-                            {#each inProgressJobs as runningJob (runningJob.id)}
-                              <span class="running-job-item" title={runningJob.name}>
-                                <span class="running-job-name"
-                                  >{runningJob.name.length > 50
-                                    ? runningJob.name.substring(0, 47) + '...'
-                                    : runningJob.name}</span
-                                >
-                                {#if runningJob.started_at}
-                                  <span class="running-job-duration"
-                                    >{formatDuration(runningJob.started_at)}</span
-                                  >
-                                {/if}
-                              </span>
-                            {/each}
-                          </span>
-                        </span>
+                      <span class="actor"
+                        ><span class="codicon codicon-account"></span>
+                        {run.actor.login}</span
+                      >
+                      {#if run.pull_requests && run.pull_requests.length > 0}
+                        <span class="separator">•</span>
+                        <span class="pr-number">PR #{run.pull_requests[0].number}</span>
                       {/if}
                     </div>
-                  {/if}
+                    <div class="run-meta-line">
+                      <span class="status-text"
+                        >{run.status === 'completed' ? run.conclusion : run.status}</span
+                      >
+                      <span class="separator">•</span>
+                      {#if run.status === 'in_progress' || run.status === 'queued'}
+                        <span class="duration">{formatDuration(run.created_at)}</span>
+                      {:else if run.updated_at}
+                        <span class="duration"
+                          >{formatDuration(run.created_at, run.updated_at)}</span
+                        >
+                      {/if}
+                      <span class="separator">•</span>
+                      <span class="time">
+                        <span class="codicon codicon-clock"></span>
+                        <span>{formatRelativeTime(run.created_at)}</span>
+                      </span>
+                      <span class="separator">•</span>
+                      <span class="run-number">#{run.run_number}</span>
+                    </div>
+                    <!-- Mini job progress indicator for in-progress runs (controlled by showProgressIndicators) -->
+                    {#if showProgressIndicators && (run.status === 'in_progress' || run.status === 'queued') && runJobs.has(run.id)}
+                      {@const jobs = runJobs.get(run.id) || []}
+                      {@const completedJobs = jobs.filter((j) => j.status === 'completed')}
+                      {@const inProgressJobs = jobs.filter((j) => j.status === 'in_progress')}
+                      <div class="mini-job-progress">
+                        <span class="job-progress-bar">
+                          <span
+                            class="job-progress-fill"
+                            style="width: {jobs.length > 0
+                              ? ((completedJobs.length / jobs.length) * 100).toFixed(0)
+                              : 0}%"
+                          ></span>
+                        </span>
+                        <span class="job-progress-text">
+                          {completedJobs.length}/{jobs.length} jobs
+                        </span>
+                        {#if inProgressJobs.length > 0}
+                          <span class="running-jobs-indicator">
+                            <span class="codicon codicon-sync spinning-icon"></span>
+                            <span class="running-jobs-list">
+                              {#each inProgressJobs as runningJob (runningJob.id)}
+                                <span class="running-job-item" title={runningJob.name}>
+                                  <span class="running-job-name"
+                                    >{runningJob.name.length > 50
+                                      ? runningJob.name.substring(0, 47) + '...'
+                                      : runningJob.name}</span
+                                  >
+                                  {#if runningJob.started_at}
+                                    <span class="running-job-duration"
+                                      >{formatDuration(runningJob.started_at)}</span
+                                    >
+                                  {/if}
+                                </span>
+                              {/each}
+                            </span>
+                          </span>
+                        {/if}
+                      </div>
+                    {/if}
+                  </div>
                 </div>
               </div>
             </div>
-          </div>
 
-          <!-- Action buttons -->
-          <div class="action-buttons">
-            <button
-              class="action-button graph-button"
-              on:click|stopPropagation={() => toggleDependencyGraph(run)}
-              title={showDependencyGraph.has(run.id)
-                ? 'Hide dependency graph'
-                : 'Show dependency graph'}
-            >
-              <span
-                class="codicon"
-                class:codicon-chevron-down={showDependencyGraph.has(run.id)}
-                class:codicon-chevron-right={!showDependencyGraph.has(run.id)}
-              ></span>
-              <span>Graph</span>
-            </button>
-
-            <button
-              class="action-button expand-button"
-              on:click|stopPropagation={() => toggleRunExpansion(run.id)}
-              title={expandedRuns.has(run.id) ? 'Hide jobs' : 'Show jobs'}
-            >
-              <span
-                class="codicon"
-                class:codicon-chevron-down={expandedRuns.has(run.id)}
-                class:codicon-chevron-right={!expandedRuns.has(run.id)}
-              ></span>
-              <span>Jobs</span>
-            </button>
-
-            <button
-              class="action-button artifacts-button"
-              on:click|stopPropagation={() => toggleArtifacts(run.id)}
-              title={showArtifacts.has(run.id) ? 'Hide artifacts' : 'Show artifacts'}
-            >
-              <span
-                class="codicon"
-                class:codicon-chevron-down={showArtifacts.has(run.id)}
-                class:codicon-chevron-right={!showArtifacts.has(run.id)}
-              ></span>
-              <span>Artifacts</span>
-            </button>
-
-            <button
-              class="action-button summary-button"
-              on:click|stopPropagation={() => toggleSummary(run.id)}
-              title={showSummary.has(run.id) ? 'Hide summary' : 'Show summary'}
-            >
-              <span
-                class="codicon"
-                class:codicon-chevron-down={showSummary.has(run.id)}
-                class:codicon-chevron-right={!showSummary.has(run.id)}
-              ></span>
-              <span>Summary</span>
-            </button>
-
-            <button
-              class="action-button view-file-button"
-              on:click|stopPropagation={() => openWorkflowFile(run.path)}
-              title="Open workflow file in editor"
-            >
-              <span class="codicon codicon-file-code"></span>
-              <span>View File</span>
-            </button>
-
-            <button
-              class="action-button watch-button"
-              on:click|stopPropagation={(e) => toggleRunWatch(run.id, e)}
-              title={isRunWatched(run.id) ? 'Remove from watch list' : 'Add to watch list'}
-            >
-              <span
-                class={`codicon codicon-watch watch-icon ${isRunWatched(run.id) ? 'watch-icon--active' : ''}`}
-              ></span>
-              <span>{isRunWatched(run.id) ? 'Watching' : 'Watch'}</span>
-            </button>
-
-            {#if run.status === 'in_progress' || run.status === 'queued'}
+            <!-- Action buttons -->
+            <div class="action-buttons">
               <button
-                class="action-button cancel-button"
-                on:click|stopPropagation={() => handleCancelRun(run)}
-                disabled={cancellationState.cancellingRuns.has(run.id) ||
-                  cancellationState.cancelledRuns.has(run.id)}
-                title={cancellationState.cancellingRuns.has(run.id)
-                  ? 'Cancelling...'
-                  : 'Cancel this workflow run'}
+                class="action-button graph-button"
+                on:click|stopPropagation={() => toggleDependencyGraph(run)}
+                title={showDependencyGraph.has(run.id)
+                  ? 'Hide dependency graph'
+                  : 'Show dependency graph'}
               >
-                {#if cancellationState.cancellingRuns.has(run.id)}
-                  <span class="codicon codicon-sync spinning-icon"></span>
-                  <span>Cancelling...</span>
-                {:else}
-                  <span class="codicon codicon-circle-slash"></span>
-                  <span>Cancel</span>
-                {/if}
+                <span
+                  class="codicon"
+                  class:codicon-chevron-down={showDependencyGraph.has(run.id)}
+                  class:codicon-chevron-right={!showDependencyGraph.has(run.id)}
+                ></span>
+                <span>Graph</span>
               </button>
-            {/if}
 
-            {#if run.status === 'completed'}
               <button
-                class="action-button rerun-button"
-                on:click|stopPropagation={() => handleRerunWorkflow(run, false)}
-                title="Rerun this workflow"
-                disabled={rerunLoadingRunIds.has(run.id)}
+                class="action-button expand-button"
+                on:click|stopPropagation={() => toggleRunExpansion(run.id)}
+                title={expandedRuns.has(run.id) ? 'Hide jobs' : 'Show jobs'}
               >
-                {#if rerunLoadingRunIds.has(run.id)}
-                  <span class="codicon codicon-loading codicon-modifier-spin"></span>
-                {:else}
-                  <span class="codicon codicon-debug-restart"></span>
-                {/if}
-                <span>Rerun</span>
+                <span
+                  class="codicon"
+                  class:codicon-chevron-down={expandedRuns.has(run.id)}
+                  class:codicon-chevron-right={!expandedRuns.has(run.id)}
+                ></span>
+                <span>Jobs</span>
               </button>
-              {#if run.conclusion === 'failure'}
+
+              <button
+                class="action-button artifacts-button"
+                on:click|stopPropagation={() => toggleArtifacts(run.id)}
+                title={showArtifacts.has(run.id) ? 'Hide artifacts' : 'Show artifacts'}
+              >
+                <span
+                  class="codicon"
+                  class:codicon-chevron-down={showArtifacts.has(run.id)}
+                  class:codicon-chevron-right={!showArtifacts.has(run.id)}
+                ></span>
+                <span>Artifacts</span>
+              </button>
+
+              <button
+                class="action-button summary-button"
+                on:click|stopPropagation={() => toggleSummary(run.id)}
+                title={showSummary.has(run.id) ? 'Hide summary' : 'Show summary'}
+              >
+                <span
+                  class="codicon"
+                  class:codicon-chevron-down={showSummary.has(run.id)}
+                  class:codicon-chevron-right={!showSummary.has(run.id)}
+                ></span>
+                <span>Summary</span>
+              </button>
+
+              <button
+                class="action-button view-file-button"
+                on:click|stopPropagation={() => openWorkflowFile(run.path)}
+                title="Open workflow file in editor"
+              >
+                <span class="codicon codicon-file-code"></span>
+                <span>View File</span>
+              </button>
+
+              <button
+                class="action-button watch-button"
+                on:click|stopPropagation={(e) => toggleRunWatch(run.id, e)}
+                title={isRunWatched(run.id) ? 'Remove from watch list' : 'Add to watch list'}
+              >
+                <span
+                  class={`codicon codicon-watch watch-icon ${isRunWatched(run.id) ? 'watch-icon--active' : ''}`}
+                ></span>
+                <span>{isRunWatched(run.id) ? 'Watching' : 'Watch'}</span>
+              </button>
+
+              {#if run.status === 'in_progress' || run.status === 'queued'}
                 <button
-                  class="action-button rerun-failed-button"
-                  on:click|stopPropagation={() => handleRerunWorkflow(run, true)}
-                  title="Rerun only failed jobs"
+                  class="action-button cancel-button"
+                  on:click|stopPropagation={() => handleCancelRun(run)}
+                  disabled={cancellationState.cancellingRuns.has(run.id) ||
+                    cancellationState.cancelledRuns.has(run.id)}
+                  title={cancellationState.cancellingRuns.has(run.id)
+                    ? 'Cancelling...'
+                    : 'Cancel this workflow run'}
+                >
+                  {#if cancellationState.cancellingRuns.has(run.id)}
+                    <span class="codicon codicon-sync spinning-icon"></span>
+                    <span>Cancelling...</span>
+                  {:else}
+                    <span class="codicon codicon-circle-slash"></span>
+                    <span>Cancel</span>
+                  {/if}
+                </button>
+              {/if}
+
+              {#if run.status === 'completed'}
+                <button
+                  class="action-button rerun-button"
+                  on:click|stopPropagation={() => handleRerunWorkflow(run, false)}
+                  title="Rerun this workflow"
                   disabled={rerunLoadingRunIds.has(run.id)}
                 >
                   {#if rerunLoadingRunIds.has(run.id)}
@@ -6632,136 +9064,152 @@
                   {:else}
                     <span class="codicon codicon-debug-restart"></span>
                   {/if}
-                  <span>Rerun Failed</span>
+                  <span>Rerun</span>
                 </button>
+                {#if run.conclusion === 'failure'}
+                  <button
+                    class="action-button rerun-failed-button"
+                    on:click|stopPropagation={() => handleRerunWorkflow(run, true)}
+                    title="Rerun only failed jobs"
+                    disabled={rerunLoadingRunIds.has(run.id)}
+                  >
+                    {#if rerunLoadingRunIds.has(run.id)}
+                      <span class="codicon codicon-loading codicon-modifier-spin"></span>
+                    {:else}
+                      <span class="codicon codicon-debug-restart"></span>
+                    {/if}
+                    <span>Rerun Failed</span>
+                  </button>
+                {/if}
               {/if}
-            {/if}
 
-            <button
-              class="action-button view-button"
-              on:click|stopPropagation={() => viewWorkflowInGitHub(run)}
-              title="View workflow run in GitHub"
-            >
-              <span class="codicon codicon-eye"></span>
-              <span>View</span>
-            </button>
+              <button
+                class="action-button view-button"
+                on:click|stopPropagation={() => viewWorkflowInGitHub(run)}
+                title="View workflow run in GitHub"
+              >
+                <span class="codicon codicon-eye"></span>
+                <span>View</span>
+              </button>
 
-            <button
-              class="action-button view-parameters-button"
-              on:click|stopPropagation={() => handleViewParameters(run)}
-              title="View input parameters for this run"
-            >
-              <span class="codicon codicon-symbol-parameter"></span>
-              <span>Parameters</span>
-            </button>
+              <button
+                class="action-button view-parameters-button"
+                on:click|stopPropagation={() => handleViewParameters(run)}
+                title="View input parameters for this run"
+              >
+                <span class="codicon codicon-symbol-parameter"></span>
+                <span>Parameters</span>
+              </button>
 
-            {#if run.run_attempt && run.run_attempt > 1}
-              <span class="attempt-badge" title={`Attempt ${run.run_attempt}`}>
-                Attempt {run.run_attempt}
-              </span>
-            {/if}
-          </div>
-
-          {#if cancellationState.failedCancellations.has(run.id)}
-            <div class="cancel-error" transition:fade>
-              <span class="codicon codicon-error status-icon status-icon--failure"></span>
-              <span>{cancellationState.failedCancellations.get(run.id)}</span>
               {#if run.run_attempt && run.run_attempt > 1}
                 <span class="attempt-badge" title={`Attempt ${run.run_attempt}`}>
                   Attempt {run.run_attempt}
                 </span>
               {/if}
             </div>
-          {/if}
 
-          <!-- Job Dependency Graph (below action buttons) -->
-          {#if showDependencyGraph.has(run.id)}
-            <div class="dependency-graph-section" transition:slide>
-              {#if loadingJobDependencies.has(run.id)}
-                <div class="graph-loading">
-                  <span class="codicon codicon-sync spinning-icon"></span>
-                  <span>Loading job dependencies...</span>
-                </div>
-              {:else}
-                <JobDependencyGraph
-                  runId={run.id}
-                  jobs={runJobs.get(run.id) || []}
-                  jobDefinitions={runJobDefinitions.get(run.id) || []}
-                  isRunning={run.status === 'in_progress' || run.status === 'queued'}
-                  onJobClick={(node) => handleGraphJobClick(node, run.id)}
-                  on:showSteps={(e) => {
-                    selectedJobForStepsModal = e.detail;
-                    selectedJobRunIdForSteps = run.id;
-                    selectedJobWorkflowIdForSteps = run.workflow_id;
-                    selectedJobWorkflowNameForSteps = run.name;
-                  }}
-                  on:openModal={() => openJobGraphModal(run.id)}
-                />
-              {/if}
-            </div>
-          {/if}
+            {#if cancellationState.failedCancellations.has(run.id)}
+              <div class="cancel-error" transition:fade>
+                <span class="codicon codicon-error status-icon status-icon--failure"></span>
+                <span>{cancellationState.failedCancellations.get(run.id)}</span>
+                {#if run.run_attempt && run.run_attempt > 1}
+                  <span class="attempt-badge" title={`Attempt ${run.run_attempt}`}>
+                    Attempt {run.run_attempt}
+                  </span>
+                {/if}
+              </div>
+            {/if}
 
-          <!-- Jobs list (expanded) -->
-          {#if expandedRuns.has(run.id)}
-            <div class="jobs-container" transition:slide>
-              {#if loadingJobs.has(run.id)}
-                <div class="jobs-loading">
-                  <span class="codicon codicon-sync spinning-icon"></span>
-                  <span>Loading jobs...</span>
-                </div>
-              {:else if runJobs.has(run.id)}
-                {#each runJobs.get(run.id) || [] as job (job.id)}
-                  <div class="job-item {getJobStatusClass(job)}">
-                    <div class="job-header">
-                      <span
-                        class={`job-status-icon codicon ${getJobStatusCodicon(job)} status-icon status-icon--${getJobStatusClass(job)} ${job.status === 'in_progress' || job.status === 'queued' ? 'spinning-icon' : ''}`}
-                      ></span>
-                      <span class="job-name">{job.name}</span>
-                    </div>
-                    <div class="job-details">
-                      <span class="job-status"
-                        >{job.status === 'completed' ? job.conclusion : job.status}</span
-                      >
-                      {#if job.started_at && job.completed_at}
-                        <span class="job-duration" title="Job duration">
-                          <span class="codicon codicon-watch"></span>
+            <!-- Job Dependency Graph (below action buttons) -->
+            {#if showDependencyGraph.has(run.id)}
+              <div class="dependency-graph-section" transition:slide>
+                {#if loadingJobDependencies.has(run.id)}
+                  <div class="graph-loading">
+                    <span class="codicon codicon-sync spinning-icon"></span>
+                    <span>Loading job dependencies...</span>
+                  </div>
+                {:else}
+                  <JobDependencyGraph
+                    runId={run.id}
+                    jobs={runJobs.get(run.id) || []}
+                    jobDefinitions={runJobDefinitions.get(run.id) || []}
+                    isRunning={run.status === 'in_progress' || run.status === 'queued'}
+                    onJobClick={(node) => handleGraphJobClick(node, run.id)}
+                    on:showSteps={(e) => {
+                      selectedJobForStepsModal = e.detail;
+                      selectedJobRunIdForSteps = run.id;
+                      selectedJobWorkflowIdForSteps = run.workflow_id;
+                      selectedJobWorkflowNameForSteps = run.name;
+                    }}
+                    on:openModal={() => openJobGraphModal(run.id)}
+                  />
+                {/if}
+              </div>
+            {/if}
+
+            <!-- Jobs list (expanded) -->
+            {#if expandedRuns.has(run.id)}
+              <div class="jobs-container" transition:slide>
+                {#if loadingJobs.has(run.id)}
+                  <div class="jobs-loading">
+                    <span class="codicon codicon-sync spinning-icon"></span>
+                    <span>Loading jobs...</span>
+                  </div>
+                {:else if runJobs.has(run.id)}
+                  <!-- Key block forces complete DOM re-creation when jobs change -->
+                  {#key jobsRenderKey.get(run.id) || 0}
+                    {#each runJobs.get(run.id) || [] as job (job.id)}
+                      <div class="job-item {getJobStatusClass(job)}">
+                        <div class="job-header">
                           <span
-                            >{formatMs(
-                              new Date(job.completed_at).getTime() -
-                                new Date(job.started_at).getTime()
-                            )}</span
+                            class={`job-status-icon codicon ${getJobStatusCodicon(job)} status-icon status-icon--${getJobStatusClass(job)} ${job.status === 'in_progress' || job.status === 'queued' ? 'spinning-icon' : ''}`}
+                          ></span>
+                          <span class="job-name">{job.name}</span>
+                        </div>
+                        <div class="job-details">
+                          <span class="job-status"
+                            >{job.status === 'completed' ? job.conclusion : job.status}</span
                           >
-                        </span>
-                      {:else if job.started_at}
-                        <span class="job-time">
-                          <span class="codicon codicon-clock"></span>
-                          <span>{formatRelativeTime(job.started_at)}</span>
-                        </span>
-                      {/if}
-                    </div>
-                    <div class="job-actions">
-                      {#if job.status !== 'queued'}
-                        <button
-                          class="job-steps-button"
-                          on:click|stopPropagation={() =>
-                            openJobStepsModal(job, run.id, run.workflow_id, run.name)}
-                          disabled={loadingJobSteps.has(job.id)}
-                          title={job.status === 'completed' && job.steps && job.steps.length > 0
-                            ? `View ${job.steps.length} step${job.steps.length !== 1 ? 's' : ''}`
-                            : job.status === 'in_progress'
-                              ? 'View current steps'
-                              : 'View steps'}
-                        >
-                          {#if loadingJobSteps.has(job.id)}
-                            <span class="codicon codicon-sync spinning-icon"></span>
-                            <span>Loading...</span>
-                          {:else}
-                            <span class="codicon codicon-list-ordered"></span>
-                            <span>Steps</span>
+                          {#if job.started_at && job.completed_at}
+                            <span class="job-duration" title="Job duration">
+                              <span class="codicon codicon-watch"></span>
+                              <span
+                                >{formatMs(
+                                  new Date(job.completed_at).getTime() -
+                                    new Date(job.started_at).getTime()
+                                )}</span
+                              >
+                            </span>
+                          {:else if job.started_at}
+                            <span class="job-time">
+                              <span class="codicon codicon-clock"></span>
+                              <span>{formatRelativeTime(job.started_at)}</span>
+                            </span>
                           {/if}
-                        </button>
-                      {/if}
-                      <!-- DISABLED: Interactive log viewer - temporarily disabled in v1.2.0
+                        </div>
+                        <div class="job-actions">
+                          {#if job.status !== 'queued'}
+                            <button
+                              class="job-steps-button"
+                              on:click|stopPropagation={() =>
+                                openJobStepsModal(job, run.id, run.workflow_id, run.name)}
+                              disabled={loadingJobSteps.has(job.id)}
+                              title={job.status === 'completed' && job.steps && job.steps.length > 0
+                                ? `View ${job.steps.length} step${job.steps.length !== 1 ? 's' : ''}`
+                                : job.status === 'in_progress'
+                                  ? 'View current steps'
+                                  : 'View steps'}
+                            >
+                              {#if loadingJobSteps.has(job.id)}
+                                <span class="codicon codicon-sync spinning-icon"></span>
+                                <span>Loading...</span>
+                              {:else}
+                                <span class="codicon codicon-list-ordered"></span>
+                                <span>Steps</span>
+                              {/if}
+                            </button>
+                          {/if}
+                          <!-- DISABLED: Interactive log viewer - temporarily disabled for separate PR
                       <button
                         class="job-logs-button"
                         on:click|stopPropagation={() =>
@@ -6778,35 +9226,37 @@
                         {/if}
                       </button>
                       -->
-                      <button
-                        class="job-logs-button"
-                        on:click|stopPropagation={() => viewRawJobLogs(job.id, job.name, run.id)}
-                        disabled={loadingRawJobLogs.has(job.id)}
-                        title="View job logs in text editor"
-                      >
-                        {#if loadingRawJobLogs.has(job.id)}
-                          <span class="codicon codicon-sync spinning-icon"></span>
-                          <span>Loading...</span>
-                        {:else}
-                          <span class="codicon codicon-file-code"></span>
-                          <span>View Logs</span>
-                        {/if}
-                      </button>
-                      <button
-                        class="job-logs-button summary-btn"
-                        on:click|stopPropagation={() => viewJobSummary(job.id, job.name, run.id)}
-                        disabled={loadingJobSummary.has(job.id)}
-                        title="View GitHub job summary"
-                      >
-                        {#if loadingJobSummary.has(job.id)}
-                          <span class="codicon codicon-sync spinning-icon"></span>
-                          <span>Loading...</span>
-                        {:else}
-                          <span class="codicon codicon-github"></span>
-                          <span>Summary</span>
-                        {/if}
-                      </button>
-                      <!-- DISABLED: Log comparison functionality - temporarily disabled in v1.2.0
+                          <button
+                            class="job-logs-button"
+                            on:click|stopPropagation={() =>
+                              viewRawJobLogs(job.id, job.name, run.id)}
+                            disabled={loadingRawJobLogs.has(job.id)}
+                            title="View job logs in text editor"
+                          >
+                            {#if loadingRawJobLogs.has(job.id)}
+                              <span class="codicon codicon-sync spinning-icon"></span>
+                              <span>Loading...</span>
+                            {:else}
+                              <span class="codicon codicon-file-code"></span>
+                              <span>View Raw Logs</span>
+                            {/if}
+                          </button>
+                          <button
+                            class="job-logs-button summary-btn"
+                            on:click|stopPropagation={() =>
+                              viewJobSummary(job.id, job.name, run.id)}
+                            disabled={loadingJobSummary.has(job.id)}
+                            title="View GitHub job summary"
+                          >
+                            {#if loadingJobSummary.has(job.id)}
+                              <span class="codicon codicon-sync spinning-icon"></span>
+                              <span>Loading...</span>
+                            {:else}
+                              <span class="codicon codicon-github"></span>
+                              <span>Summary</span>
+                            {/if}
+                          </button>
+                          <!-- DISABLED: Log comparison functionality - temporarily disabled in v1.2.0
                       {#if compareSourceJob && !isCompareSource(job.id)}
                         {#if canCompareWithJob(job.name, run.workflow_id)}
                           <button
@@ -6855,225 +9305,230 @@
                         </button>
                       {/if}
                       -->
-                    </div>
-                  </div>
-                {/each}
-              {:else}
-                <div class="jobs-empty">No jobs found</div>
-              {/if}
-            </div>
-          {/if}
-
-          <!-- Artifacts section -->
-          {#if showArtifacts.has(run.id)}
-            <div class="artifacts-container" transition:slide>
-              {#if loadingArtifacts.has(run.id)}
-                <div class="artifacts-loading">
-                  <span class="codicon codicon-sync spinning-icon"></span>
-                  <span>Loading artifacts...</span>
-                </div>
-              {:else if runArtifacts.has(run.id)}
-                {#if (runArtifacts.get(run.id) || []).length === 0}
-                  <div class="artifacts-empty">No artifacts available</div>
+                        </div>
+                      </div>
+                    {/each}
+                  {/key}
                 {:else}
-                  {#each runArtifacts.get(run.id) || [] as artifact (artifact.id)}
-                    <div class="artifact-item">
-                      <div class="artifact-header">
-                        <span class="artifact-icon codicon codicon-package"></span>
-                        <span class="artifact-name">{artifact.name}</span>
-                      </div>
-                      <div class="artifact-details">
-                        <span class="artifact-size">
-                          <span class="codicon codicon-database"></span>
-                          <span>{formatFileSize(artifact.size_in_bytes)}</span>
-                        </span>
-                        <span class="artifact-date">
-                          <span class="codicon codicon-calendar"></span>
-                          <span>{formatRelativeTime(artifact.created_at)}</span>
-                        </span>
-                        {#if artifact.expired}
-                          <span class="artifact-expired">
-                            <span class="codicon codicon-warning"></span>
-                            <span>Expired</span>
-                          </span>
-                        {/if}
-                      </div>
+                  <div class="jobs-empty">No jobs found</div>
+                {/if}
+              </div>
+            {/if}
+
+            <!-- Artifacts section -->
+            {#if showArtifacts.has(run.id)}
+              <div class="artifacts-container" transition:slide>
+                {#if loadingArtifacts.has(run.id)}
+                  <div class="artifacts-loading">
+                    <span class="codicon codicon-sync spinning-icon"></span>
+                    <span>Loading artifacts...</span>
+                  </div>
+                {:else if runArtifacts.has(run.id)}
+                  {#if (runArtifacts.get(run.id) || []).length === 0}
+                    <div class="artifacts-empty">No artifacts available</div>
+                  {:else}
+                    <!-- Key block forces complete DOM re-creation when artifacts change -->
+                    {#key artifactsRenderKey.get(run.id) || 0}
+                      {#each runArtifacts.get(run.id) || [] as artifact (artifact.id)}
+                        <div class="artifact-item">
+                          <div class="artifact-header">
+                            <span class="artifact-icon codicon codicon-package"></span>
+                            <span class="artifact-name">{artifact.name}</span>
+                          </div>
+                          <div class="artifact-details">
+                            <span class="artifact-size">
+                              <span class="codicon codicon-database"></span>
+                              <span>{formatFileSize(artifact.size_in_bytes)}</span>
+                            </span>
+                            <span class="artifact-date">
+                              <span class="codicon codicon-calendar"></span>
+                              <span>{formatRelativeTime(artifact.created_at)}</span>
+                            </span>
+                            {#if artifact.expired}
+                              <span class="artifact-expired">
+                                <span class="codicon codicon-warning"></span>
+                                <span>Expired</span>
+                              </span>
+                            {/if}
+                          </div>
+                          <button
+                            class="artifact-download-button"
+                            on:click|stopPropagation={() =>
+                              downloadArtifact(artifact.id, artifact.name)}
+                            disabled={artifact.expired}
+                            title={artifact.expired
+                              ? 'This artifact has expired'
+                              : 'Download this artifact'}
+                          >
+                            <span
+                              class="codicon"
+                              class:codicon-warning={artifact.expired}
+                              class:codicon-cloud-download={!artifact.expired}
+                            ></span>
+                            <span>{artifact.expired ? 'Expired' : 'Download'}</span>
+                          </button>
+                        </div>
+                      {/each}
+                    {/key}
+                  {/if}
+                {:else}
+                  <div class="artifacts-empty">No artifacts found</div>
+                {/if}
+              </div>
+            {/if}
+
+            <!-- Summary section -->
+            {#if showSummary.has(run.id)}
+              <div class="summary-container" transition:slide>
+                {#if loadingJobs.has(run.id)}
+                  <div class="summary-loading">
+                    <span class="codicon codicon-sync spinning-icon"></span>
+                    <span>Loading summary...</span>
+                  </div>
+                {:else if runJobs.has(run.id)}
+                  {@const summary = getRunSummary(run.id)}
+                  <div class="summary-content">
+                    <div class="summary-header">
+                      <h4>
+                        <span class="codicon codicon-graph-line"></span>
+                        <span>Run Summary</span>
+                      </h4>
                       <button
-                        class="artifact-download-button"
-                        on:click|stopPropagation={() =>
-                          downloadArtifact(artifact.id, artifact.name)}
-                        disabled={artifact.expired}
-                        title={artifact.expired
-                          ? 'This artifact has expired'
-                          : 'Download this artifact'}
+                        class="github-summary-button"
+                        on:click|stopPropagation={() => openGitHubSummaryModal(run.id)}
+                        title="View GitHub Summary (parsed from job logs)"
                       >
-                        <span
-                          class="codicon"
-                          class:codicon-warning={artifact.expired}
-                          class:codicon-cloud-download={!artifact.expired}
-                        ></span>
-                        <span>{artifact.expired ? 'Expired' : 'Download'}</span>
+                        <span class="codicon codicon-github"></span>
+                        <span>View GitHub Summary</span>
                       </button>
                     </div>
-                  {/each}
+
+                    <div class="summary-grid">
+                      <!-- Jobs Overview -->
+                      <div class="summary-section">
+                        <div class="summary-section-title">
+                          <span class="codicon codicon-list-selection"></span>
+                          <span>Jobs Overview</span>
+                        </div>
+                        <div class="summary-stats">
+                          <div class="summary-stat">
+                            <span class="summary-stat-label">Total Jobs:</span>
+                            <span class="summary-stat-value">{summary.totalJobs}</span>
+                          </div>
+                          {#if summary.successCount > 0}
+                            <div class="summary-stat success">
+                              <span class="summary-stat-label">
+                                <span class="codicon codicon-pass status-icon status-icon--success"
+                                ></span>
+                                <span>Success:</span>
+                              </span>
+                              <span class="summary-stat-value">
+                                {summary.successCount}
+                              </span>
+                            </div>
+                          {/if}
+                          {#if summary.failureCount > 0}
+                            <div class="summary-stat failure">
+                              <span class="summary-stat-label">
+                                <span class="codicon codicon-error status-icon status-icon--failure"
+                                ></span>
+                                <span>Failed:</span>
+                              </span>
+                              <span class="summary-stat-value">
+                                {summary.failureCount}
+                              </span>
+                            </div>
+                          {/if}
+                          {#if summary.cancelledCount > 0}
+                            <div class="summary-stat cancelled">
+                              <span class="summary-stat-label">
+                                <span
+                                  class="codicon codicon-circle-slash status-icon status-icon--cancelled"
+                                ></span>
+                                <span>Cancelled:</span>
+                              </span>
+                              <span class="summary-stat-value">
+                                {summary.cancelledCount}
+                              </span>
+                            </div>
+                          {/if}
+                          {#if summary.skippedCount > 0}
+                            <div class="summary-stat skipped">
+                              <span class="summary-stat-label">
+                                <span class="codicon codicon-skip status-icon status-icon--skipped"
+                                ></span>
+                                <span>Skipped:</span>
+                              </span>
+                              <span class="summary-stat-value">
+                                {summary.skippedCount}
+                              </span>
+                            </div>
+                          {/if}
+                          {#if summary.inProgressCount > 0}
+                            <div class="summary-stat in-progress">
+                              <span class="summary-stat-label">
+                                <span
+                                  class="codicon codicon-sync status-icon status-icon--in-progress spinning-icon"
+                                ></span>
+                                <span>In Progress:</span>
+                              </span>
+                              <span class="summary-stat-value">
+                                {summary.inProgressCount}
+                              </span>
+                            </div>
+                          {/if}
+                          {#if summary.queuedCount > 0}
+                            <div class="summary-stat queued">
+                              <span class="summary-stat-label">
+                                <span class="codicon codicon-clock status-icon status-icon--queued"
+                                ></span>
+                                <span>Queued:</span>
+                              </span>
+                              <span class="summary-stat-value">
+                                {summary.queuedCount}
+                              </span>
+                            </div>
+                          {/if}
+                        </div>
+                      </div>
+
+                      <!-- Run Details -->
+                      <div class="summary-section">
+                        <div class="summary-section-title">Run Details</div>
+                        <div class="summary-stats">
+                          <div class="summary-stat">
+                            <span class="summary-stat-label">Branch:</span>
+                            <span class="summary-stat-value"
+                              ><span class="codicon codicon-git-branch"></span>
+                              {run.head_branch}</span
+                            >
+                          </div>
+                          <div class="summary-stat">
+                            <span class="summary-stat-label">Commit:</span>
+                            <span class="summary-stat-value commit-sha"
+                              >{run.head_sha.substring(0, 7)}</span
+                            >
+                          </div>
+                          <div class="summary-stat">
+                            <span class="summary-stat-label">Triggered by:</span>
+                            <span class="summary-stat-value">{run.actor.login}</span>
+                          </div>
+                          <div class="summary-stat">
+                            <span class="summary-stat-label">Run Number:</span>
+                            <span class="summary-stat-value">#{run.run_number}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+                {:else}
+                  <div class="summary-empty">Click "▶ Jobs" to load summary data</div>
                 {/if}
-              {:else}
-                <div class="artifacts-empty">No artifacts found</div>
-              {/if}
-            </div>
-          {/if}
-
-          <!-- Summary section -->
-          {#if showSummary.has(run.id)}
-            <div class="summary-container" transition:slide>
-              {#if loadingJobs.has(run.id)}
-                <div class="summary-loading">
-                  <span class="codicon codicon-sync spinning-icon"></span>
-                  <span>Loading summary...</span>
-                </div>
-              {:else if runJobs.has(run.id)}
-                {@const summary = getRunSummary(run.id)}
-                <div class="summary-content">
-                  <div class="summary-header">
-                    <h4>
-                      <span class="codicon codicon-graph-line"></span>
-                      <span>Run Summary</span>
-                    </h4>
-                    <button
-                      class="github-summary-button"
-                      on:click|stopPropagation={() => openGitHubSummaryModal(run.id)}
-                      title="View GitHub Summary (parsed from job logs)"
-                    >
-                      <span class="codicon codicon-github"></span>
-                      <span>View GitHub Summary</span>
-                    </button>
-                  </div>
-
-                  <div class="summary-grid">
-                    <!-- Jobs Overview -->
-                    <div class="summary-section">
-                      <div class="summary-section-title">
-                        <span class="codicon codicon-list-selection"></span>
-                        <span>Jobs Overview</span>
-                      </div>
-                      <div class="summary-stats">
-                        <div class="summary-stat">
-                          <span class="summary-stat-label">Total Jobs:</span>
-                          <span class="summary-stat-value">{summary.totalJobs}</span>
-                        </div>
-                        {#if summary.successCount > 0}
-                          <div class="summary-stat success">
-                            <span class="summary-stat-label">
-                              <span class="codicon codicon-pass status-icon status-icon--success"
-                              ></span>
-                              <span>Success:</span>
-                            </span>
-                            <span class="summary-stat-value">
-                              {summary.successCount}
-                            </span>
-                          </div>
-                        {/if}
-                        {#if summary.failureCount > 0}
-                          <div class="summary-stat failure">
-                            <span class="summary-stat-label">
-                              <span class="codicon codicon-error status-icon status-icon--failure"
-                              ></span>
-                              <span>Failed:</span>
-                            </span>
-                            <span class="summary-stat-value">
-                              {summary.failureCount}
-                            </span>
-                          </div>
-                        {/if}
-                        {#if summary.cancelledCount > 0}
-                          <div class="summary-stat cancelled">
-                            <span class="summary-stat-label">
-                              <span
-                                class="codicon codicon-circle-slash status-icon status-icon--cancelled"
-                              ></span>
-                              <span>Cancelled:</span>
-                            </span>
-                            <span class="summary-stat-value">
-                              {summary.cancelledCount}
-                            </span>
-                          </div>
-                        {/if}
-                        {#if summary.skippedCount > 0}
-                          <div class="summary-stat skipped">
-                            <span class="summary-stat-label">
-                              <span class="codicon codicon-skip status-icon status-icon--skipped"
-                              ></span>
-                              <span>Skipped:</span>
-                            </span>
-                            <span class="summary-stat-value">
-                              {summary.skippedCount}
-                            </span>
-                          </div>
-                        {/if}
-                        {#if summary.inProgressCount > 0}
-                          <div class="summary-stat in-progress">
-                            <span class="summary-stat-label">
-                              <span
-                                class="codicon codicon-sync status-icon status-icon--in-progress spinning-icon"
-                              ></span>
-                              <span>In Progress:</span>
-                            </span>
-                            <span class="summary-stat-value">
-                              {summary.inProgressCount}
-                            </span>
-                          </div>
-                        {/if}
-                        {#if summary.queuedCount > 0}
-                          <div class="summary-stat queued">
-                            <span class="summary-stat-label">
-                              <span class="codicon codicon-clock status-icon status-icon--queued"
-                              ></span>
-                              <span>Queued:</span>
-                            </span>
-                            <span class="summary-stat-value">
-                              {summary.queuedCount}
-                            </span>
-                          </div>
-                        {/if}
-                      </div>
-                    </div>
-
-                    <!-- Run Details -->
-                    <div class="summary-section">
-                      <div class="summary-section-title">Run Details</div>
-                      <div class="summary-stats">
-                        <div class="summary-stat">
-                          <span class="summary-stat-label">Branch:</span>
-                          <span class="summary-stat-value"
-                            ><span class="codicon codicon-git-branch"></span>
-                            {run.head_branch}</span
-                          >
-                        </div>
-                        <div class="summary-stat">
-                          <span class="summary-stat-label">Commit:</span>
-                          <span class="summary-stat-value commit-sha"
-                            >{run.head_sha.substring(0, 7)}</span
-                          >
-                        </div>
-                        <div class="summary-stat">
-                          <span class="summary-stat-label">Triggered by:</span>
-                          <span class="summary-stat-value">{run.actor.login}</span>
-                        </div>
-                        <div class="summary-stat">
-                          <span class="summary-stat-label">Run Number:</span>
-                          <span class="summary-stat-value">#{run.run_number}</span>
-                        </div>
-                      </div>
-                    </div>
-                  </div>
-                </div>
-              {:else}
-                <div class="summary-empty">Click "▶ Jobs" to load summary data</div>
-              {/if}
-            </div>
-          {/if}
-        </div>
-      {/each}
+              </div>
+            {/if}
+          </div>
+        {/each}
+      {/key}
     </div>
 
     <!-- Pagination Controls -->
@@ -7132,7 +9587,7 @@
                 runs.
               {/if}
             </span>
-          {:else if totalRunsFetched >= getMaxTotalRuns() && !showWatchedOnly}
+          {:else if totalRunsFetched >= getMaxTotalRuns() && !showWatchedOnly && showMaxRunsWarningMemo}
             <span class="warning-text">
               <span class="codicon codicon-warning"></span>
               {#if hasActiveDateFilter()}
@@ -7249,6 +9704,76 @@
           }}
         >
           Rerun &amp; watch run
+        </button>
+      </div>
+    </div>
+  </div>
+{/if}
+
+<!-- Cancel Confirmation Modal -->
+{#if showCancelConfirmModal}
+  <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+  <div
+    class="modal-overlay"
+    role="dialog"
+    aria-modal="true"
+    aria-labelledby="cancel-confirm-title"
+    tabindex="-1"
+    on:click={closeCancelConfirmModal}
+    on:keydown={(e) => {
+      if (e.key === 'Escape') {
+        closeCancelConfirmModal();
+      }
+    }}
+    transition:fade
+  >
+    <!-- svelte-ignore a11y_no_noninteractive_element_interactions -->
+    <div
+      class="modal-content cancel-confirm-modal"
+      role="document"
+      on:click|stopPropagation
+      on:keydown|stopPropagation
+      transition:fade
+    >
+      <div class="modal-header">
+        <h3 id="cancel-confirm-title">Cancel Workflow Run</h3>
+      </div>
+      <div class="modal-body">
+        <p class="cancel-confirm-message">
+          Are you sure you want to cancel <strong>"{cancelConfirmRunName}"</strong>?
+        </p>
+        <div class="cancel-confirm-details">
+          <div class="cancel-confirm-detail">
+            <span class="codicon codicon-symbol-numeric"></span>
+            <span class="detail-label">Run ID:</span>
+            <span class="detail-value">{cancelConfirmRunId}</span>
+          </div>
+          {#if cancelConfirmRunBranch}
+            <div class="cancel-confirm-detail">
+              <span class="codicon codicon-git-branch"></span>
+              <span class="detail-label">Branch:</span>
+              <span class="detail-value">{cancelConfirmRunBranch}</span>
+            </div>
+          {/if}
+          {#if cancelConfirmRunAuthor}
+            <div class="cancel-confirm-detail">
+              <span class="codicon codicon-person"></span>
+              <span class="detail-label">Triggered by:</span>
+              <span class="detail-value">{cancelConfirmRunAuthor}</span>
+            </div>
+          {/if}
+        </div>
+        <p class="cancel-confirm-warning">
+          <span class="codicon codicon-warning"></span>
+          This action cannot be undone. The workflow run will be stopped.
+        </p>
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="secondary-button" on:click={closeCancelConfirmModal}>
+          Dismiss
+        </button>
+        <button type="button" class="danger-button" on:click={confirmCancelRun}>
+          Cancel Run
         </button>
       </div>
     </div>
@@ -7401,34 +9926,51 @@
 {/if}
 
 <!-- Job Steps Modal (from jobs list) -->
+<!-- DISABLED: Interactive log viewer (onViewLogs, onViewStepLogs) - temporarily disabled for separate PR -->
+<!-- NOTE: Using optional chaining (?.) throughout to prevent null reference errors during Svelte reactivity transitions -->
 {#if selectedJobForStepsModal}
+  {@const currentJob = selectedJobForStepsModal}
+  {@const currentJobId = currentJob?.jobId}
+  {@const currentRunId = selectedJobRunIdForSteps}
   <JobStepsModal
-    job={selectedJobForStepsModal}
+    job={currentJob}
     onClose={closeJobStepsModal}
-    onViewSummary={selectedJobForStepsModal.jobId != null
+    onViewSummary={currentJobId != null
       ? () => {
-          const jobId = selectedJobForStepsModal?.jobId;
-          const jobName = selectedJobForStepsModal?.name || 'Job';
+          // Re-check state at execution time to handle race conditions
+          if (selectedJobForStepsModal == null) return;
+          const jobId = selectedJobForStepsModal.jobId;
+          const jobName = selectedJobForStepsModal.name || 'Job';
           const runId = selectedJobRunIdForSteps;
           if (jobId != null) {
             viewJobSummary(jobId, jobName, runId ?? undefined, true);
           }
         }
       : undefined}
-    onViewLogs={selectedJobForStepsModal.jobId != null && selectedJobRunIdForSteps != null
+    onViewLogs={undefined}
+    onViewRawLogs={currentJobId != null && currentRunId != null
       ? () => {
-          const jobId = selectedJobForStepsModal?.jobId;
+          // Re-check state at execution time to handle race conditions
+          if (selectedJobForStepsModal == null) return;
+          const jobId = selectedJobForStepsModal.jobId;
           const runId = selectedJobRunIdForSteps;
           if (jobId != null && runId != null) {
-            viewRawJobLogs(jobId, selectedJobForStepsModal?.name || 'Job', runId);
+            viewRawJobLogs(jobId, selectedJobForStepsModal.name || 'Job', runId);
           }
         }
       : undefined}
-    loadingLogs={selectedJobForStepsModal.jobId != null &&
-      loadingRawJobLogs.has(selectedJobForStepsModal.jobId)}
-    loadingSummary={selectedJobForStepsModal.jobId != null &&
-      loadingJobSummary.has(selectedJobForStepsModal.jobId)}
-    runId={selectedJobRunIdForSteps ?? undefined}
+    onViewStepLogs={undefined}
+    loadingLogs={currentJobId != null && loadingJobLogs.has(currentJobId)}
+    loadingRawLogs={currentJobId != null && loadingRawJobLogs.has(currentJobId)}
+    loadingSummary={currentJobId != null && loadingJobSummary.has(currentJobId)}
+    loadingStepLogs={currentJobId != null
+      ? new Set(
+          [...loadingStepLogs.keys()]
+            .filter((key) => key.startsWith(`${currentJobId}-`))
+            .map((key) => parseInt(key.split('-')[1], 10))
+        )
+      : new Set()}
+    runId={currentRunId ?? undefined}
     workflowId={selectedJobWorkflowIdForSteps ?? undefined}
     workflowName={selectedJobWorkflowNameForSteps ?? undefined}
   />
@@ -7485,8 +10027,8 @@
         selectedJobWorkflowIdForSteps = modalRun?.workflow_id ?? null;
         selectedJobWorkflowNameForSteps = modalRun?.name ?? null;
       } else if (node.jobId && jobGraphModalRunId) {
+        // DISABLED: Interactive log viewer - temporarily disabled for separate PR
         // Fall back to viewing raw logs for jobs without steps data
-        // NOTE: Changed from viewJobLogsInteractive to viewRawJobLogs (interactive viewer disabled in v1.2.0)
         viewRawJobLogs(node.jobId, node.name, jobGraphModalRunId);
       }
     }}
@@ -7511,6 +10053,61 @@
     onOpenInTab={openGitHubSummaryInTab}
     onOpenInBrowser={openGitHubSummaryInBrowserFromModal}
   />
+{/if}
+
+<!-- Health Monitor Notification Banner -->
+{#if panelUnresponsive && !healthNotificationDismissed}
+  <div class="health-notification" transition:slide={{ duration: reduceMotion ? 0 : 200 }}>
+    <div class="health-notification-content">
+      <div class="health-notification-icon">
+        <span class="codicon codicon-warning"></span>
+      </div>
+      <div class="health-notification-text">
+        <div class="health-notification-title">Panel may be unresponsive</div>
+        <div class="health-notification-reason">
+          {unresponsiveReason || 'Unknown issue detected'}
+        </div>
+        <div class="health-notification-hint">
+          You can continue using the panel, but some features may not work until refreshed.
+        </div>
+      </div>
+    </div>
+    <div class="health-notification-actions">
+      <button
+        class="health-action-btn"
+        on:click={resetPanelState}
+        title="Clear all loading states and reset the panel - use if UI is stuck"
+      >
+        <span class="codicon codicon-debug-restart"></span>
+        Reset State
+      </button>
+      <button
+        class="health-action-btn"
+        on:click={forceDataRefresh}
+        title="Force a complete data refresh from GitHub - use if data seems stale"
+      >
+        <span class="codicon codicon-refresh"></span>
+        Refresh Data
+      </button>
+      {#if autoRefreshSeconds > 0}
+        <button
+          class="health-action-btn"
+          on:click={restartAutoRefresh}
+          title="Restart the auto-refresh timer - use if auto-refresh stopped working"
+        >
+          <span class="codicon codicon-sync"></span>
+          Restart Auto-refresh
+        </button>
+      {/if}
+      <button
+        class="health-action-btn health-action-dismiss"
+        on:click={dismissHealthNotification}
+        title="Dismiss this notification - warning will return if issue persists"
+      >
+        <span class="codicon codicon-close"></span>
+      </button>
+    </div>
+  </div>
 {/if}
 
 <!-- Toast notifications -->
@@ -7841,7 +10438,10 @@
     border-radius: 4px;
     box-shadow: 0 4px 8px rgba(0, 0, 0, 0.2);
     z-index: 1000;
-    min-width: 280px;
+    min-width: 340px;
+    max-height: calc(100vh - 100px);
+    display: flex;
+    flex-direction: column;
   }
 
   /* Settings Tab Navigation */
@@ -7884,14 +10484,24 @@
 
   .settings-tab-content {
     padding: 4px 0;
+    overflow-y: auto;
+    flex: 1;
   }
 
   .refresh-settings-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
     padding: 8px 12px;
     font-size: 11px;
     font-weight: 600;
     color: var(--vscode-descriptionForeground);
     border-bottom: 1px solid var(--vscode-dropdown-border);
+  }
+
+  .refresh-settings-header > span {
+    flex: 1;
   }
 
   .refresh-option {
@@ -7922,11 +10532,141 @@
     border-top: 1px solid var(--vscode-dropdown-border);
   }
 
+  /* Rate Limit Display Styles */
+  .rate-limit-display {
+    padding: 8px;
+    background: var(--vscode-editor-background);
+    border-radius: 4px;
+    margin: 4px 8px 8px;
+  }
+
+  .rate-limit-status-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    font-size: 11px;
+    margin-bottom: 4px;
+  }
+
+  .rate-limit-label {
+    color: var(--vscode-descriptionForeground);
+  }
+
+  .rate-limit-value {
+    font-weight: 600;
+  }
+
+  .rate-limit-progress-container {
+    height: 6px;
+    background: var(--vscode-input-background);
+    border-radius: 3px;
+    overflow: hidden;
+    margin: 6px 0;
+  }
+
+  .rate-limit-progress-bar {
+    height: 100%;
+    border-radius: 3px;
+    transition: width 0.3s ease;
+  }
+
+  .rate-limit-progress-bar.rate-limit-good {
+    background: var(--vscode-terminal-ansiGreen);
+  }
+
+  .rate-limit-progress-bar.rate-limit-caution {
+    background: var(--vscode-terminal-ansiYellow);
+  }
+
+  .rate-limit-progress-bar.rate-limit-warning {
+    background: var(--vscode-terminal-ansiYellow);
+  }
+
+  .rate-limit-progress-bar.rate-limit-critical {
+    background: var(--vscode-errorForeground);
+  }
+
+  .rate-limit-value.rate-limit-good {
+    color: var(--vscode-terminal-ansiGreen);
+  }
+
+  .rate-limit-value.rate-limit-caution {
+    color: var(--vscode-terminal-ansiYellow);
+  }
+
+  .rate-limit-value.rate-limit-warning {
+    color: var(--vscode-terminal-ansiYellow);
+  }
+
+  .rate-limit-value.rate-limit-critical {
+    color: var(--vscode-errorForeground);
+  }
+
+  .rate-limit-percentage {
+    text-align: center;
+    font-size: 10px;
+    color: var(--vscode-descriptionForeground);
+    margin-top: 4px;
+  }
+
+  .rate-limit-actions {
+    display: flex;
+    gap: 8px;
+    padding: 4px 8px 8px;
+  }
+
+  .rate-limit-action-btn {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 4px;
+    font-size: 11px;
+    padding: 4px 8px;
+    transition:
+      transform 0.1s ease,
+      background-color 0.2s ease;
+  }
+
+  .rate-limit-action-btn:active:not(:disabled) {
+    transform: scale(0.95);
+  }
+
+  .rate-limit-action-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
+
+  .rate-limit-action-btn--enable {
+    background: var(--vscode-testing-iconPassed, #73c991);
+    border-color: var(--vscode-testing-iconPassed, #73c991);
+    color: var(--vscode-editor-background, #1e1e1e);
+  }
+
+  .rate-limit-action-btn--enable:hover:not(:disabled) {
+    background: color-mix(in srgb, var(--vscode-testing-iconPassed, #73c991) 85%, white);
+  }
+
+  .rate-limit-action-btn .codicon {
+    font-size: 12px;
+  }
+
+  .rate-limit-badge {
+    background: var(--vscode-errorForeground);
+    color: var(--vscode-editor-background);
+    font-size: 9px;
+    font-weight: 700;
+    padding: 1px 4px;
+    border-radius: 8px;
+    margin-left: 2px;
+  }
+
   .settings-option-row {
     display: flex;
     flex-wrap: wrap;
     gap: 4px;
     padding: 4px 8px 8px;
+    align-items: center;
   }
 
   .settings-option-row .refresh-option {
@@ -7934,11 +10674,44 @@
     text-align: center;
   }
 
+  .settings-option-label {
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    margin-right: 4px;
+    white-space: nowrap;
+  }
+
+  .settings-select {
+    flex: 1;
+    background: var(--vscode-dropdown-background);
+    color: var(--vscode-dropdown-foreground);
+    border: 1px solid var(--vscode-dropdown-border);
+    border-radius: 4px;
+    padding: 4px 8px;
+    font-size: 12px;
+    cursor: pointer;
+    min-width: 80px;
+  }
+
+  .settings-select:focus {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: -1px;
+  }
+
+  .settings-select:hover {
+    border-color: var(--vscode-focusBorder);
+  }
+
   .settings-slider-row {
     display: flex;
     align-items: center;
     gap: 8px;
     padding: 4px 8px 8px;
+  }
+
+  .settings-slider-row.settings-slider-disabled {
+    opacity: 0.5;
+    pointer-events: none;
   }
 
   .settings-slider-row input[type='range'] {
@@ -8046,6 +10819,13 @@
     padding: 8px 12px;
   }
 
+  .settings-checkbox-row--with-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
   .settings-checkbox-label {
     display: flex;
     align-items: center;
@@ -8058,6 +10838,18 @@
     width: 14px;
     height: 14px;
     cursor: pointer;
+  }
+
+  .settings-checkbox-row--disabled {
+    opacity: 0.6;
+  }
+
+  .settings-checkbox-row--disabled .settings-checkbox-label {
+    cursor: not-allowed;
+  }
+
+  .settings-checkbox-row--disabled .settings-checkbox-label input[type='checkbox'] {
+    cursor: not-allowed;
   }
 
   .settings-help-text--fetching {
@@ -8078,6 +10870,103 @@
     align-items: center;
     gap: 6px;
     color: var(--vscode-editorInfo-foreground);
+  }
+
+  /* Filter info messages - blue/info color scheme to distinguish from yellow warnings */
+  .filter-info-message {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    border-radius: 4px;
+    font-size: 12px;
+    line-height: 1.4;
+    background-color: var(--vscode-inputValidation-infoBackground, rgba(0, 122, 204, 0.1));
+    border: 1px solid var(--vscode-inputValidation-infoBorder, var(--vscode-editorInfo-foreground));
+    color: var(--vscode-foreground);
+  }
+
+  .filter-info-content {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex: 1;
+  }
+
+  .filter-info-content > .codicon {
+    flex-shrink: 0;
+    color: var(--vscode-editorInfo-foreground);
+  }
+
+  .filter-info-content strong {
+    color: var(--vscode-editorInfo-foreground);
+  }
+
+  .filter-info-content em {
+    font-style: italic;
+    opacity: 0.85;
+  }
+
+  .filter-info-help-button {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 4px;
+    background: transparent;
+    border: 1px solid var(--vscode-editorInfo-foreground);
+    border-radius: 50%;
+    color: var(--vscode-editorInfo-foreground);
+    cursor: pointer;
+    opacity: 0.8;
+    transition:
+      opacity 0.2s,
+      background-color 0.2s;
+    flex-shrink: 0;
+  }
+
+  .filter-info-help-button:hover {
+    opacity: 1;
+    background-color: var(--vscode-inputValidation-infoBackground, rgba(0, 122, 204, 0.2));
+  }
+
+  .filter-info-help-button:focus {
+    outline: 1px solid var(--vscode-focusBorder);
+    outline-offset: 1px;
+  }
+
+  .filter-info-help-button .codicon {
+    font-size: 12px;
+  }
+
+  /* Watched runs variant - use a slightly different shade */
+  .filter-info-message--watched {
+    background-color: var(--vscode-inputValidation-infoBackground, rgba(0, 122, 204, 0.08));
+  }
+
+  .filter-info-message--watched .filter-info-content > .codicon {
+    color: var(--vscode-editorInfo-foreground);
+  }
+
+  /* Favorites variant - use star color accent */
+  .filter-info-message--favorites {
+    background-color: var(--vscode-inputValidation-infoBackground, rgba(0, 122, 204, 0.08));
+  }
+
+  .filter-info-message--favorites .filter-info-content > .codicon {
+    color: var(--vscode-gitDecoration-modifiedResourceForeground, #e2c08d);
+  }
+
+  .filter-info-message--favorites .filter-info-content strong {
+    color: var(--vscode-editorInfo-foreground);
+  }
+
+  .adaptive-refresh-note {
+    display: block;
+    margin-top: 4px;
+    color: var(--vscode-editorInfo-foreground);
+    font-style: italic;
   }
 
   .controls {
@@ -8133,6 +11022,11 @@
     transform: scale(1.01);
   }
 
+  /* Base filter-box styling - position relative for lock icon overlay */
+  .filter-box {
+    position: relative;
+  }
+
   .filter-box select {
     padding: 8px 12px;
     height: 32px;
@@ -8170,6 +11064,72 @@
 
   .checkbox-filter input[type='checkbox'] {
     cursor: pointer;
+  }
+
+  /* Enhanced disabled filter styling for better visual feedback */
+  .filter-box--disabled {
+    opacity: 0.5;
+    pointer-events: none;
+  }
+
+  .filter-box--disabled select,
+  .filter-box--disabled input,
+  .filter-box--disabled button {
+    cursor: not-allowed;
+    background: var(--vscode-input-background);
+    border-style: dashed;
+    border-color: var(--vscode-disabledForeground, var(--vscode-input-border));
+  }
+
+  .filter-box--disabled.checkbox-filter label {
+    cursor: not-allowed;
+    color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+  }
+
+  /* Disabled indicator icon - shows a small lock icon overlaid on disabled filters */
+  .filter-disabled-indicator {
+    position: absolute;
+    top: 50%;
+    left: 4px;
+    transform: translateY(-50%);
+    z-index: 2;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--vscode-disabledForeground, var(--vscode-descriptionForeground));
+    font-size: 12px;
+    pointer-events: auto;
+    cursor: help;
+  }
+
+  .filter-disabled-indicator .codicon {
+    font-size: 12px;
+  }
+
+  /* Re-enable pointer events on the indicator for tooltip */
+  .filter-box--disabled .filter-disabled-indicator {
+    pointer-events: auto;
+  }
+
+  /* Style for the "Watched Runs Only" filter when active - highlight it as the controlling filter */
+  .watched-runs-filter:has(input:checked) {
+    background: color-mix(
+      in srgb,
+      var(--vscode-inputOption-activeBackground, #007acc) 20%,
+      transparent
+    );
+    border-radius: 4px;
+    padding: 4px 8px;
+    margin: -4px -8px;
+  }
+
+  /* Combobox specific disabled styling */
+  .filter-box--disabled .combobox-input-wrapper input {
+    background: var(--vscode-input-background);
+  }
+
+  .filter-box--disabled .dropdown-toggle {
+    background: var(--vscode-input-background);
   }
 
   .clear-filters-button {
@@ -9775,6 +12735,7 @@
     min-width: 24px;
     height: 24px;
     margin-left: 4px;
+    flex-shrink: 0;
   }
 
   /* Help Modal */
@@ -10064,6 +13025,89 @@
     background: var(--vscode-button-hoverBackground);
   }
 
+  .danger-button {
+    background: var(--vscode-inputValidation-errorBackground, #5a1d1d);
+    color: var(--vscode-errorForeground, #f48771);
+    border: 1px solid var(--vscode-inputValidation-errorBorder, #be1100);
+    padding: 8px 16px;
+    border-radius: 2px;
+    cursor: pointer;
+    font-size: 13px;
+    transition: background-color 0.2s;
+  }
+
+  .danger-button:hover {
+    background: var(--vscode-inputValidation-errorBorder, #be1100);
+    color: var(--vscode-button-foreground, #fff);
+  }
+
+  /* Cancel confirmation modal specific styles */
+  .cancel-confirm-message {
+    margin: 0 0 16px 0;
+    font-size: 14px;
+    line-height: 1.5;
+    color: var(--vscode-foreground);
+  }
+
+  .cancel-confirm-message strong {
+    color: var(--vscode-foreground);
+  }
+
+  .cancel-confirm-details {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    margin-bottom: 16px;
+    padding: 12px;
+    background: var(--vscode-editor-background);
+    border: 1px solid var(--vscode-panel-border);
+    border-radius: 4px;
+  }
+
+  .cancel-confirm-detail {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 13px;
+    color: var(--vscode-foreground);
+  }
+
+  .cancel-confirm-detail .codicon {
+    color: var(--vscode-descriptionForeground);
+    flex-shrink: 0;
+    font-size: 14px;
+  }
+
+  .cancel-confirm-detail .detail-label {
+    color: var(--vscode-descriptionForeground);
+    flex-shrink: 0;
+  }
+
+  .cancel-confirm-detail .detail-value {
+    color: var(--vscode-foreground);
+    font-family: var(--vscode-editor-font-family, monospace);
+    word-break: break-all;
+  }
+
+  .cancel-confirm-warning {
+    display: flex;
+    align-items: flex-start;
+    gap: 8px;
+    padding: 12px;
+    background: var(--vscode-inputValidation-warningBackground, rgba(205, 145, 52, 0.1));
+    border: 1px solid var(--vscode-inputValidation-warningBorder, #cd9134);
+    border-radius: 4px;
+    margin: 0;
+    font-size: 12px;
+    color: var(--vscode-foreground);
+  }
+
+  .cancel-confirm-warning .codicon {
+    color: var(--vscode-inputValidation-warningBorder, #cd9134);
+    flex-shrink: 0;
+    margin-top: 2px;
+  }
+
   /* Toast notifications */
   .toast-container {
     position: fixed;
@@ -10130,6 +13174,117 @@
 
   .toast-info {
     border-left-color: #58a6ff;
+  }
+
+  /* Health Monitor Notification Banner */
+  .health-notification {
+    position: fixed;
+    bottom: 16px;
+    left: 50%;
+    transform: translateX(-50%);
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
+    background: var(--vscode-editorWidget-background);
+    border: 1px solid var(--vscode-inputValidation-warningBorder, #cd9134);
+    border-radius: 8px;
+    padding: 12px 16px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+    z-index: 1001;
+    max-width: 500px;
+    width: calc(100% - 32px);
+  }
+
+  .health-notification-content {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+  }
+
+  .health-notification-icon {
+    flex-shrink: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    width: 28px;
+    height: 28px;
+    background: rgba(205, 145, 52, 0.15);
+    border-radius: 50%;
+  }
+
+  .health-notification-icon .codicon {
+    font-size: 16px;
+    color: var(--vscode-inputValidation-warningBorder, #cd9134);
+  }
+
+  .health-notification-text {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .health-notification-title {
+    font-size: 13px;
+    font-weight: 600;
+    color: var(--vscode-foreground);
+    margin-bottom: 4px;
+  }
+
+  .health-notification-reason {
+    font-size: 12px;
+    color: var(--vscode-descriptionForeground);
+    line-height: 1.4;
+  }
+
+  .health-notification-hint {
+    font-size: 11px;
+    color: var(--vscode-descriptionForeground);
+    opacity: 0.85;
+    margin-top: 4px;
+    font-style: italic;
+  }
+
+  .health-notification-actions {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 8px;
+    padding-top: 4px;
+    border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.1));
+  }
+
+  .health-action-btn {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 6px 12px;
+    font-size: 11px;
+    font-weight: 500;
+    background: var(--vscode-button-secondaryBackground);
+    color: var(--vscode-button-secondaryForeground);
+    border: 1px solid var(--vscode-button-border, transparent);
+    border-radius: 4px;
+    cursor: pointer;
+    transition: background-color 0.15s ease;
+  }
+
+  .health-action-btn:hover {
+    background: var(--vscode-button-secondaryHoverBackground);
+  }
+
+  .health-action-btn .codicon {
+    font-size: 12px;
+  }
+
+  .health-action-dismiss {
+    margin-left: auto;
+    padding: 6px 8px;
+    background: transparent;
+    border: none;
+    color: var(--vscode-descriptionForeground);
+  }
+
+  .health-action-dismiss:hover {
+    background: var(--vscode-toolbar-hoverBackground);
+    color: var(--vscode-foreground);
   }
 
   /* Screen reader only - visually hidden but accessible to assistive technologies */

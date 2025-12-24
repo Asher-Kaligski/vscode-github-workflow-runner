@@ -4,7 +4,7 @@
   "description": "Run, monitor, and manage GitHub Actions workflows directly from VS Code. Dispatch workflows with inputs, track runs in real-time, filter by PR/branch, view logs, download artifacts, and more.",
   "publisher": "asher-kaligski",
   "icon": "media/icon.png",
-  "version": "1.3.1",
+  "version": "1.4.0",
   "engines": {
     "vscode": "^1.93.0"
   },
@@ -322,7 +322,7 @@
     "test": "vitest",
     "vsce:package": "vsce package",
     "vsce:package:patch": "npm version patch && vsce package",
-    "clear-storage": "node scripts/clear-dev-storage.js"
+    "reset-extension": "chmod +x scripts/reset-extension.sh && ./scripts/reset-extension.sh"
   },
   "dependencies": {
     "adm-zip": "^0.5.16",

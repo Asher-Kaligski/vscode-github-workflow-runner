@@ -46,3 +46,6 @@ test-log-parser/
 
 # Environment variables
 .env
+
+# Development scripts (local only)
+scripts/reset-extension.sh
