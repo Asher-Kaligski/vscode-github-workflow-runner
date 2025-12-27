@@ -55,6 +55,8 @@ Mark frequently used workflows as favorites for instant access. Pin workflows to
 
 - Live status updates with color-coded indicators
 - **Interactive job dependencies graph** with execution stages
+- **Step-level log viewing** — view logs for individual steps directly from the Job Steps Modal _(New in v1.5.0)_
+- **Interactive log viewer from job graph** — click jobs in the dependency graph to view logs _(New in v1.5.0)_
 - **Adaptive auto-refresh** — speeds up polling when workflows are running _(New in v1.4.0)_
 - **Cancel confirmation modal** — prevents accidental cancellation with detailed verification _(New in v1.4.0)_
 - **Real-time API rate limit monitoring** — track GitHub API usage with visual progress bar _(New in v1.4.0)_
@@ -129,6 +131,7 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 | [Logs View](#logs-view)                           | View logs directly in VS Code                 |
 | [Job Dependencies Graph](#job-dependencies-graph) | Visualize job execution stages                |
 | [Job Step Details](#job-step-details)             | Step-by-step execution details                |
+| [Step-Level Logs](#step-level-logs)               | View logs for individual steps                |
 | [Workflow Summary](#workflow-summary)             | GitHub step summaries and annotations         |
 | [Settings Panel](#settings-panel)                 | General, Notifications, and API Usage tabs    |
 
@@ -200,6 +203,12 @@ _**Preview/Edit Modal** — View and edit multi-value inputs in list format with
 
 > Click any job to view step-by-step execution details with status indicators and timing information
 
+### Step-Level Logs
+
+![Step-Level Logs](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/step-level-logs.png)
+
+> View logs for individual steps directly from the Job Steps Modal
+
 ### Workflow Summary
 
 ![Workflow Summary](https://github.com/Asher-Kaligski/vscode-github-workflow-runner/raw/main/media/workflow-summary.png)
@@ -233,6 +242,7 @@ _**API Usage Tab** — Configure auto-refresh intervals with adaptive refresh (s
 | **Job Dependencies Graph** | Visualize job dependencies with an interactive graph showing execution stages        |
 | **Matrix Job Groups**      | Matrix jobs are intelligently grouped with collapsible views for each variant        |
 | **Job Steps Details**      | Click on any job to view step-by-step breakdown with status and duration             |
+| **Step-Level Log Viewing** | View logs for individual steps directly from the Job Steps Modal _(New in v1.5.0)_   |
 | **Workflow Summary**       | View GitHub step summaries with build metadata and error details                     |
 | **View Logs**              | Open workflow run logs directly in VS Code editor                                    |
 | **View Jobs & Steps**      | Expand any run to see individual jobs with status, duration, and step details        |
@@ -326,6 +336,19 @@ _**API Usage Tab** — Configure auto-refresh intervals with adaptive refresh (s
 - **Recovery Actions** — Reset State, Refresh Data, and Restart Auto-refresh buttons
 - **Smart Suppression** — Respects user activity to avoid false positive notifications
 - **Dismissible Banner** — Can be dismissed but will return if issues persist
+
+### 📜 Large Log File Safety _(New in v1.5.0)_
+
+- **Size Warning** — Notification when logs exceed 50MB, suggesting "View Raw Logs" for better performance
+- **Automatic Truncation** — Logs exceeding 100MB are truncated to prevent memory issues
+- **Smart Preservation** — Truncation preserves both the beginning (90MB) and end (10MB) of logs
+- **Crash Prevention** — Protects against UI freezing and out-of-memory errors with extremely large logs
+
+### ⚡ API Efficiency _(New in v1.5.0)_
+
+- **Optimized Fetching** — Always fetches 100 runs per API request (GitHub's maximum)
+- **Reduced API Calls** — Up to 5x fewer API calls when filters have low match rates
+- **Rate Limit Friendly** — Helps preserve your GitHub API quota for other operations
 
 ## ⚙️ Configuration
 
