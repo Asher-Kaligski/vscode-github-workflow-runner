@@ -618,11 +618,13 @@ export class WorkflowRunsPanel {
       switch (message.type) {
         case 'webviewReady':
           // Webview signaled it's ready to receive data
+          // Note: The webview's onMount() also sends getWorkflowRuns message,
+          // so we don't call _sendWorkflowRuns() here to avoid duplicate API calls.
+          // The webview will request runs when it's ready.
           this._webviewReady = true;
           await this._sendInitialSettings();
           await this._sendWorkflows();
           await this._sendWatchedRuns(); // Load watched runs from storage
-          await this._sendWorkflowRuns();
           break;
 
         case 'getWorkflowRuns': {
@@ -635,8 +637,8 @@ export class WorkflowRunsPanel {
             currentWorkflowFilter: this._currentWorkflowFilter,
           });
           await this._sendWorkflowRuns({ workflowId });
-          // Also push workflows proactively so the webview can populate the dropdown
-          await this._sendWorkflows();
+          // Note: Workflows are already sent during webviewReady, so no need to
+          // send them again here. The webview also separately requests getWorkflows.
 
           // Check if any initial filters are set BEFORE sending them
           const hasInitialFilters =

@@ -1317,13 +1317,14 @@
         // Avoid overlapping with explicit background fetches or temporary
         // pauses (for example when viewing logs or artifacts), or while
         // the panel is already busy loading data (initial load, manual
-        // refresh, "Load more", or a date-filtered fetch).
+        // refresh, "Load more", progressive fetch, or a date-filtered fetch).
         if (
           !autoRefreshPaused &&
           !loadingMore &&
           !loading &&
           !refreshing &&
-          !fetchingDateFilteredRuns
+          !fetchingDateFilteredRuns &&
+          !progressiveFetching
         ) {
           // Mark that a background refresh is starting
           isBackgroundRefreshInProgress = true;
@@ -2830,11 +2831,9 @@
     // date range is well-covered.
     //
     // Without a date filter, we only ever prefetch a single additional page
-    // at a time. This avoids pulling hundreds of extra runs when the user is
-    // simply browsing the latest runs, while still allowing progressive
-    // fetching to walk forward page-by-page when client-side filters (e.g.
-    // "My Runs", status, search, watched-only) reduce the visible results
-    // below the configured workflowLoadLimit.
+    // at a time. This ensures the UI shows incremental progress updates
+    // (100, 200, 300, etc.) rather than jumping by large amounts, which
+    // provides better user feedback during searches.
     const hasDateFilter = hasActiveDateFilter();
     const pagesToFetch = hasDateFilter
       ? Math.min(10, Math.ceil((DATE_FILTER_MAX_TOTAL_RUNS - totalRunsFetched) / 100))
@@ -4585,11 +4584,15 @@
     // Clear the waiting flag
     waitingForInitialFilters = false;
 
-    // Now apply filters and clear loading state
-    buildAvailableWorkflows();
-    filterRuns();
+    // IMPORTANT: Clear loading flags BEFORE filterRuns() so that
+    // scheduleProgressiveFetchIfNeeded() can trigger progressive fetching
+    // when filteredRuns.length is below the threshold.
     loading = false;
     refreshing = false;
+
+    // Now apply filters
+    buildAvailableWorkflows();
+    filterRuns();
 
     autoLoadJobsForInProgressRuns();
   }
@@ -4883,10 +4886,13 @@
         isManualWorkflowFetch = false; // Reset the flag
         pendingWorkflowId = null; // Reset the pending workflow ID
         clearWorkflowFetchWatchdog(); // Clear watchdog - successful response received
-        buildAvailableWorkflows();
-        filterRuns();
+        // IMPORTANT: Clear loading flags BEFORE filterRuns() so that
+        // scheduleProgressiveFetchIfNeeded() can trigger progressive fetching
+        // when filteredRuns.length is below the threshold.
         loading = false;
         refreshing = false;
+        buildAvailableWorkflows();
+        filterRuns();
         // Resume auto-refresh after successful workflow switch
         autoRefreshPaused = false;
         startAutoRefresh();
@@ -4908,10 +4914,13 @@
       } else {
         // This is a refresh or subsequent load - apply filters immediately
         clearWorkflowFetchWatchdog(); // Clear watchdog - successful response received
-        buildAvailableWorkflows();
-        filterRuns();
+        // IMPORTANT: Clear loading flags BEFORE filterRuns() so that
+        // scheduleProgressiveFetchIfNeeded() can trigger progressive fetching
+        // when filteredRuns.length is below the threshold.
         loading = false;
         refreshing = false;
+        buildAvailableWorkflows();
+        filterRuns();
       }
     } else if (message.type === 'getWorkflowRuns' && !message.success) {
       // Handle error case - reset loading states
@@ -5282,8 +5291,11 @@
             nextBackendPage = null; // Stop further fetching
           }
 
-          // Rebuild available workflows with new runs
-          buildAvailableWorkflows();
+          // NOTE: We intentionally skip buildAvailableWorkflows() here because:
+          // 1. Workflow definitions don't change during progressive fetch
+          // 2. Calling it on every page (100 runs at a time) is expensive
+          // 3. It causes visible UI stuttering during rapid fetches
+          // The workflows were already built during initial load.
 
           // Re-apply filters
           filterRuns();
@@ -9692,10 +9704,9 @@
                 {/if}
               </span>
             {:else}
-              <span
-                >Searched {totalRunsFetched} run{totalRunsFetched === 1 ? '' : 's'}, fetching
-                more...</span
-              >
+              <span>
+                Searched {totalRunsFetched} run{totalRunsFetched === 1 ? '' : 's'}, fetching more...
+              </span>
             {/if}
           {:else if !showWatchedOnly && hasMoreRuns() && totalRunsFetched < getMaxTotalRuns()}
             <span>
