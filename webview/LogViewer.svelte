@@ -3,6 +3,7 @@
    * LogViewer - Interactive log viewer with collapsible groups
    * Mimics GitHub's native log viewing UI with expand/collapse functionality
    */
+  import LogGroupComponent from './components/LogGroup.svelte';
 
   // VSCode webview API - cast from window
   const vscode = (window as any).vscode as {
@@ -31,7 +32,7 @@
     children: LogGroup[];
     expanded: boolean;
     isNested: boolean;
-    stepIndex: number; // Display index (1-based sequential)
+    stepIndex?: number; // Display index (1-based sequential)
     duration?: number; // Duration in milliseconds
     conclusion?: 'success' | 'failure' | 'cancelled' | 'skipped';
     isOrphaned?: boolean; // True if this is the orphaned logs section
@@ -123,12 +124,14 @@
   }
 
   /**
-   * Parse raw logs into structured groups using HYBRID approach
+   * Parse raw logs into structured groups using SEQUENTIAL BOUNDARY approach
    *
    * Strategy:
-   * 1. Parse ##[group]/##[endgroup] markers to get the nested structure
-   * 2. Use timestamps to assign groups to the correct API steps
-   * 3. Build final structure with API step names as top-level, containing nested groups as children
+   * 1. Parse ##[group]/##[endgroup] markers preserving proper nesting (depth tracking)
+   * 2. Categorize API steps into setup/main/post categories
+   * 3. Identify top-level "Run ..." groups as step boundaries
+   * 4. Match steps to groups sequentially (not by timestamp)
+   * 5. Use timestamps only as fallback for ungrouped lines
    *
    * All groups are collapsed by default, with optional auto-expand for specific step
    */
@@ -139,7 +142,9 @@
     steps?: StepData[]
   ): ParsedLogs {
     const lines = rawLogs.split('\n');
-    const timestampRegex = /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d+Z)\s?/;
+    // Supports ISO timestamps with or without milliseconds, and offset timezones
+    const timestampRegex =
+      /^(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2}))\s?/;
 
     // If no steps data, return empty groups with raw lines
     if (!steps || steps.length === 0) {
@@ -147,20 +152,39 @@
     }
 
     // ============================================
-    // PHASE 1: Parse ##[group] structure with timestamps
+    // PHASE 1: Parse ##[group] structure with PROPER NESTING
     // ============================================
+
+    // Parsing depth cap (security/performance safety)
+    // 50 is plenty for real logs; deeper nesting is rare and usually indicates
+    // malformed logs or intentional spam
+    const MAX_PARSE_DEPTH = 50;
+    let depthCapWarningLogged = false;
+    // Track ignored ##[group] opens so we don't pop the wrong groups on ##[endgroup]
+    let ignoredGroupDepth = 0;
+
     interface RawGroup {
       name: string;
       lines: string[];
       children: RawGroup[];
-      firstTimestamp?: number; // ms timestamp of first line in group
+      firstTimestamp?: number;
+      lastTimestamp?: number;
+      depth: number; // Nesting depth (0 = top-level)
+      topLevelIndex?: number; // Stable index for top-level groups (used for bucket mapping)
     }
 
-    const allGroups: RawGroup[] = [];
+    interface UngroupedLine {
+      line: string;
+      timestamp?: number;
+      afterGroupIndex: number; // Index of the last top-level group before this line (-1 if before all)
+    }
+
+    const topLevelGroups: RawGroup[] = [];
     const groupStack: RawGroup[] = [];
     let currentLines: string[] = [];
     let currentFirstTimestamp: number | undefined = undefined;
-    let ungroupedLines: { line: string; timestamp?: number }[] = []; // Lines outside any group
+    let currentLastTimestamp: number | undefined = undefined;
+    const ungroupedLines: UngroupedLine[] = [];
 
     /**
      * Extract timestamp from a log line
@@ -183,61 +207,102 @@
       const lineTs = getLineTimestamp(line);
 
       if (cleanLineForParsing.includes('##[group]')) {
-        // Save pending lines to current group
+        // ============================================
+        // DEPTH CAP: Treat deep ##[group] markers as plain text
+        // ============================================
+        if (groupStack.length >= MAX_PARSE_DEPTH) {
+          // Too deep - track this ignored open so we don't pop wrong stack on endgroup
+          ignoredGroupDepth++;
+          if (!depthCapWarningLogged) {
+            console.warn(
+              `[LogParser] Max parsing depth (${MAX_PARSE_DEPTH}) reached. ` +
+                `Further ##[group] markers will be treated as plain text.`
+            );
+            depthCapWarningLogged = true;
+          }
+          const processed = processLineForDisplay(line);
+          if (processed.trim()) {
+            if (groupStack.length > 0) {
+              currentLines.push(processed);
+              if (!currentFirstTimestamp) {
+                currentFirstTimestamp = lineTs;
+              }
+              if (lineTs) {
+                currentLastTimestamp = lineTs;
+              }
+            } else {
+              ungroupedLines.push({
+                line: processed,
+                timestamp: lineTs,
+                afterGroupIndex: topLevelGroups.length - 1,
+              });
+            }
+          }
+          continue;
+        }
+
+        // Save pending lines to current group or as ungrouped
         if (groupStack.length > 0 && currentLines.length > 0) {
           groupStack[groupStack.length - 1].lines.push(...currentLines);
           if (currentFirstTimestamp && !groupStack[groupStack.length - 1].firstTimestamp) {
             groupStack[groupStack.length - 1].firstTimestamp = currentFirstTimestamp;
           }
+          if (currentLastTimestamp) {
+            groupStack[groupStack.length - 1].lastTimestamp = currentLastTimestamp;
+          }
         } else if (groupStack.length === 0 && currentLines.length > 0) {
-          // Lines before any group - add as ungrouped
           currentLines.forEach((l, i) => {
             ungroupedLines.push({
               line: l,
               timestamp: i === 0 ? currentFirstTimestamp : undefined,
+              afterGroupIndex: topLevelGroups.length - 1,
             });
           });
         }
         currentLines = [];
         currentFirstTimestamp = lineTs;
+        currentLastTimestamp = lineTs;
 
         const groupName = cleanLineForParsing.replace(/.*##\[group\]/, '').trim();
+        const currentDepth = groupStack.length;
         const newGroup: RawGroup = {
           name: groupName,
           lines: [],
           children: [],
           firstTimestamp: lineTs,
+          depth: currentDepth,
         };
 
-        // "Run ..." groups should always be treated as top-level siblings,
-        // not nested children. This matches GitHub's UI where all "Run ..." commands
-        // are displayed as sibling collapsible sections within a step.
-        const isRunGroup = groupName.startsWith('Run ');
-
-        if (groupStack.length > 0 && !isRunGroup) {
-          // Nested group (non-Run groups can be nested)
+        if (groupStack.length > 0) {
+          // Nested group - add as child of current group
           groupStack[groupStack.length - 1].children.push(newGroup);
-          groupStack.push(newGroup);
         } else {
-          // Top-level group OR a "Run ..." group (always top-level)
-          // If we were inside another group, close it implicitly
-          if (isRunGroup && groupStack.length > 0) {
-            // Close all open groups - "Run ..." starts a new top-level section
-            groupStack.length = 0;
-          }
-          allGroups.push(newGroup);
-          groupStack.push(newGroup);
+          // Top-level group - assign stable index for bucket mapping
+          newGroup.topLevelIndex = topLevelGroups.length;
+          topLevelGroups.push(newGroup);
         }
+        groupStack.push(newGroup);
       } else if (cleanLineForParsing.includes('##[endgroup]')) {
-        if (groupStack.length > 0 && currentLines.length > 0) {
-          groupStack[groupStack.length - 1].lines.push(...currentLines);
-          if (currentFirstTimestamp && !groupStack[groupStack.length - 1].firstTimestamp) {
-            groupStack[groupStack.length - 1].firstTimestamp = currentFirstTimestamp;
-          }
+        // If we ignored opens due to depth cap, decrement counter instead of popping stack
+        if (ignoredGroupDepth > 0) {
+          ignoredGroupDepth--;
+          continue; // Don't pop the real stack
         }
-        currentLines = [];
-        currentFirstTimestamp = undefined;
-        groupStack.pop();
+        if (groupStack.length > 0) {
+          if (currentLines.length > 0) {
+            groupStack[groupStack.length - 1].lines.push(...currentLines);
+            if (currentFirstTimestamp && !groupStack[groupStack.length - 1].firstTimestamp) {
+              groupStack[groupStack.length - 1].firstTimestamp = currentFirstTimestamp;
+            }
+            if (currentLastTimestamp) {
+              groupStack[groupStack.length - 1].lastTimestamp = currentLastTimestamp;
+            }
+          }
+          currentLines = [];
+          currentFirstTimestamp = undefined;
+          currentLastTimestamp = undefined;
+          groupStack.pop();
+        }
       } else {
         const processed = processLineForDisplay(line);
         if (processed.trim()) {
@@ -246,9 +311,15 @@
             if (!currentFirstTimestamp) {
               currentFirstTimestamp = lineTs;
             }
+            if (lineTs) {
+              currentLastTimestamp = lineTs;
+            }
           } else {
-            // Lines outside any group
-            ungroupedLines.push({ line: processed, timestamp: lineTs });
+            ungroupedLines.push({
+              line: processed,
+              timestamp: lineTs,
+              afterGroupIndex: topLevelGroups.length - 1,
+            });
           }
         }
       }
@@ -258,413 +329,1050 @@
     if (groupStack.length > 0 && currentLines.length > 0) {
       groupStack[groupStack.length - 1].lines.push(...currentLines);
     } else if (currentLines.length > 0) {
-      currentLines.forEach((l) => ungroupedLines.push({ line: l }));
+      currentLines.forEach((l) =>
+        ungroupedLines.push({
+          line: l,
+          afterGroupIndex: topLevelGroups.length - 1,
+        })
+      );
     }
 
     // ============================================
-    // PHASE 2: Build step time ranges from API data
+    // PHASE 2: Categorize API steps
     // ============================================
     interface StepBucket {
       step: StepData;
       displayIndex: number;
-      startMs: number;
-      endMs: number;
+      category: 'setup' | 'main' | 'post' | 'complete';
       groups: RawGroup[];
       ungroupedLines: string[];
     }
 
-    const stepBuckets: StepBucket[] = steps.map((step, idx) => ({
-      step,
-      displayIndex: idx + 1,
-      startMs: step.startedAt ? new Date(step.startedAt).getTime() : 0,
-      endMs: step.completedAt ? new Date(step.completedAt).getTime() : Infinity,
-      groups: [],
-      ungroupedLines: [],
-    }));
+    // FIX A: Sort steps by step.number to ensure correct sequential order
+    // GitHub usually returns ordered steps, but this guarantees correctness
+    const stepsSorted = [...steps].sort((a, b) => a.number - b.number);
 
-    // Sort by start time
-    stepBuckets.sort((a, b) => a.startMs - b.startMs);
+    const stepBuckets: StepBucket[] = stepsSorted.map((step, idx) => {
+      const nameLower = step.name.toLowerCase();
+      let category: 'setup' | 'main' | 'post' | 'complete' = 'main';
 
-    /**
-     * Find the step bucket that contains a given timestamp.
-     *
-     * Due to GitHub API timestamp granularity (seconds vs milliseconds in logs),
-     * we use this heuristic:
-     * 1. Collect all steps that contain the timestamp (with 999ms buffer on end)
-     * 2. Prefer steps where timestamp is in the CORE (unadjusted) range
-     * 3. Prefer the step with smallest displayIndex (preserve step order)
-     */
-    function findStepForTimestamp(ts: number | undefined): StepBucket | undefined {
-      if (ts === undefined) {
-        return undefined;
+      if (nameLower === 'set up job') {
+        category = 'setup';
+      } else if (nameLower === 'set up runner' || nameLower === 'complete runner') {
+        // Self-hosted runner setup/cleanup - these have hook scripts
+        category = 'setup';
+      } else if (nameLower === 'complete job') {
+        category = 'complete';
+      } else if (nameLower.startsWith('post ')) {
+        // FIX B: Only treat "Post X" as post steps, NOT generic "Cleanup"
+        // A user step named "Cleanup" is common and should remain main
+        category = 'post';
       }
 
-      const matches: { bucket: StepBucket; isCore: boolean }[] = [];
-      for (const bucket of stepBuckets) {
-        const adjustedEndMs = bucket.endMs + 999;
-        if (ts >= bucket.startMs && ts <= adjustedEndMs) {
-          const isCore = ts >= bucket.startMs && ts <= bucket.endMs;
-          matches.push({ bucket, isCore });
-        }
-      }
+      return {
+        step,
+        displayIndex: idx + 1,
+        category,
+        groups: [],
+        ungroupedLines: [],
+      };
+    });
 
-      if (matches.length === 0) {
-        // Fallback: find the MOST RECENT step that started before this timestamp
-        let mostRecent: StepBucket | undefined;
-        let mostRecentStart = -Infinity;
-        for (const bucket of stepBuckets) {
-          if (bucket.startMs <= ts && bucket.startMs > mostRecentStart) {
-            mostRecentStart = bucket.startMs;
-            mostRecent = bucket;
-          }
-        }
-        return mostRecent;
-      }
+    // Find specific buckets
+    const setUpJobBucket = stepBuckets.find((b) => b.step.name.toLowerCase() === 'set up job');
+    const setUpRunnerBucket = stepBuckets.find(
+      (b) => b.step.name.toLowerCase() === 'set up runner'
+    );
+    const completeRunnerBucket = stepBuckets.find(
+      (b) => b.step.name.toLowerCase() === 'complete runner'
+    );
+    const completeJobBucket = stepBuckets.find((b) => b.step.name.toLowerCase() === 'complete job');
 
-      if (matches.length === 1) {
-        return matches[0].bucket;
-      }
-
-      // Prefer core matches
-      const coreMatches = matches.filter((m) => m.isCore);
-      if (coreMatches.length >= 1) {
-        coreMatches.sort((a, b) => a.bucket.displayIndex - b.bucket.displayIndex);
-        return coreMatches[0].bucket;
-      }
-
-      // No core matches - use smallest displayIndex
-      matches.sort((a, b) => a.bucket.displayIndex - b.bucket.displayIndex);
-      return matches[0].bucket;
-    }
+    const mainBuckets = stepBuckets.filter(
+      (b) => b.category === 'main' && b.step.conclusion !== 'skipped'
+    );
+    const postBuckets = stepBuckets.filter((b) => b.category === 'post');
 
     // ============================================
-    // PHASE 3: Assign groups to steps based on timestamps + name heuristics
+    // PHASE 3: Identify "Run ..." groups as step boundaries
     // ============================================
-
-    // Known groups that belong to "Set up job" / "Set up runner" step (GitHub Actions standard)
-    const setupJobGroups = new Set([
-      'Runner Image Provisioner',
-      'Operating System',
-      'Runner Image',
-      'GITHUB_TOKEN Permissions',
-      'Secret source',
-      'Prepare workflow directory',
-      'Prepare all required actions',
-      'Getting action download info',
-      'EC2', // Self-hosted runner EC2 info
-    ]);
+    // Self-hosted runner hook scripts should NOT be treated as step boundaries
+    // They belong to "Set up runner" / "Complete runner" steps
 
     /**
-     * Check if a group name is related to setup (Set up job/runner).
-     * This includes known group names and self-hosted runner hook scripts.
+     * Check if a group is a self-hosted runner hook script
+     * These follow patterns like:
+     * - Run '/opt/actions-runner/hook_job_started.sh'
+     * - Run '/opt/actions-runner/hook_job_completed.sh'
      */
-    function isSetupRelatedGroup(groupName: string): boolean {
-      if (setupJobGroups.has(groupName)) {
-        return true;
-      }
+    function isSelfHostedHookGroup(groupName: string): boolean {
       // Self-hosted runner hook scripts
       if (groupName.match(/^Run '\/opt\/actions-runner\/hook_.*\.sh'$/)) {
         return true;
       }
-      // Numbered hook sub-scripts (e.g., "##-script_name.sh")
-      if (groupName.match(/^\d+-\w+\.sh$/)) {
+      // Also match quoted paths with double quotes
+      if (groupName.match(/^Run "\/opt\/actions-runner\/hook_.*\.sh"$/)) {
         return true;
       }
       return false;
     }
 
-    // Known groups that belong to checkout actions
-    const checkoutGroups = new Set([
-      'Getting Git version info',
-      'Initializing the repository',
-      'Disabling automatic garbage collection',
-      'Setting up auth',
-      'Fetching the repository',
-      'Determining the checkout info',
-      'Checking out the ref',
-    ]);
+    /**
+     * Extract action information from a group name.
+     * Handles various formats:
+     * - "Run actions/checkout@v4"
+     * - "Run actions/cache/restore@v4"
+     * - "Run org/repo@branch"
+     * - "Run org/repo/path@version"
+     * - "Run ./.github/actions/my-action"
+     * - "Run echo ..."
+     * - "Run MY_VAR=value" (environment variable)
+     */
+    interface ActionInfo {
+      isAction: boolean;
+      isLocalAction: boolean; // True for .github/actions/...
+      isEnvVar: boolean; // True for VAR=value patterns
+      fullPath: string; // e.g., "actions/checkout" or "org/repo"
+      org: string; // e.g., "actions" or "docker"
+      actionName: string; // e.g., "checkout" or "repo"
+      subAction: string; // e.g., "restore" for actions/cache/restore
+      normalizedName: string; // Combined name without special chars
+      shellCommand: string; // For "Run echo ..." style
+      envVarName: string; // For "Run MY_VAR=..." patterns
+      rawCommand: string; // Everything after "Run "
+      allPathParts: string[]; // All parts of the path for matching
+    }
 
-    // Find special buckets - handle both "Set up job" and "Set up runner" (self-hosted)
-    const setupJobBucket = stepBuckets.find(
-      (b) => b.step.name === 'Set up job' || b.step.name === 'Set up runner'
-    );
-    const checkoutBuckets = stepBuckets.filter(
-      (b) =>
-        b.step.name.toLowerCase().includes('checkout') &&
-        !b.step.name.toLowerCase().includes('post')
-    );
+    function extractActionInfo(groupName: string): ActionInfo {
+      const groupLower = groupName.toLowerCase();
+      const afterRun = groupLower.replace(/^run\s+/, '').trim();
 
-    const orphanedGroups: RawGroup[] = [];
+      const baseResult: ActionInfo = {
+        isAction: false,
+        isLocalAction: false,
+        isEnvVar: false,
+        fullPath: '',
+        org: '',
+        actionName: '',
+        subAction: '',
+        normalizedName: '',
+        shellCommand: '',
+        envVarName: '',
+        rawCommand: afterRun,
+        allPathParts: [],
+      };
 
-    for (const group of allGroups) {
-      // Special case: known "Set up job" / "Set up runner" groups
-      if (setupJobBucket && isSetupRelatedGroup(group.name)) {
-        setupJobBucket.groups.push(group);
-        continue;
+      // 1. Check for local/custom actions: ./.github/actions/ACTION or .github/actions/ACTION
+      const localActionMatch = afterRun.match(
+        /^\.?\/\.github\/actions\/([a-z0-9_-]+)(?:\/([a-z0-9_-]+))?/
+      );
+      if (localActionMatch) {
+        const [, action, subAction] = localActionMatch;
+        const normalizedAction = action.replace(/[-_]/g, '');
+        const normalizedSub = subAction?.replace(/[-_]/g, '') || '';
+        const allParts = [action, ...(subAction ? [subAction] : [])].flatMap((p) => p.split('-'));
+
+        return {
+          ...baseResult,
+          isAction: true,
+          isLocalAction: true,
+          fullPath: `.github/actions/${action}${subAction ? '/' + subAction : ''}`,
+          org: '.github',
+          actionName: normalizedAction,
+          subAction: normalizedSub,
+          normalizedName: normalizedSub ? `${normalizedAction}${normalizedSub}` : normalizedAction,
+          allPathParts: allParts,
+        };
       }
 
-      // Special case: checkout-related groups
-      if (checkoutBuckets.length > 0 && checkoutGroups.has(group.name)) {
-        let bestBucket = checkoutBuckets[0];
-        if (group.firstTimestamp !== undefined) {
-          for (const bucket of checkoutBuckets) {
-            if (bucket.startMs <= group.firstTimestamp) {
-              bestBucket = bucket;
+      // 2. Check for GitHub Actions: org/action@version or org/action/subpath@version
+      // Handle both actions/checkout@v4 and docker/setup-buildx-action@v3
+      const actionPattern = /^([a-z0-9_-]+)\/([a-z0-9_-]+)(?:\/([a-z0-9_-]+))?(?:@[^\s]+)?(?:\s|$)/;
+      const actionMatch = afterRun.match(actionPattern);
+
+      if (actionMatch) {
+        const [, org, action, subAction] = actionMatch;
+        const normalizedAction = action.replace(/[-_]/g, '');
+        const normalizedSub = subAction?.replace(/[-_]/g, '') || '';
+        // Split all path parts by hyphens for better matching
+        const allParts = [org, action, ...(subAction ? [subAction] : [])].flatMap((p) =>
+          p.split('-')
+        );
+
+        return {
+          ...baseResult,
+          isAction: true,
+          fullPath: subAction ? `${org}/${action}/${subAction}` : `${org}/${action}`,
+          org,
+          actionName: normalizedAction,
+          subAction: normalizedSub,
+          normalizedName: normalizedSub ? `${normalizedAction}${normalizedSub}` : normalizedAction,
+          allPathParts: allParts,
+        };
+      }
+
+      // 3. Check for environment variable pattern: VAR=value or export VAR=value
+      const envVarMatch = afterRun.match(/^(?:export\s+)?([A-Z][A-Z0-9_]*)=/i);
+      if (envVarMatch) {
+        return {
+          ...baseResult,
+          isEnvVar: true,
+          envVarName: envVarMatch[1].toLowerCase(),
+        };
+      }
+
+      // 4. Shell command pattern: first word after "Run "
+      const shellMatch = afterRun.match(/^(\w+)/);
+      return {
+        ...baseResult,
+        shellCommand: shellMatch?.[1] || '',
+      };
+    }
+
+    /**
+     * Normalize step name for matching - remove emojis, special chars, common prefixes
+     */
+    function normalizeStepName(stepName: string): {
+      normalized: string;
+      words: string[];
+      hasEmoji: boolean;
+    } {
+      const hasEmoji = /[\u{1F300}-\u{1F9FF}]/u.test(stepName);
+      // Remove emojis and special chars, normalize whitespace
+      const normalized = stepName
+        .toLowerCase()
+        .replace(/[\u{1F300}-\u{1F9FF}]/gu, '') // Remove emojis
+        .replace(/[^\w\s]/g, ' ') // Replace special chars with space
+        .replace(/\s+/g, ' ') // Normalize whitespace
+        .trim();
+
+      const words = normalized.split(' ').filter((w) => w.length > 2);
+
+      return { normalized, words, hasEmoji };
+    }
+
+    /**
+     * Calculate similarity score between a log group name and an API step name.
+     * Returns a score from 0 to 1, where 1 is a perfect match.
+     *
+     * Scoring tiers:
+     * - 0.95: Exact action name match
+     * - 0.90: Multiple keyword matches
+     * - 0.80-0.85: Single strong keyword match or subAction match
+     * - 0.70-0.75: Shell command or partial path match
+     * - 0.60-0.70: Word overlap (improved weighting)
+     * - 0.10: No meaningful match
+     */
+    function calculateStepMatchScore(groupName: string, stepName: string): number {
+      const actionInfo = extractActionInfo(groupName);
+      const stepInfo = normalizeStepName(stepName);
+
+      // ============================================
+      // Comprehensive keyword mappings for actions
+      // ============================================
+      const actionKeywords: Record<string, string[]> = {
+        // === Code Management ===
+        checkout: ['checkout', 'clone', 'code', 'repo', 'repository', 'source', 'fetch'],
+
+        // === Node.js Ecosystem ===
+        setupnode: ['node', 'nodejs', 'npm', 'setup', 'install'],
+        actionsetup: ['setup', 'action', 'pnpm', 'yarn', 'install', 'dependencies'],
+        pnpmaction: ['pnpm', 'setup', 'install', 'package'],
+
+        // === Python ===
+        setuppython: ['python', 'pip', 'setup', 'install', 'venv'],
+        pipaction: ['pip', 'python', 'install', 'package', 'dependencies'],
+
+        // === .NET ===
+        setupdotnet: ['dotnet', 'csharp', 'nuget', 'setup', 'install', 'net'],
+
+        // === Ruby ===
+        setupruby: ['ruby', 'gem', 'bundler', 'setup', 'install', 'rails'],
+
+        // === Java ===
+        setupjava: ['java', 'jdk', 'jre', 'maven', 'gradle', 'setup', 'install'],
+        gradlebuildaction: ['gradle', 'build', 'java', 'compile'],
+
+        // === Go ===
+        setupgo: ['go', 'golang', 'modules', 'setup', 'install', 'mod'],
+
+        // === Rust ===
+        setuprust: ['rust', 'cargo', 'rustup', 'setup', 'install'],
+
+        // === Caching ===
+        cache: ['cache', 'caching', 'restore', 'save', 'store'],
+        restore: ['cache', 'restore', 'download', 'retrieve', 'load'],
+        save: ['cache', 'save', 'upload', 'store', 'persist'],
+
+        // === Artifacts ===
+        uploadartifact: ['upload', 'artifact', 'save', 'store', 'publish', 'output'],
+        downloadartifact: ['download', 'artifact', 'fetch', 'retrieve', 'input'],
+
+        // === Testing ===
+        test: ['test', 'testing', 'spec', 'jest', 'vitest', 'mocha', 'pytest', 'unittest'],
+
+        // === Building ===
+        build: ['build', 'compile', 'bundle', 'webpack', 'rollup', 'esbuild', 'vite'],
+
+        // === Deployment ===
+        deploy: ['deploy', 'deployment', 'release', 'publish', 'ship'],
+
+        // === Docker ===
+        docker: ['docker', 'container', 'image', 'registry', 'dockerfile'],
+        buildpushaction: ['docker', 'build', 'push', 'container', 'image'],
+        setupbuildxaction: ['docker', 'buildx', 'build', 'container', 'multiplatform'],
+        loginaction: ['docker', 'login', 'registry', 'authenticate', 'ecr', 'gcr', 'acr'],
+
+        // === Linting & Formatting ===
+        lint: ['lint', 'eslint', 'prettier', 'format', 'style', 'check'],
+        eslint: ['eslint', 'lint', 'javascript', 'typescript', 'check'],
+        prettier: ['prettier', 'format', 'style', 'code'],
+
+        // === Security ===
+        codeqlaction: ['codeql', 'security', 'scan', 'analysis', 'vulnerability'],
+        dependabot: ['dependabot', 'dependency', 'update', 'security'],
+        trivyaction: ['trivy', 'security', 'scan', 'vulnerability', 'container'],
+
+        // === GitHub Specific ===
+        githubscript: ['github', 'script', 'api', 'octokit'],
+        labeler: ['label', 'labeler', 'tag', 'pr', 'issue'],
+        createrelease: ['release', 'create', 'publish', 'tag', 'version'],
+
+        // === Cloud Providers ===
+        awsactions: ['aws', 'amazon', 's3', 'ecr', 'ecs', 'lambda', 'cloud'],
+        azureactions: ['azure', 'az', 'cloud', 'webapp', 'aks'],
+        googleactions: ['gcloud', 'google', 'gcp', 'cloud', 'gke'],
+
+        // === Kubernetes ===
+        kubernetes: ['kubernetes', 'k8s', 'kubectl', 'deploy', 'helm'],
+
+        // === Coverage & Reporting ===
+        codecov: ['codecov', 'coverage', 'report', 'upload'],
+        coveralls: ['coveralls', 'coverage', 'report'],
+        reportportal: ['report', 'portal', 'launch', 'rp', 'testing'],
+
+        // === Notifications ===
+        slack: ['slack', 'notify', 'notification', 'message', 'alert'],
+      };
+
+      // ============================================
+      // Shell command keyword mappings
+      // ============================================
+      const shellKeywords: Record<string, string[]> = {
+        // Output/Display
+        echo: ['print', 'display', 'show', 'output', 'log', 'debug', 'info'],
+        cat: ['print', 'display', 'show', 'read', 'content', 'file'],
+        ls: ['list', 'display', 'show', 'files', 'directory', 'dir'],
+        pwd: ['directory', 'path', 'current', 'working'],
+
+        // Package managers
+        npm: ['npm', 'install', 'build', 'test', 'run', 'node', 'package'],
+        pnpm: ['pnpm', 'install', 'build', 'test', 'run', 'node', 'package'],
+        yarn: ['yarn', 'install', 'build', 'test', 'run', 'node', 'package'],
+        pip: ['pip', 'install', 'python', 'package', 'dependencies'],
+        cargo: ['cargo', 'rust', 'build', 'test', 'install'],
+        gem: ['gem', 'ruby', 'install', 'bundle'],
+        dotnet: ['dotnet', 'build', 'test', 'publish', 'restore'],
+        go: ['go', 'build', 'test', 'run', 'mod', 'golang'],
+        mvn: ['maven', 'build', 'test', 'package', 'java'],
+        gradle: ['gradle', 'build', 'test', 'java'],
+
+        // Runtimes
+        node: ['node', 'run', 'execute', 'script', 'javascript'],
+        python: ['python', 'run', 'execute', 'script'],
+        ruby: ['ruby', 'run', 'execute', 'script'],
+        java: ['java', 'run', 'execute'],
+
+        // Build tools
+        make: ['make', 'build', 'compile'],
+        cmake: ['cmake', 'build', 'compile', 'configure'],
+
+        // Container/Cloud
+        docker: ['docker', 'container', 'build', 'push', 'run', 'image'],
+        kubectl: ['kubectl', 'kubernetes', 'k8s', 'deploy', 'apply'],
+        helm: ['helm', 'kubernetes', 'chart', 'deploy', 'install'],
+        terraform: ['terraform', 'tf', 'infrastructure', 'iac', 'apply', 'plan'],
+        aws: ['aws', 'amazon', 's3', 'cloud', 'ecr', 'ecs'],
+        az: ['azure', 'az', 'cloud', 'webapp'],
+        gcloud: ['gcloud', 'google', 'gcp', 'cloud'],
+
+        // Version control
+        git: ['git', 'commit', 'push', 'pull', 'clone', 'fetch', 'checkout'],
+
+        // Network
+        curl: ['curl', 'fetch', 'download', 'api', 'request', 'http'],
+        wget: ['wget', 'download', 'fetch', 'http'],
+
+        // Testing
+        jest: ['jest', 'test', 'testing', 'spec'],
+        vitest: ['vitest', 'test', 'testing', 'spec'],
+        pytest: ['pytest', 'test', 'python', 'testing'],
+        eslint: ['eslint', 'lint', 'check', 'style'],
+      };
+
+      // ============================================
+      // Environment variable keywords
+      // ============================================
+      const envVarKeywords: Record<string, string[]> = {
+        path: ['path', 'environment', 'setup'],
+        home: ['home', 'directory', 'environment'],
+        node: ['node', 'version', 'environment'],
+        python: ['python', 'version', 'environment'],
+        java: ['java', 'version', 'environment'],
+        env: ['environment', 'variable', 'setup', 'configure'],
+      };
+
+      let score = 0;
+
+      // ============================================
+      // Scoring logic
+      // ============================================
+
+      if (actionInfo.isAction) {
+        // 1. Exact action name match in step words (highest confidence)
+        const exactMatch = stepInfo.words.some(
+          (w) =>
+            w === actionInfo.actionName ||
+            w === actionInfo.subAction ||
+            (actionInfo.actionName.length > 3 && actionInfo.actionName.includes(w)) ||
+            (w.length > 3 && w.includes(actionInfo.actionName))
+        );
+        if (exactMatch) {
+          score = Math.max(score, 0.95);
+        }
+
+        // 2. Keyword-based matching for known actions
+        const keywords =
+          actionKeywords[actionInfo.normalizedName] ||
+          actionKeywords[actionInfo.actionName] ||
+          actionKeywords[actionInfo.subAction] ||
+          [];
+        const keywordMatches = keywords.filter((kw) =>
+          stepInfo.words.some((w) => w.includes(kw) || kw.includes(w))
+        );
+        if (keywordMatches.length >= 3) {
+          score = Math.max(score, 0.92);
+        } else if (keywordMatches.length === 2) {
+          score = Math.max(score, 0.88);
+        } else if (keywordMatches.length === 1) {
+          score = Math.max(score, 0.75);
+        }
+
+        // 3. Check subAction keywords (e.g., "restore" in "actions/cache/restore")
+        if (actionInfo.subAction) {
+          const subKeywords = actionKeywords[actionInfo.subAction] || [];
+          const subMatches = subKeywords.filter((kw) =>
+            stepInfo.words.some((w) => w.includes(kw) || kw.includes(w))
+          );
+          if (subMatches.length >= 2) {
+            score = Math.max(score, 0.88);
+          } else if (subMatches.length === 1) {
+            score = Math.max(score, 0.82);
+          }
+        }
+
+        // 4. Match by organization name for common orgs (docker/*, aws-actions/*, etc.)
+        const orgKeywords: Record<string, string[]> = {
+          docker: ['docker', 'container', 'image'],
+          aws: ['aws', 'amazon', 'cloud'],
+          azure: ['azure', 'microsoft', 'cloud'],
+          google: ['google', 'gcp', 'cloud'],
+        };
+        if (actionInfo.org && orgKeywords[actionInfo.org]) {
+          const orgMatches = orgKeywords[actionInfo.org].filter((kw) =>
+            stepInfo.words.some((w) => w.includes(kw))
+          );
+          if (orgMatches.length > 0) {
+            score = Math.max(score, 0.7 + orgMatches.length * 0.05);
+          }
+        }
+
+        // 5. Partial path matching using allPathParts
+        const pathMatches = actionInfo.allPathParts.filter(
+          (p) => p.length > 3 && stepInfo.words.some((w) => w.includes(p) || p.includes(w))
+        );
+        if (pathMatches.length >= 2) {
+          score = Math.max(score, 0.8);
+        } else if (pathMatches.length === 1) {
+          score = Math.max(score, 0.65);
+        }
+      } else if (actionInfo.isEnvVar) {
+        // Environment variable matching
+        const varNameParts = actionInfo.envVarName.split('_');
+        const envMatches = varNameParts.filter((p) =>
+          stepInfo.words.some((w) => w.includes(p) || p.includes(w))
+        );
+        if (envMatches.length > 0) {
+          score = Math.max(score, 0.7 + envMatches.length * 0.1);
+        }
+
+        // Check common env var keywords
+        for (const [pattern, keywords] of Object.entries(envVarKeywords)) {
+          if (actionInfo.envVarName.includes(pattern)) {
+            const matches = keywords.filter((kw) => stepInfo.words.some((w) => w.includes(kw)));
+            if (matches.length > 0) {
+              score = Math.max(score, 0.7);
             }
           }
         }
-        bestBucket.groups.push(group);
-        continue;
-      }
-
-      // Special case: "Run actions/checkout@..." groups
-      if (checkoutBuckets.length > 0 && group.name.startsWith('Run actions/checkout')) {
-        let bestBucket = checkoutBuckets[0];
-        if (group.firstTimestamp !== undefined) {
-          for (const bucket of checkoutBuckets) {
-            if (bucket.startMs <= group.firstTimestamp) {
-              bestBucket = bucket;
-            }
-          }
+      } else if (actionInfo.shellCommand) {
+        // Shell command matching
+        const shellKw = shellKeywords[actionInfo.shellCommand] || [];
+        const shellMatches = shellKw.filter((kw) =>
+          stepInfo.words.some((w) => w.includes(kw) || kw.includes(w))
+        );
+        if (shellMatches.length >= 3) {
+          score = Math.max(score, 0.85);
+        } else if (shellMatches.length === 2) {
+          score = Math.max(score, 0.78);
+        } else if (shellMatches.length === 1) {
+          score = Math.max(score, 0.68);
         }
-        bestBucket.groups.push(group);
-        continue;
-      }
 
-      // Special case: "Run actions/upload-artifact@..." groups
-      if (group.name.startsWith('Run actions/upload-artifact')) {
-        const uploadBucket = stepBuckets.find((b) => b.step.name.toLowerCase().includes('upload'));
-        if (uploadBucket) {
-          uploadBucket.groups.push(group);
-          continue;
+        // Check if shell command itself appears in step name
+        if (stepInfo.words.includes(actionInfo.shellCommand)) {
+          score = Math.max(score, 0.75);
         }
       }
 
-      // Try to match "Run <command>" groups to steps by command content
-      if (group.name.startsWith('Run ')) {
-        const groupCommand = group.name.slice(4).toLowerCase();
-        let matchedBucket: StepBucket | null = null;
-
-        for (const bucket of stepBuckets) {
-          const stepNameLower = bucket.step.name.toLowerCase();
-
-          // Match "Run ./.github/actions/<action-name>" to step containing that action name
-          if (groupCommand.startsWith('./.github/actions/')) {
-            const actionName = groupCommand.slice('./.github/actions/'.length).split('/')[0];
-            const actionNameNormalized = actionName.replace(/-/g, ' ').replace(/_/g, ' ');
-            if (
-              stepNameLower.includes(actionNameNormalized) ||
-              stepNameLower.replace(/-/g, ' ').replace(/_/g, ' ').includes(actionNameNormalized)
-            ) {
-              matchedBucket = bucket;
-              break;
-            }
-          }
-
-          // Match variable assignments like "Run IDENTIFIER=..." to steps with related names
-          if (groupCommand.match(/^[a-z_][a-z0-9_]*=/i)) {
-            const varName = groupCommand.split('=')[0].toLowerCase();
-            if (stepNameLower.includes(varName)) {
-              matchedBucket = bucket;
-              break;
-            }
-          }
-
-          // e.g., "mkdir -p reports" matches "Generate security report"
-          if (
-            groupCommand.includes('mkdir') &&
-            stepNameLower.includes('report') &&
-            stepNameLower.includes('generate')
-          ) {
-            matchedBucket = bucket;
-            break;
-          }
-          // e.g., "echo "# 🔒 Security Scan Results"" matches "Generate security summary"
-          if (
-            groupCommand.includes('summary') ||
-            (groupCommand.includes('security') &&
-              groupCommand.includes('scan') &&
-              groupCommand.includes('results'))
-          ) {
-            if (stepNameLower.includes('summary')) {
-              matchedBucket = bucket;
-              break;
-            }
-          }
+      // 6. General word overlap (improved fallback with better weighting)
+      if (score < 0.6) {
+        const commandWords = actionInfo.rawCommand
+          .replace(/[^\w\s]/g, ' ')
+          .split(/\s+/)
+          .filter((w) => w.length > 3);
+        const overlap = commandWords.filter((cw) =>
+          stepInfo.words.some((sw) => sw.includes(cw) || cw.includes(sw))
+        );
+        // Improved weighting: base 0.55 + 0.12 per overlap, max 0.85
+        if (overlap.length > 0) {
+          score = Math.max(score, 0.55 + Math.min(overlap.length * 0.12, 0.3));
         }
-
-        if (matchedBucket) {
-          matchedBucket.groups.push(group);
-          continue;
-        }
-
-        // If no special match found for "Run <command>" groups:
-        // These are typically shell commands that represent actual step execution.
-        // If timestamp would assign to setup step but this is NOT a setup-related command,
-        // it likely belongs to the next step in order.
-        const timestampBucket = findStepForTimestamp(group.firstTimestamp);
-        const isSetupStep =
-          timestampBucket?.step.name === 'Set up job' ||
-          timestampBucket?.step.name === 'Set up runner';
-        if (timestampBucket && isSetupStep && !isSetupRelatedGroup(group.name)) {
-          // Find the next step after setup by displayIndex
-          const nextStep = stepBuckets.find((b) => b.displayIndex > timestampBucket.displayIndex);
-          if (nextStep) {
-            nextStep.groups.push(group);
-            continue;
-          }
-        }
-
-        // Fall through to default timestamp assignment below
       }
 
-      // Default: use timestamp-based assignment
-      const bucket = findStepForTimestamp(group.firstTimestamp);
-      if (bucket) {
-        bucket.groups.push(group);
-      } else {
-        orphanedGroups.push(group);
+      // 7. No meaningful match - return low score
+      return score > 0 ? score : 0.1;
+    }
+
+    // NOTE: findBestNameBasedMatch was removed - we now use timestamp-first matching
+
+    interface GroupBoundary {
+      groupIndex: number;
+      group: RawGroup;
+      isHook: boolean; // True if this is a self-hosted hook script
+    }
+
+    const allRunGroups: GroupBoundary[] = [];
+    for (let i = 0; i < topLevelGroups.length; i++) {
+      const group = topLevelGroups[i];
+      if (group.name.startsWith('Run ') && group.depth === 0) {
+        allRunGroups.push({
+          groupIndex: i,
+          group,
+          isHook: isSelfHostedHookGroup(group.name),
+        });
       }
     }
 
-    // Assign ungrouped lines to steps
-    // Strategy:
-    // 1. Use content-based heuristics for special patterns (Post job cleanup, etc.)
-    // 2. Then check if the line falls within a step's API time range
-    // 3. Fall back to surrounding groups
+    // Separate hook groups from actual step boundary groups
+    const hookGroups = allRunGroups.filter((b) => b.isHook);
+    const stepBoundaryGroups = allRunGroups.filter((b) => !b.isHook);
+
+    // ============================================
+    // PHASE 4: Sequential matching of steps to groups
+    // ============================================
+
+    // Find the first non-hook "Run ..." group index
+    const firstStepRunIndex =
+      stepBoundaryGroups.length > 0 ? stepBoundaryGroups[0].groupIndex : topLevelGroups.length;
+
+    // Find the last non-hook "Run ..." group index
+    const lastStepRunIndex =
+      stepBoundaryGroups.length > 0
+        ? stepBoundaryGroups[stepBoundaryGroups.length - 1].groupIndex
+        : -1;
+
+    // Pre-step groups (before first actual step "Run ...") → setup steps
+    const preStepGroups = topLevelGroups.slice(0, firstStepRunIndex);
+
+    // Post-step groups (after last actual step "Run ...") → post/complete steps
+    const postStepGroups = lastStepRunIndex >= 0 ? topLevelGroups.slice(lastStepRunIndex + 1) : [];
+
+    // Assign pre-step groups to setup buckets
+    // Split between "Set up job" and "Set up runner" if both exist
+    if (setUpJobBucket || setUpRunnerBucket) {
+      // Find where "Set up runner" hook starts (if any)
+      const jobStartedHook = hookGroups.find((h) => h.group.name.includes('hook_job_started'));
+      const hookStartIndex = jobStartedHook?.groupIndex ?? preStepGroups.length;
+
+      // Groups before hook → "Set up job"
+      // Groups from hook onwards (but still in pre-step) → "Set up runner"
+      for (let i = 0; i < preStepGroups.length; i++) {
+        const group = preStepGroups[i];
+        const groupIndexInAll = i; // This is relative to preStepGroups
+
+        if (setUpRunnerBucket && groupIndexInAll >= hookStartIndex) {
+          setUpRunnerBucket.groups.push(group);
+        } else if (setUpJobBucket) {
+          setUpJobBucket.groups.push(group);
+        } else if (setUpRunnerBucket) {
+          setUpRunnerBucket.groups.push(group);
+        }
+      }
+    }
+
+    // ============================================
+    // PHASE 4: Monotonic "advance or stay" step assignment
+    // ============================================
+    //
+    // Key principle: sequential assignment with timestamps only as a GUARD
+    // to decide whether multiple "Run ..." groups should stay in the current step
+    // (composite actions) or advance to the next step.
+    //
+    // This avoids:
+    // - Backward assignment (logs going to earlier steps)
+    // - Timestamp window overlap issues
+    // - "Fallback-previous" causing everything to stick to one step
+
+    // Use both sets: sometimes skipped steps have no "Run ..." groups in logs
+    const mainBucketsAll = stepBuckets.filter((b) => b.category === 'main');
+    const mainBucketsNonSkipped = mainBucketsAll.filter((b) => b.step.conclusion !== 'skipped');
+
+    // Pick the mapping list that best matches the log reality
+    const mainBucketsForMapping =
+      stepBoundaryGroups.length === mainBucketsNonSkipped.length
+        ? mainBucketsNonSkipped
+        : stepBoundaryGroups.length === mainBucketsAll.length
+          ? mainBucketsAll
+          : mainBucketsNonSkipped.length > 0
+            ? mainBucketsNonSkipped
+            : mainBucketsAll;
+
+    // Smaller tolerance — big tolerances create overlaps and pull logs backwards
+    const STEP_BOUNDARY_TOLERANCE_MS = 250;
+
+    /**
+     * Convert ISO timestamp string to milliseconds
+     */
+    const isoToMs = (iso?: string): number | undefined => {
+      if (!iso) return undefined;
+      const ms = Date.parse(iso);
+      return Number.isFinite(ms) ? ms : undefined;
+    };
+
+    let stepPtr = 0;
+
+    type BoundaryReason =
+      | 'first'
+      | 'stay'
+      | 'advance-nextStart'
+      | 'advance-currentEnd'
+      | 'advance-no-ts'
+      | 'no-step-left'
+      | 'hook-setup';
+
+    const boundaryDecisions: Array<{
+      i: number;
+      groupIndex: number;
+      groupName: string;
+      ts?: number;
+      assignedStep: string;
+      reason: BoundaryReason;
+    }> = [];
+
+    for (let i = 0; i < stepBoundaryGroups.length; i++) {
+      const boundary = stepBoundaryGroups[i];
+      const nextBoundary = stepBoundaryGroups[i + 1];
+
+      // Segment = all top-level groups from this Run... until the next Run...
+      const segmentEnd = nextBoundary ? nextBoundary.groupIndex : lastStepRunIndex + 1;
+      const segmentGroups = topLevelGroups.slice(boundary.groupIndex, segmentEnd);
+
+      const ts = boundary.group.firstTimestamp ?? boundary.group.lastTimestamp;
+
+      let reason: BoundaryReason = 'stay';
+
+      // Check for hook groups first - route to setup
+      if (isSelfHostedHookGroup(boundary.group.name)) {
+        const hookTarget = setUpRunnerBucket || setUpJobBucket;
+        if (hookTarget) {
+          hookTarget.groups.push(...segmentGroups);
+        }
+        boundaryDecisions.push({
+          i,
+          groupIndex: boundary.groupIndex,
+          groupName: boundary.group.name,
+          ts,
+          assignedStep: hookTarget?.step.name ?? 'NONE',
+          reason: 'hook-setup',
+        });
+        continue;
+      }
+
+      if (i === 0) {
+        stepPtr = 0;
+        reason = 'first';
+      } else if (stepPtr >= mainBucketsForMapping.length) {
+        reason = 'no-step-left';
+      } else if (stepPtr < mainBucketsForMapping.length - 1) {
+        const current = mainBucketsForMapping[stepPtr];
+        const next = mainBucketsForMapping[stepPtr + 1];
+
+        const nextStart = isoToMs(next.step.startedAt);
+        const currentEnd = isoToMs(current.step.completedAt);
+
+        if (ts === undefined) {
+          // No timestamps in logs => behave like strict sequential
+          stepPtr++;
+          reason = 'advance-no-ts';
+        } else {
+          // If the log timestamp has reached the next step's start, move forward
+          if (nextStart !== undefined && ts >= nextStart - STEP_BOUNDARY_TOLERANCE_MS) {
+            stepPtr++;
+            reason = 'advance-nextStart';
+          }
+          // Or if it's clearly after current end
+          else if (currentEnd !== undefined && ts > currentEnd + STEP_BOUNDARY_TOLERANCE_MS) {
+            stepPtr++;
+            reason = 'advance-currentEnd';
+          } else {
+            // Otherwise: stay (this is what makes multiple Run... groups fold into one step)
+            reason = 'stay';
+          }
+        }
+      }
+
+      const target = mainBucketsForMapping[Math.min(stepPtr, mainBucketsForMapping.length - 1)];
+      if (target) {
+        target.groups.push(...segmentGroups);
+      }
+
+      boundaryDecisions.push({
+        i,
+        groupIndex: boundary.groupIndex,
+        groupName: boundary.group.name,
+        ts,
+        assignedStep: target?.step.name ?? 'NONE',
+        reason,
+      });
+    }
+
+    // Debug output
+    const DEBUG_LOG_PARSER = true;
+    if (DEBUG_LOG_PARSER) {
+      console.groupCollapsed('[LogParser] Main boundary→step decisions');
+      console.table(
+        boundaryDecisions.map((d) => ({
+          '#': d.i,
+          groupIndex: d.groupIndex,
+          Group: d.groupName.substring(0, 45) + (d.groupName.length > 45 ? '...' : ''),
+          Ts: d.ts ? new Date(d.ts).toISOString() : '-',
+          Step: d.assignedStep.substring(0, 30),
+          Reason: d.reason,
+        }))
+      );
+      console.groupEnd();
+
+      console.log('[LogParser] Mapping counts', {
+        stepBoundaries: stepBoundaryGroups.length,
+        mainAll: mainBucketsAll.length,
+        mainNonSkipped: mainBucketsNonSkipped.length,
+        using: mainBucketsForMapping.length,
+      });
+    }
+
+    // Warn about empty main buckets
+    const emptyBuckets = mainBucketsForMapping.filter((b) => b.groups.length === 0);
+    if (emptyBuckets.length > 0) {
+      console.warn(
+        '[LogParser] ⚠️ Steps with NO matched groups:',
+        emptyBuckets.map((b) => ({
+          name: b.step.name,
+          number: b.step.number,
+          status: b.step.conclusion || b.step.status,
+        }))
+      );
+    }
+
+    // Assign post-step groups to post/complete buckets
+    if (postStepGroups.length > 0) {
+      // Find where "Complete runner" hook starts (if any)
+      const jobCompletedHook = hookGroups.find((h) => h.group.name.includes('hook_job_completed'));
+
+      // ============================================
+      // Handle "Post job cleanup." container specially
+      // ============================================
+      // GitHub wraps post steps in a container group. We need to distribute
+      // its children to individual post step buckets.
+      const postJobCleanupGroup = postStepGroups.find((g) =>
+        g.name.toLowerCase().includes('post job cleanup')
+      );
+
+      if (postJobCleanupGroup && postBuckets.length > 0) {
+        const originalChildren = postJobCleanupGroup.children;
+        const leftoverChildren: RawGroup[] = [];
+        postJobCleanupGroup.children = []; // Detach to prevent duplication
+
+        const usedPostIndices = new Set<number>();
+
+        for (let i = 0; i < originalChildren.length; i++) {
+          const child = originalChildren[i];
+          const match = findBestPostChildMatch(child, postBuckets, usedPostIndices, i);
+
+          if (match && match.rawScore >= 0.5) {
+            match.bucket.groups.push(child);
+            usedPostIndices.add(match.index);
+            console.log(
+              `[LogParser] Post child matched: "${child.name}" → "${match.bucket.step.name}" (score: ${match.rawScore.toFixed(2)})`
+            );
+          } else {
+            leftoverChildren.push(child);
+          }
+        }
+
+        // Keep any unmatched children under the container
+        postJobCleanupGroup.children = leftoverChildren;
+
+        // Attach the container itself if it has own lines or unmatched children
+        if (postJobCleanupGroup.lines.length > 0 || postJobCleanupGroup.children.length > 0) {
+          if (completeJobBucket) {
+            completeJobBucket.groups.push(postJobCleanupGroup);
+          } else if (postBuckets.length > 0) {
+            postBuckets[postBuckets.length - 1].groups.push(postJobCleanupGroup);
+          }
+        }
+      }
+
+      // Process remaining post-step groups (skip the container if already handled)
+      for (const group of postStepGroups) {
+        // Skip the container - already handled above
+        if (group === postJobCleanupGroup) continue;
+
+        const groupIndex = topLevelGroups.indexOf(group);
+
+        // Check if this is a hook group for complete runner
+        if (isSelfHostedHookGroup(group.name) && completeRunnerBucket) {
+          completeRunnerBucket.groups.push(group);
+          continue;
+        }
+
+        // Check if this is after the job_completed hook
+        if (jobCompletedHook && groupIndex >= jobCompletedHook.groupIndex && completeRunnerBucket) {
+          completeRunnerBucket.groups.push(group);
+          continue;
+        }
+
+        // Try to match to a post step
+        const matchingPostBucket = findPostBucketForGroup(group, postBuckets);
+        if (matchingPostBucket) {
+          matchingPostBucket.groups.push(group);
+        } else if (completeJobBucket) {
+          completeJobBucket.groups.push(group);
+        } else if (postBuckets.length > 0) {
+          postBuckets[postBuckets.length - 1].groups.push(group);
+        }
+      }
+    }
+
+    /**
+     * Find the best post bucket for a "Run ..." group.
+     * Uses the same scoring logic as main matching for consistency.
+     */
+    function findPostBucketForGroup(
+      group: RawGroup,
+      buckets: StepBucket[]
+    ): StepBucket | undefined {
+      if (buckets.length === 0) return undefined;
+
+      const groupNameLower = group.name.toLowerCase();
+
+      // Known post-step action patterns (action → step keywords)
+      const postStepPatterns: Record<string, string[]> = {
+        'actions/checkout': ['checkout', 'clone', 'code', 'repo'],
+        'actions/setup-node': ['node', 'setup', 'npm', 'yarn', 'pnpm'],
+        'actions/setup-python': ['python', 'setup', 'pip'],
+        'actions/setup-java': ['java', 'setup', 'jdk', 'maven', 'gradle'],
+        'actions/setup-go': ['go', 'golang', 'setup'],
+        'actions/setup-dotnet': ['dotnet', 'setup', 'csharp'],
+        'actions/setup-ruby': ['ruby', 'setup', 'bundler'],
+        'actions/cache': ['cache', 'restore', 'save'],
+        'actions/upload-artifact': ['upload', 'artifact'],
+        'actions/download-artifact': ['download', 'artifact'],
+        'docker/setup-buildx-action': ['docker', 'buildx', 'build'],
+        'docker/login-action': ['docker', 'login', 'registry'],
+        'docker/build-push-action': ['docker', 'build', 'push'],
+      };
+
+      let bestMatch: StepBucket | undefined;
+      let bestScore = 0;
+
+      for (const bucket of buckets) {
+        const stepNameLower = bucket.step.name.toLowerCase();
+        // Remove "Post " prefix for matching
+        const cleanStepName = stepNameLower.replace(/^post\s+/, '');
+        const stepWords = cleanStepName.split(/\s+/);
+
+        let score = 0;
+
+        // 1. Check known patterns first
+        for (const [pattern, keywords] of Object.entries(postStepPatterns)) {
+          if (groupNameLower.includes(pattern)) {
+            const matches = keywords.filter((kw) => stepWords.some((sw) => sw.includes(kw)));
+            if (matches.length > 0) {
+              score = Math.max(score, 0.8 + matches.length * 0.05);
+            }
+          }
+        }
+
+        // 2. Extract action name and match generically
+        const actionMatch = groupNameLower.match(/run\s+([a-z0-9_-]+)\/([a-z0-9_-]+)/);
+        if (actionMatch) {
+          const [, org, action] = actionMatch;
+          const actionParts = action.split('-');
+
+          // Check if any part of action name is in step name
+          const partMatches = actionParts.filter(
+            (p) => p.length > 2 && stepWords.some((sw) => sw.includes(p) || p.includes(sw))
+          );
+          if (partMatches.length > 0) {
+            score = Math.max(score, 0.6 + partMatches.length * 0.1);
+          }
+
+          // Check organization name
+          if (stepWords.some((sw) => sw.includes(org))) {
+            score = Math.max(score, 0.5);
+          }
+        }
+
+        // 3. Use the scoring function for more complex matching
+        const nameScore = calculateStepMatchScore(group.name, cleanStepName);
+        score = Math.max(score, nameScore * 0.9); // Slightly discount since it's post-step
+
+        if (score > bestScore) {
+          bestScore = score;
+          bestMatch = bucket;
+        }
+      }
+
+      // Only return if we have a reasonable match (> 0.5)
+      return bestScore > 0.5 ? bestMatch : undefined;
+    }
+
+    /**
+     * Find the best post bucket for a child group within "Post job cleanup." container.
+     * Used to distribute children like "Post actions/checkout@v4" to individual "Post Checkout" buckets.
+     */
+    function findBestPostChildMatch(
+      child: RawGroup,
+      buckets: StepBucket[],
+      used: Set<number>,
+      preferredIndex?: number
+    ): { bucket: StepBucket; index: number; score: number; rawScore: number } | undefined {
+      let best: { bucket: StepBucket; index: number; score: number; rawScore: number } | undefined;
+
+      // Normalize: "Post actions/checkout@v4" should score like "Run actions/checkout@v4"
+      const groupNameForMatch = child.name.replace(/^post\s+/i, 'Run ');
+
+      for (let i = 0; i < buckets.length; i++) {
+        if (used.has(i)) continue;
+
+        // Normalize: "Post Checkout" should score like "Checkout"
+        const stepNameForMatch = buckets[i].step.name.replace(/^post\s+/i, '');
+
+        const rawScore = calculateStepMatchScore(groupNameForMatch, stepNameForMatch);
+        const positionBonus = preferredIndex !== undefined && i === preferredIndex ? 0.05 : 0;
+        const score = rawScore + positionBonus;
+
+        if (!best || score > best.score) {
+          best = { bucket: buckets[i], index: i, score, rawScore };
+        }
+      }
+
+      return best;
+    }
+
+    // ============================================
+    // Build topLevelIndex → Bucket mapping for Phase 5
+    // ============================================
+    // This map is used to attach ungrouped lines to the correct step
+    // based on which bucket owns the preceding top-level group.
+    const topLevelIndexToBucket = new Map<number, StepBucket>();
+
+    for (const bucket of stepBuckets) {
+      for (const g of bucket.groups) {
+        if (g.topLevelIndex !== undefined) {
+          const prev = topLevelIndexToBucket.get(g.topLevelIndex);
+          if (prev && prev !== bucket) {
+            console.warn(
+              `[LogParser] Top-level group #${g.topLevelIndex} assigned to multiple buckets:`,
+              { group: g.name, prev: prev.step.name, next: bucket.step.name }
+            );
+          } else {
+            topLevelIndexToBucket.set(g.topLevelIndex, bucket);
+          }
+        }
+      }
+    }
+
+    // ============================================
+    // PHASE 5: Assign ungrouped lines to steps
+    // ============================================
     const orphanedLines: string[] = [];
 
-    // Build a sorted list of (timestamp, bucket) pairs from groups
-    const groupTimestampBuckets: { ts: number; bucket: StepBucket }[] = [];
-    for (const bucket of stepBuckets) {
-      for (const group of bucket.groups) {
-        if (group.firstTimestamp !== undefined) {
-          groupTimestampBuckets.push({ ts: group.firstTimestamp, bucket });
-        }
-      }
-    }
-    groupTimestampBuckets.sort((a, b) => a.ts - b.ts);
+    // Find setup bucket (use "Set up job" or "Set up runner")
+    const setupBucket = setUpJobBucket || setUpRunnerBucket;
 
-    // Find special steps by name
-    const postCheckoutStep = stepBuckets.find((b) =>
-      b.step.name.toLowerCase().includes('post checkout')
-    );
-    const completeJobStep = stepBuckets.find((b) => b.step.name.toLowerCase() === 'complete job');
-
-    // Track when we've seen special markers
+    // Track content-based state for post cleanup
     let inPostCleanup = false;
-    let inCompleteJob = false;
+    let currentPostBucket: StepBucket | undefined = undefined;
 
     for (const item of ungroupedLines) {
       let assignedBucket: StepBucket | undefined = undefined;
       const lineContent = item.line.toLowerCase();
 
-      // Content-based heuristics for special patterns
+      // Content-based heuristics for post cleanup
       if (lineContent.includes('post job cleanup')) {
         inPostCleanup = true;
-        inCompleteJob = false;
+        // Find the first post bucket that matches
+        currentPostBucket =
+          postBuckets.find((b) => b.step.name.toLowerCase().includes('post checkout')) ||
+          postBuckets[0];
       } else if (lineContent.includes('cleaning up orphan processes')) {
-        inCompleteJob = true;
-        inPostCleanup = false;
+        currentPostBucket = completeJobBucket;
       }
 
-      // Assign based on current state
-      if (inCompleteJob && completeJobStep) {
-        assignedBucket = completeJobStep;
-      } else if (inPostCleanup && postCheckoutStep) {
-        assignedBucket = postCheckoutStep;
+      if (inPostCleanup && currentPostBucket) {
+        assignedBucket = currentPostBucket;
       }
 
-      // Special handling for action preparation lines
-      // "Prepare all required actions" and "Getting action download info" appear:
-      // 1. At the start of workflow (before any Run group) - these go to "Set up job"
-      // 2. Between steps (after a Run group ends) - these go to the NEXT step
-      const isActionPrepLine =
-        lineContent === 'prepare all required actions' ||
-        lineContent === 'getting action download info' ||
-        lineContent.startsWith('download action repository');
+      // ============================================
+      // FIX E: Check topLevelIndexToBucket map FIRST
+      // ============================================
+      // If we have a preceding group, attach to the bucket that owns that group.
+      // This ensures ungrouped lines go to the same bucket as their preceding group,
+      // even when Phase 4 matched groups to non-sequential buckets.
+      if (!assignedBucket && item.afterGroupIndex >= 0) {
+        const mapped = topLevelIndexToBucket.get(item.afterGroupIndex);
+        if (mapped) assignedBucket = mapped;
+      }
 
-      if (!assignedBucket && isActionPrepLine && item.timestamp !== undefined) {
-        // Find the previous group that ended before this line
-        let prevGroupEntry: { ts: number; bucket: StepBucket } | undefined = undefined;
-        for (const entry of groupTimestampBuckets) {
-          if (entry.ts <= item.timestamp) {
-            prevGroupEntry = entry;
-          } else {
-            break;
-          }
+      // THEN fall back to setup/post heuristics only if mapping didn't work
+      if (!assignedBucket) {
+        if (item.afterGroupIndex < 0) {
+          // Before any groups → setup
+          assignedBucket = setupBucket;
+        } else if (item.afterGroupIndex < firstStepRunIndex) {
+          // Between setup groups → setup
+          assignedBucket = setupBucket;
+        } else if (item.afterGroupIndex >= lastStepRunIndex && postBuckets.length > 0) {
+          // After last run group → post
+          assignedBucket = postBuckets[0];
         }
-
-        // Check if there's a previous "Run ..." group - if so, assign to NEXT step
-        // If no previous "Run ..." group, these are initial setup lines for "Set up job"
-        const hasPreviousRunGroup =
-          prevGroupEntry !== undefined &&
-          prevGroupEntry.bucket.groups.some((g) => g.name.startsWith('Run '));
-
-        if (hasPreviousRunGroup) {
-          // Find the next log group and assign to its step
-          for (const entry of groupTimestampBuckets) {
-            if (entry.ts > item.timestamp) {
-              assignedBucket = entry.bucket;
-              break;
-            }
-          }
-        }
-        // If no previous Run group, let the normal timestamp-based assignment handle it
-        // (it will assign to Set up job based on the timestamp)
       }
 
-      // If not assigned by heuristics, use timestamp-based matching
+      // Final fallback: use timestamp
       if (!assignedBucket && item.timestamp !== undefined) {
-        // Find previous and next group relative to this line
-        let prevGroupEntry: { ts: number; bucket: StepBucket } | undefined = undefined;
-        let nextGroupEntry: { ts: number; bucket: StepBucket } | undefined = undefined;
-        for (const entry of groupTimestampBuckets) {
-          if (entry.ts <= item.timestamp) {
-            prevGroupEntry = entry;
-          } else if (!nextGroupEntry) {
-            nextGroupEntry = entry;
-            break;
-          }
-        }
-
-        // Find all steps whose API time range contains this timestamp
-        const matchingSteps = stepBuckets.filter((bucket) => {
-          const bufferMs = 999;
-          return (
-            item.timestamp !== undefined &&
-            item.timestamp >= bucket.startMs &&
-            item.timestamp <= bucket.endMs + bufferMs
-          );
-        });
-
-        if (matchingSteps.length === 1) {
-          assignedBucket = matchingSteps[0];
-        } else if (matchingSteps.length > 1) {
-          // Multiple steps match - use surrounding groups to decide
-          if (prevGroupEntry && matchingSteps.includes(prevGroupEntry.bucket)) {
-            assignedBucket = prevGroupEntry.bucket;
-          } else if (nextGroupEntry && matchingSteps.includes(nextGroupEntry.bucket)) {
-            assignedBucket = nextGroupEntry.bucket;
-          } else {
-            // Fall back to the step with the smallest displayIndex
-            assignedBucket = matchingSteps.reduce((a, b) =>
-              a.displayIndex < b.displayIndex ? a : b
-            );
-          }
-        } else {
-          // No step matches by time - use surrounding groups
-          if (prevGroupEntry) {
-            assignedBucket = prevGroupEntry.bucket;
-          } else if (nextGroupEntry) {
-            assignedBucket = nextGroupEntry.bucket;
-          }
-        }
-
-        // Final fallback
-        if (!assignedBucket) {
-          assignedBucket = findStepForTimestamp(item.timestamp);
-        }
+        assignedBucket = findStepForTimestamp(item.timestamp, stepBuckets);
       }
 
       if (assignedBucket) {
@@ -673,6 +1381,34 @@
         orphanedLines.push(item.line);
       }
     }
+
+    /**
+     * Find step bucket for a timestamp (fallback only)
+     * FIX C: Skip steps with missing timestamps to avoid matching everything
+     */
+    function findStepForTimestamp(ts: number, buckets: StepBucket[]): StepBucket | undefined {
+      for (const bucket of buckets) {
+        // Skip buckets without both timestamps - they would match everything
+        if (!bucket.step.startedAt || !bucket.step.completedAt) continue;
+
+        const startMs = new Date(bucket.step.startedAt).getTime();
+        const endMs = new Date(bucket.step.completedAt).getTime() + 999;
+        if (ts >= startMs && ts <= endMs) {
+          return bucket;
+        }
+      }
+      return undefined;
+    }
+
+    // ============================================
+    // Collect orphaned groups using topLevelIndex (not name)
+    // ============================================
+    // FIX: Using names as keys is incorrect because group names are NOT unique.
+    // Multiple "Run actions/checkout@v4" groups would cause some to be "lost".
+    // Using topLevelIndex ensures each group is tracked individually.
+    const orphanedGroups = topLevelGroups.filter(
+      (g) => g.topLevelIndex !== undefined && !topLevelIndexToBucket.has(g.topLevelIndex)
+    );
 
     // ============================================
     // PHASE 4: Build final LogGroup structure
@@ -1308,120 +2044,18 @@
       </div>
     {:else}
       <div class="groups">
+        <!-- Use recursive LogGroupComponent for arbitrary nesting depth -->
         {#each parsedLogs.groups as group (group.id)}
-          <div
-            id={group.id}
-            class="group"
-            class:nested={group.isNested}
-            class:failed={group.conclusion === 'failure'}
-            class:orphaned={group.isOrphaned}
-          >
-            <button class="group-header" on:click={() => toggleGroup(group)}>
-              <span
-                class="chevron codicon codicon-{group.expanded ? 'chevron-down' : 'chevron-right'}"
-              ></span>
-              {#if group.conclusion === 'failure'}
-                <span class="status-icon failed" title="Failed">
-                  <span class="codicon codicon-error"></span>
-                </span>
-              {:else if group.isOrphaned}
-                <span class="status-icon warning" title="Unmatched Logs">
-                  <span class="codicon codicon-warning"></span>
-                </span>
-              {/if}
-              <span class="group-name">{group.name}</span>
-              {#if group.duration !== undefined}
-                <span class="step-duration">{formatDuration(group.duration)}</span>
-              {/if}
-            </button>
-            {#if group.expanded}
-              <div class="group-content">
-                {#if group.isOrphaned}
-                  <div class="orphaned-actions">
-                    <button on:click={viewRawLogs} title="View raw logs in text editor">
-                      <span class="codicon codicon-file-code"></span>
-                      View Raw Logs
-                    </button>
-                  </div>
-                {/if}
-                <!-- Render children groups FIRST (matches GitHub UI order) -->
-                {#each group.children as child (child.id)}
-                  <div id={child.id} class="group nested-child">
-                    <button class="group-header" on:click={() => toggleGroup(child)}>
-                      <span
-                        class="chevron codicon codicon-{child.expanded
-                          ? 'chevron-down'
-                          : 'chevron-right'}"
-                      ></span>
-                      <span class="group-name">{child.name}</span>
-                    </button>
-                    {#if child.expanded}
-                      <div class="group-content">
-                        {#each child.lines as childLine, childIdx (childIdx)}
-                          {@const childFormatted = formatLogLine(childLine)}
-                          <pre
-                            class="log-line"
-                            class:search-match={lineMatchesSearch(childLine)}
-                            class:error-line={childFormatted.isError}>{#each childFormatted.parts as part, partIdx (partIdx)}{#if part.type === 'error-prefix'}<span
-                                  class="error-prefix">{part.content}</span
-                                >{:else if part.type === 'url'}<button
-                                  class="log-url"
-                                  on:click={() => openUrl(part.content)}
-                                  title="Open in browser: {part.content}">{part.content}</button
-                                >{:else}{part.content}{/if}{/each}</pre>
-                        {/each}
-                        <!-- Render deeply nested groups (level 2+) -->
-                        {#each child.children as grandchild (grandchild.id)}
-                          <div id={grandchild.id} class="group nested-child">
-                            <button class="group-header" on:click={() => toggleGroup(grandchild)}>
-                              <span
-                                class="chevron codicon codicon-{grandchild.expanded
-                                  ? 'chevron-down'
-                                  : 'chevron-right'}"
-                              ></span>
-                              <span class="group-name">{grandchild.name}</span>
-                            </button>
-                            {#if grandchild.expanded}
-                              <div class="group-content">
-                                {#each grandchild.lines as grandLine, grandIdx (grandIdx)}
-                                  {@const grandFormatted = formatLogLine(grandLine)}
-                                  <pre
-                                    class="log-line"
-                                    class:search-match={lineMatchesSearch(grandLine)}
-                                    class:error-line={grandFormatted.isError}>{#each grandFormatted.parts as part, gPartIdx (gPartIdx)}{#if part.type === 'error-prefix'}<span
-                                          class="error-prefix">{part.content}</span
-                                        >{:else if part.type === 'url'}<button
-                                          class="log-url"
-                                          on:click={() => openUrl(part.content)}
-                                          title="Open in browser: {part.content}"
-                                          >{part.content}</button
-                                        >{:else}{part.content}{/if}{/each}</pre>
-                                {/each}
-                              </div>
-                            {/if}
-                          </div>
-                        {/each}
-                      </div>
-                    {/if}
-                  </div>
-                {/each}
-                <!-- Render ungrouped lines AFTER children groups (matches GitHub UI order) -->
-                {#each group.lines as line, lineIdx (lineIdx)}
-                  {@const formatted = formatLogLine(line)}
-                  <pre
-                    class="log-line"
-                    class:search-match={lineMatchesSearch(line)}
-                    class:error-line={formatted.isError}>{#each formatted.parts as part, pIdx (pIdx)}{#if part.type === 'error-prefix'}<span
-                          class="error-prefix">{part.content}</span
-                        >{:else if part.type === 'url'}<button
-                          class="log-url"
-                          on:click={() => openUrl(part.content)}
-                          title="Open in browser: {part.content}">{part.content}</button
-                        >{:else}{part.content}{/if}{/each}</pre>
-                {/each}
-              </div>
-            {/if}
-          </div>
+          <LogGroupComponent
+            {group}
+            depth={0}
+            {formatLogLine}
+            {lineMatchesSearch}
+            onToggle={toggleGroup}
+            onOpenUrl={openUrl}
+            onViewRawLogs={viewRawLogs}
+            {formatDuration}
+          />
         {/each}
       </div>
     {/if}
@@ -1687,183 +2321,8 @@
     padding: 0 8px;
   }
 
-  .group {
-    margin-bottom: 2px;
-  }
-
-  /* Top-level nested groups (e.g., when parsedLogs has nested structure) */
-  .group.nested {
-    margin-left: 16px;
-  }
-
-  /* Nested child groups within group-content - no extra indentation needed */
-  /* They align with log lines since group-content already has padding */
-  .group.nested-child {
-    margin-left: 0;
-  }
-
-  .group-header {
-    display: flex;
-    align-items: center;
-    gap: 4px;
-    width: 100%;
-    padding: 6px 8px;
-    background: var(--vscode-list-hoverBackground);
-    border: none;
-    border-radius: 4px;
-    color: var(--vscode-foreground);
-    cursor: pointer;
-    text-align: left;
-    font-size: 13px;
-  }
-
-  .group-header:hover {
-    background: var(--vscode-list-activeSelectionBackground);
-  }
-
-  .chevron {
-    flex-shrink: 0;
-    font-size: 12px;
-  }
-
-  .group-name {
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
-    white-space: nowrap;
-  }
-
-  .step-duration {
-    color: var(--vscode-descriptionForeground);
-    font-size: 11px;
-    flex-shrink: 0;
-    margin-left: 8px;
-  }
-
-  .status-icon {
-    flex-shrink: 0;
-    font-size: 14px;
-    margin-right: 4px;
-  }
-
-  .status-icon.failed {
-    color: var(--vscode-testing-iconFailed, #f85149);
-  }
-
-  .status-icon.warning {
-    color: var(--vscode-editorWarning-foreground, #cca700);
-  }
-
-  /* Failed group styling */
-  .group.failed > .group-header {
-    background: color-mix(in srgb, var(--vscode-testing-iconFailed, #f85149) 10%, transparent);
-    border-left: 3px solid var(--vscode-testing-iconFailed, #f85149);
-  }
-
-  .group.failed > .group-header:hover {
-    background: color-mix(in srgb, var(--vscode-testing-iconFailed, #f85149) 15%, transparent);
-  }
-
-  /* Orphaned/unmatched logs styling */
-  .group.orphaned > .group-header {
-    background: color-mix(
-      in srgb,
-      var(--vscode-editorWarning-foreground, #cca700) 10%,
-      transparent
-    );
-    border-left: 3px solid var(--vscode-editorWarning-foreground, #cca700);
-  }
-
-  .group.orphaned > .group-header:hover {
-    background: color-mix(
-      in srgb,
-      var(--vscode-editorWarning-foreground, #cca700) 15%,
-      transparent
-    );
-  }
-
-  .orphaned-actions {
-    display: flex;
-    gap: 8px;
-    padding: 8px 0;
-    border-bottom: 1px solid var(--vscode-panel-border);
-    margin-bottom: 8px;
-  }
-
-  .orphaned-actions button {
-    padding: 4px 12px;
-    font-size: 11px;
-    background: var(--vscode-button-secondaryBackground);
-    color: var(--vscode-button-secondaryForeground);
-    border: none;
-    border-radius: 4px;
-    cursor: pointer;
-    display: flex;
-    align-items: center;
-    gap: 4px;
-  }
-
-  .orphaned-actions button:hover {
-    background: var(--vscode-button-secondaryHoverBackground);
-  }
-
-  .group-content {
-    padding: 4px 0 4px 24px;
-    border-left: 1px solid var(--vscode-panel-border);
-    margin-left: 10px;
-  }
-
-  .log-line {
-    margin: 0;
-    padding: 1px 4px;
-    font-family: var(--vscode-editor-font-family), monospace;
-    font-size: 12px;
-    line-height: 1.5;
-    white-space: pre-wrap;
-    word-break: break-word;
-  }
-
-  .log-line.search-match {
-    background: var(--vscode-editor-findMatchHighlightBackground, rgba(255, 200, 0, 0.4));
-    border-left: 2px solid var(--vscode-editor-findMatchBorder, #f0a000);
-    padding-left: 2px;
-  }
-
-  /* Error line styling - matches GitHub's red error display */
-  .log-line.error-line {
-    color: var(--vscode-testing-iconFailed, #f85149);
-  }
-
-  .error-prefix {
-    color: var(--vscode-testing-iconFailed, #f85149);
-    font-weight: 600;
-  }
-
-  /* Clickable URL styling */
-  .log-url {
-    background: none;
-    border: none;
-    padding: 0;
-    margin: 0;
-    font-family: inherit;
-    font-size: inherit;
-    color: var(--vscode-textLink-foreground, #3794ff);
-    cursor: pointer;
-    text-decoration: underline;
-  }
-
-  .log-url:hover {
-    color: var(--vscode-textLink-activeForeground, #3794ff);
-    text-decoration: underline;
-  }
-
   .spinning {
     animation: spin 1.5s linear infinite;
-  }
-
-  /* Highlight animation for scrolled-to groups */
-  .group.highlight > .group-header {
-    animation: highlightPulse 2s ease-out;
   }
 
   @keyframes spin {
@@ -1872,15 +2331,6 @@
     }
     to {
       transform: rotate(360deg);
-    }
-  }
-
-  @keyframes highlightPulse {
-    0% {
-      background: var(--vscode-editor-findMatchHighlightBackground, rgba(255, 200, 0, 0.4));
-    }
-    100% {
-      background: var(--vscode-list-hoverBackground);
     }
   }
 </style>

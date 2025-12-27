@@ -35,10 +35,23 @@ export class LogViewerPanel {
   public static currentPanel: LogViewerPanel | undefined;
   public static readonly viewType = 'github-workflow-log-viewer';
 
+  /**
+   * Maximum log size in bytes before warning user (50MB)
+   * Large logs can cause memory issues and UI freezing
+   */
+  private static readonly MAX_LOG_SIZE_WARNING = 50 * 1024 * 1024;
+
+  /**
+   * Maximum log size in bytes before truncation (100MB)
+   * Prevents out-of-memory errors with extremely large logs
+   */
+  private static readonly MAX_LOG_SIZE_LIMIT = 100 * 1024 * 1024;
+
   private readonly _panel: vscode.WebviewPanel;
   private readonly _extensionUri: vscode.Uri;
   private _disposables: vscode.Disposable[] = [];
   private _options: LogViewerOptions;
+  private _isDisposing = false; // Prevent double-dispose
 
   /**
    * Create or show the log viewer panel
@@ -92,7 +105,18 @@ export class LogViewerPanel {
   }
 
   public dispose() {
+    // Prevent double-dispose which can cause errors
+    if (this._isDisposing) {
+      return;
+    }
+    this._isDisposing = true;
+
     LogViewerPanel.currentPanel = undefined;
+
+    // Clear raw logs to free memory
+    this._rawLogs = '';
+    this._repoInfo = null;
+
     this._panel.dispose();
     while (this._disposables.length) {
       const disposable = this._disposables.pop();
@@ -200,10 +224,16 @@ export class LogViewerPanel {
   }
 
   /**
-   * Load logs from GitHub API and send to webview
+   * Load logs from GitHub API and send to webview.
+   * Includes safety checks for large log files to prevent memory issues.
    */
   private async _loadAndSendLogs(): Promise<void> {
     try {
+      // Early return if panel is being disposed
+      if (this._isDisposing) {
+        return;
+      }
+
       this._repoInfo = await getRepositoryInfo();
       if (!this._repoInfo) {
         this._sendError('Could not get repository information');
@@ -221,7 +251,30 @@ export class LogViewerPanel {
         return;
       }
 
-      // Store raw logs for download
+      // Safety check: warn for very large logs
+      const logSize = Buffer.byteLength(logs, 'utf8');
+      let processedLogs = logs;
+
+      if (logSize > LogViewerPanel.MAX_LOG_SIZE_LIMIT) {
+        // Truncate extremely large logs to prevent crashes
+        vscode.window.showWarningMessage(
+          `Log file is very large (${Math.round(logSize / 1024 / 1024)}MB). ` +
+            `Truncating to prevent memory issues. Use "View Raw Logs" for full content.`
+        );
+        // Keep first 90MB and last 10MB to preserve both start and end of logs
+        const keepStart = 90 * 1024 * 1024;
+        const keepEnd = 10 * 1024 * 1024;
+        const truncationMarker = '\n\n... [LOG TRUNCATED - File too large] ...\n\n';
+        processedLogs =
+          logs.substring(0, keepStart) + truncationMarker + logs.substring(logs.length - keepEnd);
+      } else if (logSize > LogViewerPanel.MAX_LOG_SIZE_WARNING) {
+        vscode.window.showInformationMessage(
+          `Log file is large (${Math.round(logSize / 1024 / 1024)}MB). ` +
+            `Consider using "View Raw Logs" for better performance.`
+        );
+      }
+
+      // Store raw logs for download (original, not truncated)
       this._rawLogs = logs;
 
       // Convert job steps to display format with duration and timestamps
@@ -241,12 +294,13 @@ export class LogViewerPanel {
       this._panel.webview.postMessage({
         type: 'logsLoaded',
         data: {
-          logs,
+          logs: processedLogs,
           jobId: this._options.jobId,
           jobName: this._options.jobName,
           stepNumber: this._options.stepNumber,
           stepName: this._options.stepName,
           steps,
+          isTruncated: processedLogs !== logs,
         },
       });
     } catch (error) {

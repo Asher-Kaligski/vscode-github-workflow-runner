@@ -44,7 +44,7 @@ describe('getWorkflowRuns', () => {
       branch: 'feature-branch',
       actor: 'octocat',
       status: 'completed',
-      perPage: 50,
+      perPage: 50, // Note: perPage is ignored by API layer, always uses 100
       page: 2,
     });
 
@@ -52,7 +52,9 @@ describe('getWorkflowRuns', () => {
     const url = fetchMock.mock.calls[0][0] as string;
 
     expect(url).toContain('https://api.github.com/repos/owner/repo/actions/workflows/123/runs');
-    expect(url).toContain('per_page=50');
+    // API always uses per_page=100 (GitHub's max) to minimize rate limit usage
+    // The perPage option is only used for UI display purposes
+    expect(url).toContain('per_page=100');
     expect(url).toContain('page=2');
     expect(url).not.toContain('branch=');
     expect(url).not.toContain('actor=');

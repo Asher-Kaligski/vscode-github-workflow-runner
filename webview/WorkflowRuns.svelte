@@ -154,7 +154,8 @@
   let isManualWorkflowFetch = false;
   // Track the expected workflowId for the pending manual workflow fetch
   // This is used to ignore stale responses from webviewReady/other sources
-  let pendingWorkflowId: number | null | 'all' = null;
+  // Values: null (not tracking), 'pending' (waiting for workflow ID), 'all' (all workflows), or number (specific workflow)
+  let pendingWorkflowId: number | null | 'all' | 'pending' = null;
 
   // Timeout ID for scheduled progressive fetch - allows cancellation when switching workflows
   let progressiveFetchTimeoutId: number | null = null;
@@ -346,11 +347,14 @@
       pendingWorkflowId = null;
     }
 
-    // Cancel pending initial filter timeout
+    // Cancel pending initial filter timeout and reset waiting state
+    // This is critical: if we're switching workflows while waitingForInitialFilters is true,
+    // we must reset it to prevent finalizeInitialLoad() from being called prematurely
     if (initialFilterTimeout !== null) {
       window.clearTimeout(initialFilterTimeout);
       initialFilterTimeout = null;
     }
+    waitingForInitialFilters = false;
 
     // Reset progressive fetching state
     progressiveFetching = false;
@@ -536,9 +540,13 @@
 
     loadingStartTime = null;
 
+    // Resume auto-refresh after recovery from stuck state
+    autoRefreshPaused = false;
+    startAutoRefresh();
+
     // Show error toast if message provided
     if (errorMessage) {
-      addToast(errorMessage, 'error');
+      showToast(errorMessage, 'error');
     }
 
     // Re-apply filters to ensure UI is in a consistent state
@@ -769,6 +777,33 @@
 
   // Track previous username to detect changes
   let previousCurrentUsername = '';
+
+  // Track previous repository to detect changes
+  let previousRepository: { owner: string; name: string } | null = null;
+
+  // Reactive: Clear caches when repository changes.
+  // This prevents cross-repository cache conflicts when switching between repositories.
+  $: {
+    if (repository !== null && previousRepository !== null) {
+      const repoChanged =
+        repository.owner !== previousRepository.owner ||
+        repository.name !== previousRepository.name;
+      if (repoChanged) {
+        console.log(
+          '[WorkflowRuns] Repository changed from',
+          `${previousRepository.owner}/${previousRepository.name}`,
+          'to',
+          `${repository.owner}/${repository.name}`,
+          '- clearing all caches'
+        );
+        clearCache(); // Clear all caches to prevent cross-repository data
+        // Also clear watched runs as they are repository-specific
+        watchedRuns = new Set();
+        showWatchedOnly = false;
+      }
+    }
+    previousRepository = repository ? { owner: repository.owner, name: repository.name } : null;
+  }
 
   // Reactive: Re-apply filters when currentUsername changes while actorFilter is 'me'.
   // This fixes an intermittent bug where the "My Runs" filter fails to work correctly
@@ -2919,12 +2954,11 @@
 
   /**
    * Handle click on a job node in the dependency graph
-   * Opens the raw job logs in text editor
-   * NOTE: Changed from viewJobLogsInteractive to viewRawJobLogs (interactive viewer disabled in v1.2.0)
+   * Opens the interactive job logs viewer
    */
   function handleGraphJobClick(node: JobGraphNode, runId: number) {
     if (node.jobId) {
-      viewRawJobLogs(node.jobId, node.name, runId);
+      viewJobLogsInteractive(node.jobId, node.name, runId);
     }
   }
 
@@ -3872,14 +3906,33 @@
     cancelPendingOperations();
 
     // Try to find workflow_id from existing runs for this workflow
+    // IMPORTANT: This searches in the CURRENT runs array before it's cleared.
+    // If runs contains data from a previous workflow view, we need to ensure
+    // the path match is exact to avoid using the wrong workflow_id.
     const matchingRun = runs.find((run) => {
       const runPath = run.path.split('@')[0];
       return runPath === workflow.path;
     });
 
+    // Debug logging to help trace workflow ID resolution issues
+    console.log('[WorkflowRuns] requestRunsForWorkflow:', {
+      targetPath: workflow.path,
+      targetFilename: workflow.filename,
+      runsCount: runs.length,
+      matchingRunFound: !!matchingRun,
+      matchingWorkflowId: matchingRun?.workflow_id,
+      matchingRunPath: matchingRun?.path,
+    });
+
     // Clear notifications from previous workflow to prevent stale notifications
     clearAllToasts();
     clearStatusChanges();
+
+    // Pause auto-refresh during workflow switch to prevent race conditions
+    // where auto-refresh responses arrive before the workflow-specific response.
+    // This will be resumed once the workflow fetch completes or times out.
+    autoRefreshPaused = true;
+    stopAutoRefresh();
 
     // Show a loading state while fetching runs for the selected workflow
     runs = [];
@@ -3889,6 +3942,10 @@
 
     // Mark this as a manual workflow fetch to skip the filter message wait
     isManualWorkflowFetch = true;
+
+    // Use a sentinel value to track that we're waiting for a workflow ID
+    // This helps the stale response detection handle the getWorkflowId flow
+    pendingWorkflowId = 'pending';
 
     // Start watchdog timer to recover from stuck state if response never arrives
     startWorkflowFetchWatchdog();
@@ -3913,7 +3970,7 @@
         });
       } else {
         // No matching run found, request workflow ID from backend
-        // pendingWorkflowId will be set when we get the workflow ID response
+        // pendingWorkflowId stays as 'pending' until getWorkflowIdResponse arrives
         console.log(
           '[WorkflowRuns] No existing run found, requesting workflow ID for:',
           workflow.filename
@@ -3955,6 +4012,12 @@
     // Clear notifications from previous workflow to prevent stale notifications
     clearAllToasts();
     clearStatusChanges();
+
+    // Pause auto-refresh during workflow switch to prevent race conditions
+    // where auto-refresh responses arrive before the workflow-specific response.
+    // This will be resumed once the workflow fetch completes or times out.
+    autoRefreshPaused = true;
+    stopAutoRefresh();
 
     // Show a loading state while fetching runs without a workflow filter
     runs = [];
@@ -4297,20 +4360,37 @@
   }
 
   /**
-   * Get cache key for current workflow filter
+   * Get cache key for current workflow filter.
+   * Includes repository info to prevent cache conflicts between different repositories.
    */
   function getCacheKey(): string {
-    return workflowFilter === 'all' ? '__all__' : workflowFilter;
+    const workflowPart = workflowFilter === 'all' ? '__all__' : workflowFilter;
+    // Include repository in cache key to prevent cross-repository cache conflicts
+    const repoPart = repository ? `${repository.owner}/${repository.name}` : '__no_repo__';
+    return `${repoPart}::${workflowPart}`;
   }
 
   /**
-   * Check if cache is valid for a specific workflow
+   * Check if cache is valid for a specific cache key.
+   * Validates both age and repository match.
    */
-  function isCacheValid(workflowPath: string): boolean {
-    const cache = workflowRunsCache.get(workflowPath);
+  function isCacheValid(cacheKey: string): boolean {
+    const cache = workflowRunsCache.get(cacheKey);
     if (!cache) {
       return false;
     }
+
+    // Check if repository matches current context
+    // This prevents using cached data from a different repository
+    if (repository && cache.repository) {
+      const repoMatches =
+        cache.repository.owner === repository.owner && cache.repository.name === repository.name;
+      if (!repoMatches) {
+        console.log('[WorkflowRuns] Cache invalidated - repository mismatch');
+        return false;
+      }
+    }
+
     const now = Date.now();
     const age = now - cache.cacheTimestamp;
     return age < CACHE_EXPIRATION_MS;
@@ -4478,6 +4558,20 @@
       return; // Already finalized or not in initial load state
     }
 
+    // Safety check: if we're in a manual workflow fetch, don't finalize the initial load
+    // This can happen if the user switches workflows while waiting for initial filters
+    if (isManualWorkflowFetch) {
+      console.log(
+        '[WorkflowRuns] Skipping finalizeInitialLoad - manual workflow fetch in progress'
+      );
+      waitingForInitialFilters = false;
+      if (initialFilterTimeout !== null) {
+        clearTimeout(initialFilterTimeout);
+        initialFilterTimeout = null;
+      }
+      return;
+    }
+
     console.log(
       '[WorkflowRuns] Finalizing initial load - applying filters and clearing loading state'
     );
@@ -4511,12 +4605,16 @@
     checkAndRecoverFromStuckState();
 
     // Avoid disruptive refresh while we intentionally pause (e.g., when opening logs)
+    // BUT always process responses for manual workflow switches (isManualWorkflowFetch)
+    // to prevent the UI from getting stuck in a loading state
     if (message.type === 'getWorkflowRuns') {
       // Always clear the date-filter fetching indicator when a runs payload
       // arrives, even if we skip applying it while auto-refresh is paused.
       fetchingDateFilteredRuns = false;
 
-      if (autoRefreshPaused) {
+      // Only block auto-refresh responses, not manual workflow switch responses
+      if (autoRefreshPaused && !isManualWorkflowFetch) {
+        console.log('[WorkflowRuns] Skipping auto-refresh response while paused');
         return;
       }
     }
@@ -4660,10 +4758,28 @@
       repository = message.data?.repository || null;
       const responseWorkflowId = message.data?.workflowId ?? null;
 
+      console.log('[WorkflowRuns] getWorkflowRuns response received:', {
+        runsCount: newRuns.length,
+        responseWorkflowId,
+        isManualWorkflowFetch,
+        pendingWorkflowId,
+      });
+
       // Check if this is a stale response that should be ignored
       // This happens when we're waiting for a workflow-specific response but
       // a response from webviewReady (with all runs) arrives first
       if (isManualWorkflowFetch && pendingWorkflowId !== null) {
+        // If we're still waiting for the workflow ID (pendingWorkflowId === 'pending'),
+        // ignore any getWorkflowRuns responses as they are from previous requests
+        if (pendingWorkflowId === 'pending') {
+          console.log(
+            '[WorkflowRuns] Ignoring getWorkflowRuns response while waiting for workflow ID:',
+            'received workflowId:',
+            responseWorkflowId
+          );
+          return;
+        }
+
         const pendingIsAll = pendingWorkflowId === 'all';
         const responseIsAll = responseWorkflowId === null;
 
@@ -4771,6 +4887,9 @@
         filterRuns();
         loading = false;
         refreshing = false;
+        // Resume auto-refresh after successful workflow switch
+        autoRefreshPaused = false;
+        startAutoRefresh();
       } else if (isInitialLoad) {
         console.log(
           '[WorkflowRuns] Initial load detected - waiting for filter messages before finalizing'
@@ -4802,6 +4921,9 @@
       clearWorkflowFetchWatchdog(); // Clear watchdog - error response received
       loading = false;
       refreshing = false;
+      // Resume auto-refresh after failed workflow fetch
+      autoRefreshPaused = false;
+      startAutoRefresh();
     } else if (message.type === 'getUserInfo' && message.success) {
       currentUsername = message.data?.login || '';
       userInfo = message.data || null;
@@ -9209,23 +9331,21 @@
                               {/if}
                             </button>
                           {/if}
-                          <!-- DISABLED: Interactive log viewer - temporarily disabled for separate PR
-                      <button
-                        class="job-logs-button"
-                        on:click|stopPropagation={() =>
-                          viewJobLogsInteractive(job.id, job.name, run.id)}
-                        disabled={loadingJobLogs.has(job.id)}
-                        title="View interactive logs (beta - grouping may have minor inaccuracies)"
-                      >
-                        {#if loadingJobLogs.has(job.id)}
-                          <span class="codicon codicon-sync spinning-icon"></span>
-                          <span>Loading...</span>
-                        {:else}
-                          <span class="codicon codicon-output"></span>
-                          <span>View Logs</span>
-                        {/if}
-                      </button>
-                      -->
+                          <button
+                            class="job-logs-button"
+                            on:click|stopPropagation={() =>
+                              viewJobLogsInteractive(job.id, job.name, run.id)}
+                            disabled={loadingJobLogs.has(job.id)}
+                            title="View interactive logs (beta - grouping may have minor inaccuracies)"
+                          >
+                            {#if loadingJobLogs.has(job.id)}
+                              <span class="codicon codicon-sync spinning-icon"></span>
+                              <span>Loading...</span>
+                            {:else}
+                              <span class="codicon codicon-output"></span>
+                              <span>View Logs</span>
+                            {/if}
+                          </button>
                           <button
                             class="job-logs-button"
                             on:click|stopPropagation={() =>
@@ -9926,7 +10046,6 @@
 {/if}
 
 <!-- Job Steps Modal (from jobs list) -->
-<!-- DISABLED: Interactive log viewer (onViewLogs, onViewStepLogs) - temporarily disabled for separate PR -->
 <!-- NOTE: Using optional chaining (?.) throughout to prevent null reference errors during Svelte reactivity transitions -->
 {#if selectedJobForStepsModal}
   {@const currentJob = selectedJobForStepsModal}
@@ -9947,7 +10066,17 @@
           }
         }
       : undefined}
-    onViewLogs={undefined}
+    onViewLogs={currentJobId != null && currentRunId != null
+      ? () => {
+          // Re-check state at execution time to handle race conditions
+          if (selectedJobForStepsModal == null) return;
+          const jobId = selectedJobForStepsModal.jobId;
+          const runId = selectedJobRunIdForSteps;
+          if (jobId != null && runId != null) {
+            viewJobLogsInteractive(jobId, selectedJobForStepsModal.name || 'Job', runId);
+          }
+        }
+      : undefined}
     onViewRawLogs={currentJobId != null && currentRunId != null
       ? () => {
           // Re-check state at execution time to handle race conditions
@@ -9959,7 +10088,23 @@
           }
         }
       : undefined}
-    onViewStepLogs={undefined}
+    onViewStepLogs={currentJobId != null && currentRunId != null
+      ? (stepNumber: number, stepName: string) => {
+          // Re-check state at execution time to handle race conditions
+          if (selectedJobForStepsModal == null) return;
+          const jobId = selectedJobForStepsModal.jobId;
+          const runId = selectedJobRunIdForSteps;
+          if (jobId != null && runId != null) {
+            viewStepLogs(
+              jobId,
+              selectedJobForStepsModal.name || 'Job',
+              runId,
+              stepNumber,
+              stepName
+            );
+          }
+        }
+      : undefined}
     loadingLogs={currentJobId != null && loadingJobLogs.has(currentJobId)}
     loadingRawLogs={currentJobId != null && loadingRawJobLogs.has(currentJobId)}
     loadingSummary={currentJobId != null && loadingJobSummary.has(currentJobId)}
@@ -10027,9 +10172,8 @@
         selectedJobWorkflowIdForSteps = modalRun?.workflow_id ?? null;
         selectedJobWorkflowNameForSteps = modalRun?.name ?? null;
       } else if (node.jobId && jobGraphModalRunId) {
-        // DISABLED: Interactive log viewer - temporarily disabled for separate PR
-        // Fall back to viewing raw logs for jobs without steps data
-        viewRawJobLogs(node.jobId, node.name, jobGraphModalRunId);
+        // Fall back to viewing interactive logs for jobs without steps data
+        viewJobLogsInteractive(node.jobId, node.name, jobGraphModalRunId);
       }
     }}
   />
@@ -11051,6 +11195,9 @@
   .checkbox-filter {
     display: flex;
     align-items: center;
+    /* Add consistent padding to all checkbox filters so they have the same height baseline,
+       preventing layout shift when watched-runs-filter gets active styling */
+    padding: 4px 0;
   }
 
   .checkbox-filter label {
@@ -11079,6 +11226,11 @@
     background: var(--vscode-input-background);
     border-style: dashed;
     border-color: var(--vscode-disabledForeground, var(--vscode-input-border));
+  }
+
+  /* Add left padding to disabled selects to make room for the lock icon */
+  .filter-box--disabled select {
+    padding-left: 24px;
   }
 
   .filter-box--disabled.checkbox-filter label {
@@ -11120,12 +11272,15 @@
     );
     border-radius: 4px;
     padding: 4px 8px;
-    margin: -4px -8px;
+    /* Use box-sizing and explicit dimensions to maintain consistent spacing without negative margins */
+    box-sizing: border-box;
   }
 
   /* Combobox specific disabled styling */
   .filter-box--disabled .combobox-input-wrapper input {
     background: var(--vscode-input-background);
+    /* Add left padding to make room for the lock icon when disabled */
+    padding-left: 24px;
   }
 
   .filter-box--disabled .dropdown-toggle {

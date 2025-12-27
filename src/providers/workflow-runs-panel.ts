@@ -629,6 +629,11 @@ export class WorkflowRunsPanel {
           const { workflowId } = (message.data || {}) as {
             workflowId?: number;
           };
+          console.log('[WorkflowRunsPanel] getWorkflowRuns message received:', {
+            requestedWorkflowId: workflowId,
+            currentStoredWorkflowId: this._currentWorkflowId,
+            currentWorkflowFilter: this._currentWorkflowFilter,
+          });
           await this._sendWorkflowRuns({ workflowId });
           // Also push workflows proactively so the webview can populate the dropdown
           await this._sendWorkflows();
@@ -933,12 +938,11 @@ export class WorkflowRunsPanel {
           );
           break;
 
-        // DISABLED: Interactive log viewer - temporarily disabled for separate PR
-        // case 'viewJobLogsInteractive':
-        //   await this._viewJobLogsInteractive(
-        //     message.data as { jobId: number; jobName: string; runId: number }
-        //   );
-        //   break;
+        case 'viewJobLogsInteractive':
+          await this._viewJobLogsInteractive(
+            message.data as { jobId: number; jobName: string; runId: number }
+          );
+          break;
 
         // DISABLED: Log comparison - temporarily disabled in v1.2.0
         // case 'compareJobLogs':
@@ -982,18 +986,17 @@ export class WorkflowRunsPanel {
           await this._getJobDetails(message.data as { jobId: number; runId: number });
           break;
 
-        // DISABLED: Step log viewing - temporarily disabled for separate PR
-        // case 'viewStepLogs':
-        //   await this._viewStepLogs(
-        //     message.data as {
-        //       jobId: number;
-        //       jobName: string;
-        //       runId: number;
-        //       stepNumber: number;
-        //       stepName: string;
-        //     }
-        //   );
-        //   break;
+        case 'viewStepLogs':
+          await this._viewStepLogs(
+            message.data as {
+              jobId: number;
+              jobName: string;
+              runId: number;
+              stepNumber: number;
+              stepName: string;
+            }
+          );
+          break;
 
         case 'getWorkflowRunArtifacts':
           await this._getWorkflowRunArtifacts(message.data as { runId: number });
@@ -1277,7 +1280,18 @@ export class WorkflowRunsPanel {
             workflowFilter: this._currentWorkflowFilter,
             actorFilter: this._currentActorFilter,
             showBotRuns: this._currentShowBotRuns,
+            currentWorkflowId: this._currentWorkflowId,
           });
+
+          // Warn if workflow filter is set but workflow ID is undefined
+          // This could indicate a mismatch that would cause incorrect API fetches
+          if (this._currentWorkflowFilter && this._currentWorkflowId === undefined) {
+            console.warn(
+              '[WorkflowRunsPanel] WARNING: Workflow filter is set but workflow ID is undefined.',
+              'Progressive fetching will fetch ALL runs instead of workflow-specific runs.',
+              { workflowFilter: this._currentWorkflowFilter }
+            );
+          }
           break;
         }
 
@@ -1877,6 +1891,12 @@ export class WorkflowRunsPanel {
       const { getWorkflowId } = await import('../api/workflow-dispatcher');
       const workflowId = await getWorkflowId(repoConfig.owner, repoConfig.name, workflowFilename);
 
+      console.log('[WorkflowRunsPanel] _sendWorkflowId: Resolved workflow ID:', {
+        workflowFilename,
+        workflowId,
+        success: !!workflowId,
+      });
+
       if (workflowId) {
         this._panel.webview.postMessage({
           type: 'getWorkflowIdResponse',
@@ -1884,10 +1904,14 @@ export class WorkflowRunsPanel {
           data: { workflowFilename, workflowId },
         });
       } else {
+        console.warn(
+          '[WorkflowRunsPanel] _sendWorkflowId: Failed to resolve workflow ID for:',
+          workflowFilename
+        );
         this._panel.webview.postMessage({
           type: 'getWorkflowIdResponse',
           success: false,
-          error: 'Failed to get workflow ID',
+          error: `Failed to get workflow ID for ${workflowFilename}`,
         });
       }
     } catch (error) {
@@ -1965,6 +1989,9 @@ export class WorkflowRunsPanel {
       const workflowId = this._currentWorkflowId;
       console.log('[WorkflowRunsPanel] _sendWorkflowRuns: using workflowId for fetch:', workflowId);
 
+      // NOTE: pageSize is used for UI display purposes only.
+      // The API layer now always fetches 100 runs per request (GitHub's max) to minimize
+      // rate limit usage when client-side filters have low match rates.
       const pageSize = Math.min(config.monitoring.maxRuns, 100);
 
       const rawFrom = this._currentDateFilterFrom;
@@ -2720,10 +2747,20 @@ export class WorkflowRunsPanel {
       }
 
       const config = getConfig();
+      // NOTE: pageSize is used for UI display. API layer always uses 100 for efficiency.
       const pageSize = Math.min(config.monitoring.maxRuns, 100);
       const allRuns: WorkflowRun[] = [];
       let currentPage = data.startPage;
       const maxPage = data.startPage + data.maxPages - 1;
+
+      // Debug logging to trace workflow ID during progressive fetching
+      console.log('[WorkflowRunsPanel] _progressiveFetchRuns:', {
+        startPage: data.startPage,
+        maxPages: data.maxPages,
+        generation,
+        currentWorkflowId: this._currentWorkflowId,
+        currentWorkflowFilter: this._currentWorkflowFilter,
+      });
 
       const rawFrom = this._currentDateFilterFrom;
       const rawTo = this._currentDateFilterTo;
