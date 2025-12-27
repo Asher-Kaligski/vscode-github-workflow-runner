@@ -2,6 +2,61 @@
 
 All notable changes to the "github-workflow-runner" extension will be documented in this file.
 
+## [1.5.0] - 2025-12-27
+
+### ✨ New Features
+
+- **Step-Level Log Viewing:** View logs for individual job steps directly from the Job Steps Modal.
+  - Click the "View Logs" button on any step to open its logs in the interactive log viewer
+  - Logs are filtered to show only the selected step's output
+  - Maintains full log viewer functionality (search, expand/collapse, download)
+
+- **Interactive Log Viewer in Job Graph:** Click on any job in the dependency graph to open the interactive log viewer.
+  - Re-enabled interactive log viewing feature for job nodes
+  - View detailed logs with collapsible groups matching GitHub's native UI
+
+### 🔧 Technical Improvements
+
+- **API Efficiency Optimization:** Reduced GitHub API calls to minimize rate limit usage.
+  - Always fetches 100 runs per API request (GitHub's maximum) regardless of UI page size
+  - Reduces API calls by up to 5x when client-side filters have low match rates
+  - `perPage` option is now only used for UI display purposes
+
+- **Large Log File Safety:** Added protection against memory issues when viewing large logs.
+  - Warning notification for logs exceeding 50MB
+  - Automatic truncation for logs exceeding 100MB (preserves first 90MB + last 10MB)
+  - Suggests using "View Raw Logs" for better performance with large files
+  - Prevents UI freezing and out-of-memory errors
+
+- **Improved Log Parsing:** Enhanced log parsing algorithm for better accuracy.
+  - Sequential boundary approach for step-to-group matching
+  - Proper nesting depth tracking with MAX_PARSE_DEPTH safety cap (50 levels)
+  - Improved handling of self-hosted runner hook scripts
+  - Better categorization of setup, main, and post steps
+  - Enhanced action/command matching with comprehensive keyword mappings
+  - Circular reference detection in recursive log group rendering
+
+- **Memory Leak Prevention:** Improved resource cleanup in log viewer panel.
+  - Prevents double-dispose errors with tracking flag
+  - Clears raw logs and repository info on dispose
+  - Early return when panel is being disposed
+
+- **Enhanced Workflow State Management:** More robust handling of workflow and repository switching.
+  - Sentinel value for `pendingWorkflowId` prevents stale data during workflow ID resolution
+  - Reset caches, watched runs, and UI state when repository changes
+  - Auto-refresh pauses during workflow switches to prevent race conditions
+  - Resume auto-refresh after error recovery
+
+- **Debug Logging:** Added detailed logging for workflow run fetching and message handling.
+  - Traces workflow ID resolution and mismatches
+  - Warns when workflow filter is set but ID is undefined
+  - Logs progressive fetch parameters for troubleshooting
+
+### 🐛 Fixed
+
+- **Duplicate API Calls:** Fixed duplicate workflow runs API calls during webview initialization.
+  - Webview now handles run fetching via `getWorkflowRuns` message instead of automatic `_sendWorkflowRuns()` call
+
 ## [1.4.0] - 2025-12-24
 
 ### ✨ New Features

@@ -85,7 +85,11 @@ export async function getWorkflowRuns(
     }
 
     const params = new URLSearchParams();
-    params.append('per_page', String(options.perPage || 20));
+    // OPTIMIZATION: Always use 100 (GitHub's max) for API calls to minimize rate limit usage.
+    // The perPage option is now only used for UI display purposes in the webview.
+    // This reduces API calls by 5x when client-side filters have low match rates.
+    const API_PAGE_SIZE = 100;
+    params.append('per_page', String(API_PAGE_SIZE));
     params.append('page', String(options.page || 1));
 
     // Add date range filter if provided
