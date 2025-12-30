@@ -2,6 +2,15 @@
 
 All notable changes to the "github-workflow-runner" extension will be documented in this file.
 
+## [1.5.1] - 2025-12-30
+
+### 🐛 Bug Fixes
+
+- **Boolean Input Validation:** Fixed validation error when dispatching workflows with boolean inputs.
+  - Resolved issue where toggling boolean checkboxes caused "Input must be true or false" validation errors
+  - Fixed type mismatch between checkbox boolean binding and string-based validation
+  - Boolean inputs now correctly convert between native checkbox state and string values (`'true'`/`'false'`)
+
 ## [1.5.0] - 2025-12-27
 
 ### ✨ New Features
