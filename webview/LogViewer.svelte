@@ -1644,12 +1644,44 @@
     showSearch = !showSearch;
     if (showSearch) {
       // Focus search input after render
-      setTimeout(() => {
-        const input = document.querySelector('.search-input') as HTMLInputElement;
-        input?.focus();
-      }, 50);
+      focusSearchInput();
     } else {
       clearSearch();
+    }
+  }
+
+  /**
+   * Focus the search input field after a short delay to allow for DOM updates
+   */
+  function focusSearchInput() {
+    setTimeout(() => {
+      const input = document.querySelector('.search-input') as HTMLInputElement;
+      input?.focus();
+      input?.select();
+    }, 50);
+  }
+
+  /**
+   * Handle global keyboard shortcuts for the log viewer
+   * Implements Cmd+F (macOS) / Ctrl+F (Windows/Linux) to focus search
+   */
+  function handleGlobalKeydown(event: KeyboardEvent) {
+    // Check for Cmd+F (macOS) or Ctrl+F (Windows/Linux)
+    // Use metaKey for macOS, ctrlKey for Windows/Linux
+    // Both are checked to ensure cross-platform compatibility
+    const isSearchShortcut =
+      event.key.toLowerCase() === 'f' && (event.metaKey || event.ctrlKey) && !event.altKey;
+
+    if (isSearchShortcut) {
+      // Prevent browser's default find behavior
+      event.preventDefault();
+
+      if (!showSearch) {
+        // Open search panel if not visible
+        showSearch = true;
+      }
+      // Focus the search input
+      focusSearchInput();
     }
   }
 
@@ -1891,6 +1923,9 @@
   }
 </script>
 
+<!-- Global keyboard shortcut handler for Cmd+F / Ctrl+F -->
+<svelte:window on:keydown={handleGlobalKeydown} />
+
 <div class="log-viewer">
   <div class="header">
     <div class="title">
@@ -1902,7 +1937,7 @@
         class="icon-button"
         class:active={showSearch}
         on:click={toggleSearch}
-        title="Search (Ctrl+F)"
+        title="Search (⌘F / Ctrl+F)"
       >
         <span class="codicon codicon-search"></span>
       </button>

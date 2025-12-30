@@ -3072,8 +3072,11 @@
                 <input
                   id={input.name}
                   type="checkbox"
-                  bind:checked={inputs[input.name]}
-                  on:change={clearError}
+                  checked={inputs[input.name] === 'true'}
+                  on:change={(e) => {
+                    inputs[input.name] = e.currentTarget.checked ? 'true' : 'false';
+                    clearError();
+                  }}
                   disabled={loading}
                 />
               {:else if input.type === 'choice' && input.options}

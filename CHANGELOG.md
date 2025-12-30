@@ -2,6 +2,22 @@
 
 All notable changes to the "github-workflow-runner" extension will be documented in this file.
 
+## [1.5.1] - 2025-12-30
+
+### ✨ New Features
+
+- **Log Viewer Search Keyboard Shortcut:** Added familiar keyboard shortcuts to quickly focus the search input.
+  - Press `⌘F` (macOS) or `Ctrl+F` (Windows/Linux) to open and focus the search panel
+  - If search is already open, the shortcut focuses and selects the existing search text
+  - Provides intuitive keyboard navigation similar to browser/editor search
+
+### 🐛 Bug Fixes
+
+- **Boolean Input Validation:** Fixed validation error when dispatching workflows with boolean inputs.
+  - Resolved issue where toggling boolean checkboxes caused "Input must be true or false" validation errors
+  - Fixed type mismatch between checkbox boolean binding and string-based validation
+  - Boolean inputs now correctly convert between native checkbox state and string values (`'true'`/`'false'`)
+
 ## [1.5.0] - 2025-12-27
 
 ### ✨ New Features
