@@ -35,6 +35,7 @@ import {
 import { Storage } from '../utils/storage';
 import { TokenManager } from '../utils/token-manager';
 import { getAllWorkflowDefinitions, getWorkflowDefinition } from '../utils/workflow-parser';
+import { getAllWorkspaceRepos } from '../utils/git-operations';
 import { WorkflowRunsPanel } from './workflow-runs-panel';
 import type { WorkflowRunsProvider } from './workflow-runs-provider';
 
@@ -44,6 +45,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   private _isWebviewReady = false;
   private _readyPromise: Promise<void> | null = null;
   private _readyResolve: (() => void) | null = null;
+  /** Path of the workspace folder currently selected in the repo switcher. */
+  private _activeWorkspacePath: string | undefined = undefined;
 
   constructor(private readonly _extensionUri: vscode.Uri) {}
 
@@ -229,6 +232,18 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case 'getUserInfo':
         await this._sendUserInfo();
         break;
+
+      case 'getWorkspaceFolders':
+        await this._sendWorkspaceFolders();
+        break;
+
+      case 'setActiveWorkspace': {
+        const folderPath = message.data as string | undefined;
+        this._activeWorkspacePath = folderPath || undefined;
+        // Reload all data for the newly selected workspace
+        await this._reloadExtensionData();
+        break;
+      }
 
       case 'getRepositoryConfig':
         await this._sendRepositoryConfig();
@@ -471,7 +486,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       console.log('[SidebarProvider] Reloading extension data...');
 
       // Refresh and store the new Git context
-      const newContext = await refreshGitContext();
+      const newContext = await refreshGitContext(this._activeWorkspacePath);
       console.log('[SidebarProvider] New Git context:', newContext);
 
       // Re-send repository config
@@ -526,19 +541,19 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    */
   private async _openWorkflowFile(filePath: string) {
     try {
-      const repoInfo = await getRepositoryInfo();
+      const repoInfo = await getRepositoryInfo(this._activeWorkspacePath);
       if (!repoInfo) {
         vscode.window.showErrorMessage('Could not get repository information');
         return;
       }
 
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-      if (!workspaceFolder) {
+      const rootPath = this._activeWorkspacePath ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!rootPath) {
         vscode.window.showErrorMessage('No workspace folder open');
         return;
       }
 
-      const fullPath = vscode.Uri.joinPath(workspaceFolder.uri, filePath);
+      const fullPath = vscode.Uri.joinPath(vscode.Uri.file(rootPath), filePath);
 
       try {
         await vscode.workspace.fs.stat(fullPath);
@@ -564,7 +579,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    */
   private async _sendWorkflows() {
     const config = getConfig();
-    const workflows = await getAllWorkflowDefinitions(config.workflows.excludePatterns);
+    const workflows = await getAllWorkflowDefinitions(
+      config.workflows.excludePatterns,
+      this._activeWorkspacePath
+    );
 
     this._view?.webview.postMessage({
       type: 'getWorkflows',
@@ -577,7 +595,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    * Send workflow schema to webview
    */
   private async _sendWorkflowSchema(filename: string) {
-    const workflow = await getWorkflowDefinition(filename);
+    const workflow = await getWorkflowDefinition(filename, this._activeWorkspacePath);
 
     this._view?.webview.postMessage({
       type: 'getWorkflowSchema',
@@ -661,7 +679,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }) {
     try {
       // Validate Git context before any GitHub API operation
-      const isValidContext = await ensureGitContextValidOrWarn('dispatchWorkflow');
+      const isValidContext = await ensureGitContextValidOrWarn(
+        'dispatchWorkflow',
+        this._activeWorkspacePath
+      );
       if (!isValidContext) {
         this._view?.webview.postMessage({
           type: 'gitContextMismatch',
@@ -672,8 +693,8 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       }
 
       const config = getConfig();
-      const repoConfig = await getRepositoryConfig();
-      const workflow = await getWorkflowDefinition(data.workflowFilename);
+      const repoConfig = await getRepositoryConfig(this._activeWorkspacePath);
+      const workflow = await getWorkflowDefinition(data.workflowFilename, this._activeWorkspacePath);
 
       if (!workflow) {
         throw new Error('Workflow not found');
@@ -795,7 +816,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    * Send current branch to webview
    */
   private async _sendCurrentBranch() {
-    const branch = await getCurrentBranch();
+    const branch = await getCurrentBranch(this._activeWorkspacePath);
 
     this._view?.webview.postMessage({
       type: 'getCurrentBranch',
@@ -810,7 +831,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    */
   private async _fetchDefaultBranchFromGitHub(): Promise<string | undefined> {
     try {
-      const repoConfig = await getRepositoryConfig();
+      const repoConfig = await getRepositoryConfig(this._activeWorkspacePath);
 
       const owner = repoConfig.owner?.trim();
       const name = repoConfig.name?.trim();
@@ -884,7 +905,7 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
    * Send recent branches to webview
    */
   private async _sendRecentBranches() {
-    const branches = await getRecentBranches();
+    const branches = await getRecentBranches(10, this._activeWorkspacePath);
 
     this._view?.webview.postMessage({
       type: 'getRecentBranches',
@@ -1058,11 +1079,34 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
   }
 
   /**
+   * Send all workspace folders with their GitHub repo info to the webview.
+   */
+  private async _sendWorkspaceFolders() {
+    try {
+      const workspaces = await getAllWorkspaceRepos();
+      this._view?.webview.postMessage({
+        type: 'getWorkspaceFolders',
+        success: true,
+        data: {
+          workspaces,
+          activeWorkspacePath: this._activeWorkspacePath ?? null,
+        },
+      });
+    } catch (error) {
+      this._view?.webview.postMessage({
+        type: 'getWorkspaceFolders',
+        success: false,
+        error: error instanceof Error ? error.message : 'Failed to get workspace folders',
+      });
+    }
+  }
+
+  /**
    * Send repository config to webview
    */
   private async _sendRepositoryConfig() {
     try {
-      const repoConfig = await getRepositoryConfig();
+      const repoConfig = await getRepositoryConfig(this._activeWorkspacePath);
 
       this._view?.webview.postMessage({
         type: 'getRepositoryConfig',

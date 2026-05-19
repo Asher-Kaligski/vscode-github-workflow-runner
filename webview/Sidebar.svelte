@@ -12,6 +12,7 @@
     RecentFile,
     ParsedFileContent,
     FileContentConfig,
+    WorkspaceRepoInfo,
   } from '../src/types/workflow-types';
   import SmartFileInput from './components/SmartFileInput.svelte';
   import FileContentModal from './components/FileContentModal.svelte';
@@ -21,8 +22,14 @@
   let filteredWorkflows: WorkflowDefinition[] = [];
   let searchQuery = '';
   let selectedWorkflow: WorkflowDefinition | null = null;
+
+  // Multi-workspace state
+  let workspaceFolders: WorkspaceRepoInfo[] = [];
+  let activeWorkspacePath: string | null = null;
+  $: isMultiWorkspace = workspaceFolders.length > 1;
   let branch = '';
   let currentBranch: string | null = null; // Current local Git branch
+  let recentBranches: string[] = [];
   const WAVE_ANIMATION_MIN_INTERVAL_MS = 60_000;
   const SIDEBAR_WAVE_STORAGE_KEY = 'githubWorkflowRunner:sidebarWaveLastTime';
   let showWelcomeWave = false;
@@ -424,6 +431,22 @@
 
   function showStorageInfo() {
     vscode.postMessage({ type: 'getStorageInfo' });
+  }
+
+  function selectWorkspace(folderPath: string) {
+    if (folderPath === (activeWorkspacePath ?? '')) {
+      return;
+    }
+    // Reset workflow state — the new workspace will send fresh data
+    selectedWorkflow = null;
+    searchQuery = '';
+    workflows = [];
+    filteredWorkflows = [];
+    branch = '';
+    recentBranches = [];
+    inputs = {};
+    activeWorkspacePath = folderPath;
+    vscode.postMessage({ type: 'setActiveWorkspace', data: folderPath });
   }
 
   /**
@@ -907,6 +930,9 @@
     // Check authentication status first
     vscode.postMessage({ type: 'checkAuth' });
 
+    // Request workspace folders for repo switcher
+    vscode.postMessage({ type: 'getWorkspaceFolders' });
+
     // Load favorites on mount
     vscode.postMessage({ type: 'getFavorites' });
     vscode.postMessage({ type: 'getRepositoryFavorites' });
@@ -950,6 +976,13 @@
         showConfirmModal = true;
         break;
       }
+
+      case 'getWorkspaceFolders':
+        if (message.success) {
+          workspaceFolders = message.data.workspaces as WorkspaceRepoInfo[];
+          activeWorkspacePath = message.data.activeWorkspacePath as string | null;
+        }
+        break;
 
       case 'getWorkflows':
         if (message.success) {
@@ -1042,6 +1075,12 @@
       case 'getDefaultBranch':
         if (message.success && message.data) {
           defaultBranch = String(message.data ?? '').trim();
+        }
+        break;
+
+      case 'getRecentBranches':
+        if (message.success && Array.isArray(message.data)) {
+          recentBranches = message.data;
         }
         break;
 
@@ -2733,12 +2772,27 @@
           <span class="repo-info-label">
             <span class="codicon codicon-repo"></span>
           </span>
-          <span
-            class="repo-info-value"
-            title={repoOwner && repoName ? `${repoOwner}/${repoName}` : 'Repository not configured'}
-          >
-            {repoName || '(not configured)'}
-          </span>
+          {#if isMultiWorkspace}
+            <select
+              class="repo-info-value repo-switcher-inline"
+              value={activeWorkspacePath ?? workspaceFolders[0]?.folderPath ?? ''}
+              title={repoOwner && repoName ? `${repoOwner}/${repoName}` : 'Select workspace'}
+              on:change={(e) => selectWorkspace((e.target as HTMLSelectElement).value)}
+            >
+              {#each workspaceFolders as ws (ws.folderPath)}
+                <option value={ws.folderPath}>
+                  {ws.isGitHub && ws.repoName ? ws.repoName : ws.folderName}
+                </option>
+              {/each}
+            </select>
+          {:else}
+            <span
+              class="repo-info-value"
+              title={repoOwner && repoName ? `${repoOwner}/${repoName}` : 'Repository not configured'}
+            >
+              {repoName || '(not configured)'}
+            </span>
+          {/if}
         </div>
         <div class="repo-info-row">
           <span class="repo-info-label" title="Local Git branch">
@@ -3022,11 +3076,20 @@
             <input
               id="branch"
               type="text"
+              list="branch-suggestions"
               bind:value={branch}
               on:input={clearError}
               placeholder="e.g., develop, main"
               disabled={loading}
+              autocomplete="off"
             />
+            {#if recentBranches.length > 0}
+              <datalist id="branch-suggestions">
+                {#each [...new Set([...(defaultBranch ? [defaultBranch] : []), ...(currentBranch ? [currentBranch] : []), ...recentBranches])] as b (b)}
+                  <option value={b}></option>
+                {/each}
+              </datalist>
+            {/if}
             {#if defaultBranch}
               <button
                 type="button"
@@ -5494,6 +5557,27 @@
   }
 
   /* Section Header with Help Button */
+  /* Inline repo switcher inside the Git Context box */
+  .repo-switcher-inline {
+    background: transparent;
+    border: none;
+    color: inherit;
+    font-size: inherit;
+    font-family: inherit;
+    padding: 0;
+    margin: 0;
+    cursor: pointer;
+    appearance: auto;
+    flex: 1;
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .repo-switcher-inline:focus {
+    outline: 1px solid var(--vscode-focusBorder);
+    border-radius: 2px;
+  }
+
   .section-header {
     display: flex;
     align-items: center;
