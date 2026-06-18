@@ -4,15 +4,21 @@
 import { execSync } from 'child_process';
 import * as vscode from 'vscode';
 import type { GitRepositoryInfo, WorkspaceRepoInfo } from '../types/workflow-types';
+import { getActiveWorkspacePath } from './active-workspace';
 
 /**
  * Resolve the working directory for git operations.
  * If workspacePath is provided, uses it directly; otherwise falls back to the
- * first workspace folder.
+ * workspace selected in the sidebar (multi-workspace support), and finally to
+ * the first workspace folder.
  */
 function resolveWorkspaceCwd(workspacePath?: string): string | undefined {
   if (workspacePath) {
     return workspacePath;
+  }
+  const active = getActiveWorkspacePath();
+  if (active) {
+    return active;
   }
   const folders = vscode.workspace.workspaceFolders;
   return folders && folders.length > 0 ? folders[0].uri.fsPath : undefined;
@@ -30,7 +36,7 @@ export async function getCurrentBranch(workspacePath?: string): Promise<string |
       const repositories = git.repositories;
 
       if (repositories.length > 0) {
-        const targetPath = workspacePath ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const targetPath = resolveWorkspaceCwd(workspacePath);
         const repo = targetPath
           ? repositories.find((r: any) => r.rootUri?.fsPath === targetPath) ?? repositories[0]
           : repositories[0];
@@ -94,12 +100,10 @@ export async function getRecentBranches(
  */
 export async function branchExistsOnRemote(branch: string): Promise<boolean> {
   try {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
+    const cwd = resolveWorkspaceCwd();
+    if (!cwd) {
       return false;
     }
-
-    const cwd = workspaceFolders[0].uri.fsPath;
 
     // Check if branch exists on origin
     execSync(`git ls-remote --heads origin ${branch}`, {

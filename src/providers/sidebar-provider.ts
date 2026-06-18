@@ -20,6 +20,7 @@ import type {
   WorkflowDefinition,
 } from '../types/workflow-types';
 import { isAuthenticated, signOut } from '../utils/authenticate';
+import { setActiveWorkspacePath } from '../utils/active-workspace';
 import { getConfig } from '../utils/config';
 import { FavoritesManager } from '../utils/favorites-manager';
 import { getNonce } from '../utils/get-nonce';
@@ -240,6 +241,10 @@ export class SidebarProvider implements vscode.WebviewViewProvider {
       case 'setActiveWorkspace': {
         const folderPath = message.data as string | undefined;
         this._activeWorkspacePath = folderPath || undefined;
+        // Share the selection so other parts of the extension (e.g. the
+        // Workflow Runs panel) resolve the repository against the chosen
+        // workspace instead of falling back to the first workspace folder.
+        setActiveWorkspacePath(this._activeWorkspacePath);
         // Reload all data for the newly selected workspace
         await this._reloadExtensionData();
         break;

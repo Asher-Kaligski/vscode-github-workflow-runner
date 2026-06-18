@@ -11,6 +11,7 @@ import type {
   WorkflowInputType,
   WorkflowJobDefinition,
 } from '../types/workflow-types';
+import { getActiveWorkspacePath } from './active-workspace';
 
 /**
  * Parse a single workflow file
@@ -75,7 +76,7 @@ export async function parseWorkflowFile(
 
     // Determine workspace-relative path for file (normalize to forward slashes)
     const workspaceRoot =
-      workspacePath ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      workspacePath ?? getActiveWorkspacePath() ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const relativeFilepath = workspaceRoot ? path.relative(workspaceRoot, filepath) : filepath;
     const normalizedFilepath = relativeFilepath.split(path.sep).join('/');
 
@@ -123,6 +124,7 @@ export async function getWorkflowFiles(workspacePath?: string): Promise<string[]
   try {
     const root =
       workspacePath ??
+      getActiveWorkspacePath() ??
       (vscode.workspace.workspaceFolders?.length
         ? vscode.workspace.workspaceFolders[0].uri.fsPath
         : undefined);
@@ -195,6 +197,7 @@ export async function getWorkflowDefinition(
   try {
     const root =
       workspacePath ??
+      getActiveWorkspacePath() ??
       (vscode.workspace.workspaceFolders?.length
         ? vscode.workspace.workspaceFolders[0].uri.fsPath
         : undefined);
@@ -406,20 +409,21 @@ export async function getAllWorkflowDefinitionsIncludingNonDispatch(
  */
 export async function parseJobDependencies(workflowPath: string): Promise<WorkflowJobDefinition[]> {
   try {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
+    const workspaceRoot =
+      getActiveWorkspacePath() ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    if (!workspaceRoot) {
       return [];
     }
 
     // Handle both absolute and relative paths
     let filepath = workflowPath;
     if (!path.isAbsolute(workflowPath)) {
-      filepath = path.join(workspaceFolders[0].uri.fsPath, workflowPath);
+      filepath = path.join(workspaceRoot, workflowPath);
     }
 
     // Also check if the path starts with .github/workflows
     if (!fs.existsSync(filepath) && !workflowPath.startsWith('.github')) {
-      filepath = path.join(workspaceFolders[0].uri.fsPath, '.github', 'workflows', workflowPath);
+      filepath = path.join(workspaceRoot, '.github', 'workflows', workflowPath);
     }
 
     if (!fs.existsSync(filepath)) {

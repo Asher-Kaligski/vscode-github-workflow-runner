@@ -22,6 +22,7 @@ import {
   getWorkflowRuns,
   rerunWorkflow,
 } from '../api/workflow-monitor';
+import { getActiveWorkspacePath } from '../utils/active-workspace';
 import { getConfig } from '../utils/config';
 import { getNonce } from '../utils/get-nonce';
 import { ensureGitContextValidOrWarn } from '../utils/git-context-validation';
@@ -4189,14 +4190,16 @@ export class WorkflowRunsPanel {
         return;
       }
 
-      // Construct the full path to the workflow file
-      const workspaceFolder = vscode.workspace.workspaceFolders?.[0];
-      if (!workspaceFolder) {
+      // Construct the full path to the workflow file, scoped to the active
+      // workspace so multi-root setups open the file from the selected repo.
+      const rootPath =
+        getActiveWorkspacePath() ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+      if (!rootPath) {
         vscode.window.showErrorMessage('No workspace folder open');
         return;
       }
 
-      const fullPath = vscode.Uri.joinPath(workspaceFolder.uri, filePath);
+      const fullPath = vscode.Uri.joinPath(vscode.Uri.file(rootPath), filePath);
 
       // Check if file exists
       try {
