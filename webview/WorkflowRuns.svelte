@@ -800,6 +800,12 @@
         // Also clear watched runs as they are repository-specific
         watchedRuns = new Set();
         showWatchedOnly = false;
+        // The workflow dropdown is built from the previous repository's local
+        // workflow definitions. Drop them and re-request the new repository's
+        // workflows so the "All workflows" list reflects the active repo only.
+        allWorkflowDefinitions = [];
+        buildAvailableWorkflows();
+        vscode.postMessage({ type: 'getWorkflows' });
       }
     }
     previousRepository = repository ? { owner: repository.owner, name: repository.name } : null;

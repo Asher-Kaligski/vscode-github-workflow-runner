@@ -2,6 +2,19 @@
 
 All notable changes to the "github-workflow-runner" extension will be documented in this file.
 
+## [Unreleased]
+
+### ✨ New Features
+
+- **Multi-Workspace Support:** The extension now works correctly in VS Code multi-root workspaces.
+  - A **workspace switcher** appears inside the Git Context box when two or more workspace folders are open — click the repo name to pick a different folder from the dropdown
+  - Workflows, branches, repository config, and Git context all reload automatically when switching workspaces
+  - Only GitHub-backed folders are shown with their `owner/repo` label; non-GitHub folders fall back to their folder name
+
+- **Branch Suggestions Dropdown:** The Branch field now shows a native autocomplete list when a workflow is selected.
+  - Suggestions include the default branch, your current local branch, and recently used branches (deduplicated and ordered by relevance)
+  - Still a free-text field — type any branch name or pick from the list
+
 ## [1.5.1] - 2025-12-30
 
 ### ✨ New Features

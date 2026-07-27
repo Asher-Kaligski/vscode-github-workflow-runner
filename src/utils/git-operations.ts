@@ -3,21 +3,43 @@
  */
 import { execSync } from 'child_process';
 import * as vscode from 'vscode';
-import type { GitRepositoryInfo } from '../types/workflow-types';
+import type { GitRepositoryInfo, WorkspaceRepoInfo } from '../types/workflow-types';
+import { getActiveWorkspacePath } from './active-workspace';
+
+/**
+ * Resolve the working directory for git operations.
+ * If workspacePath is provided, uses it directly; otherwise falls back to the
+ * workspace selected in the sidebar (multi-workspace support), and finally to
+ * the first workspace folder.
+ */
+function resolveWorkspaceCwd(workspacePath?: string): string | undefined {
+  if (workspacePath) {
+    return workspacePath;
+  }
+  const active = getActiveWorkspacePath();
+  if (active) {
+    return active;
+  }
+  const folders = vscode.workspace.workspaceFolders;
+  return folders && folders.length > 0 ? folders[0].uri.fsPath : undefined;
+}
 
 /**
  * Get current Git branch using VS Code Git API
  */
-export async function getCurrentBranch(): Promise<string | undefined> {
+export async function getCurrentBranch(workspacePath?: string): Promise<string | undefined> {
   try {
-    // Try VS Code Git API first
+    // Try VS Code Git API first — find the matching repo by root path when possible
     const gitExtension = vscode.extensions.getExtension('vscode.git');
     if (gitExtension) {
       const git = gitExtension.exports.getAPI(1);
       const repositories = git.repositories;
 
       if (repositories.length > 0) {
-        const repo = repositories[0];
+        const targetPath = resolveWorkspaceCwd(workspacePath);
+        const repo = targetPath
+          ? repositories.find((r: any) => r.rootUri?.fsPath === targetPath) ?? repositories[0]
+          : repositories[0];
         const branch = repo.state.HEAD?.name;
         if (branch) {
           return branch;
@@ -26,9 +48,8 @@ export async function getCurrentBranch(): Promise<string | undefined> {
     }
 
     // Fallback to command line
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (workspaceFolders && workspaceFolders.length > 0) {
-      const cwd = workspaceFolders[0].uri.fsPath;
+    const cwd = resolveWorkspaceCwd(workspacePath);
+    if (cwd) {
       const branch = execSync('git branch --show-current', {
         cwd,
         encoding: 'utf8',
@@ -44,14 +65,15 @@ export async function getCurrentBranch(): Promise<string | undefined> {
 /**
  * Get recent Git branches
  */
-export async function getRecentBranches(limit: number = 10): Promise<string[]> {
+export async function getRecentBranches(
+  limit: number = 10,
+  workspacePath?: string
+): Promise<string[]> {
   try {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
+    const cwd = resolveWorkspaceCwd(workspacePath);
+    if (!cwd) {
       return [];
     }
-
-    const cwd = workspaceFolders[0].uri.fsPath;
 
     // Get recent branches sorted by commit date
     const branches = execSync(
@@ -78,12 +100,10 @@ export async function getRecentBranches(limit: number = 10): Promise<string[]> {
  */
 export async function branchExistsOnRemote(branch: string): Promise<boolean> {
   try {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
+    const cwd = resolveWorkspaceCwd();
+    if (!cwd) {
       return false;
     }
-
-    const cwd = workspaceFolders[0].uri.fsPath;
 
     // Check if branch exists on origin
     execSync(`git ls-remote --heads origin ${branch}`, {
@@ -99,16 +119,15 @@ export async function branchExistsOnRemote(branch: string): Promise<boolean> {
 }
 
 /**
- * Get repository information
+ * Get repository information for a specific workspace path (or the first workspace folder).
  */
-export async function getRepositoryInfo(): Promise<GitRepositoryInfo | null> {
+export async function getRepositoryInfo(workspacePath?: string): Promise<GitRepositoryInfo | null> {
   try {
-    const workspaceFolders = vscode.workspace.workspaceFolders;
-    if (!workspaceFolders || workspaceFolders.length === 0) {
+    const rootPath = resolveWorkspaceCwd(workspacePath);
+    if (!rootPath) {
       return null;
     }
 
-    const rootPath = workspaceFolders[0].uri.fsPath;
     const cwd = rootPath;
 
     // Get remote URL
@@ -128,10 +147,10 @@ export async function getRepositoryInfo(): Promise<GitRepositoryInfo | null> {
     const name = match[2];
 
     // Get current branch
-    const currentBranch = await getCurrentBranch();
+    const currentBranch = await getCurrentBranch(rootPath);
 
     // Get recent branches
-    const recentBranches = await getRecentBranches();
+    const recentBranches = await getRecentBranches(10, rootPath);
 
     return {
       owner,
@@ -144,6 +163,39 @@ export async function getRepositoryInfo(): Promise<GitRepositoryInfo | null> {
     console.error('Failed to get repository info:', error);
     return null;
   }
+}
+
+/**
+ * Get repo info for every workspace folder that is a GitHub-backed git repo.
+ */
+export async function getAllWorkspaceRepos(): Promise<WorkspaceRepoInfo[]> {
+  const folders = vscode.workspace.workspaceFolders;
+  if (!folders || folders.length === 0) {
+    return [];
+  }
+
+  const results: WorkspaceRepoInfo[] = [];
+  for (const folder of folders) {
+    try {
+      const repoInfo = await getRepositoryInfo(folder.uri.fsPath);
+      results.push({
+        folderName: folder.name,
+        folderPath: folder.uri.fsPath,
+        owner: repoInfo?.owner ?? null,
+        repoName: repoInfo?.name ?? null,
+        isGitHub: repoInfo !== null,
+      });
+    } catch {
+      results.push({
+        folderName: folder.name,
+        folderPath: folder.uri.fsPath,
+        owner: null,
+        repoName: null,
+        isGitHub: false,
+      });
+    }
+  }
+  return results;
 }
 
 /**
