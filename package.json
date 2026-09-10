@@ -325,9 +325,9 @@
     "reset-extension": "chmod +x scripts/reset-extension.sh && ./scripts/reset-extension.sh"
   },
   "dependencies": {
-    "adm-zip": "^0.5.16",
+    "adm-zip": "^0.6.0",
     "ansi-to-html": "^0.7.2",
-    "js-yaml": "^4.1.0"
+    "js-yaml": "^4.3.0"
   },
   "devDependencies": {
     "@resvg/resvg-js": "^2.6.2",
@@ -344,7 +344,7 @@
     "@typescript-eslint/parser": "^8.49.0",
     "@vscode/codicons": "^0.0.42",
     "@vscode/vsce": "^3.7.0",
-    "concurrently": "^9.2.1",
+    "concurrently": "^9.2.4",
     "eslint": "^9.39.1",
     "eslint-config-prettier": "^10.1.8",
     "eslint-plugin-prettier": "^5.5.4",
@@ -355,13 +355,13 @@
     "rollup": "^4.60.3",
     "rollup-plugin-postcss": "^4.0.2",
     "rollup-plugin-svelte": "^7.2.3",
-    "svelte": "^5.55.5",
+    "svelte": "^5.56.8",
     "svelte-check": "^4.3.3",
     "svelte-eslint-parser": "^1.4.1",
     "svelte-preprocess": "^6.0.3",
     "ts-loader": "^9.5.4",
     "typescript": "^5.9.3",
-    "vitest": "^4.0.8",
+    "vitest": "^4.1.0",
     "webpack": "^5.106.2",
     "webpack-cli": "^6.0.1",
     "yaml": "^2.8.2"
