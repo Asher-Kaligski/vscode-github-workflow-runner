@@ -9,9 +9,10 @@ const MANUAL_OWNER_KEY = 'githubWorkflowRunner.repository.manualOwner';
 const MANUAL_NAME_KEY = 'githubWorkflowRunner.repository.manualName';
 
 /**
- * Get repository configuration with auto-detection and manual override support
+ * Get repository configuration with auto-detection and manual override support.
+ * When workspacePath is provided, auto-detection targets that specific folder.
  */
-export async function getRepositoryConfig(): Promise<RepositoryConfig> {
+export async function getRepositoryConfig(workspacePath?: string): Promise<RepositoryConfig> {
   const config = vscode.workspace.getConfiguration();
 
   // Check for manual overrides in workspace settings
@@ -19,7 +20,7 @@ export async function getRepositoryConfig(): Promise<RepositoryConfig> {
   const manualName = config.get<string>(MANUAL_NAME_KEY);
 
   // Try to auto-detect repository info
-  const autoDetected = await getRepositoryInfo();
+  const autoDetected = await getRepositoryInfo(workspacePath);
 
   // If manual values are set, use them
   if (manualOwner && manualName) {

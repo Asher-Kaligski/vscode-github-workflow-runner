@@ -40,8 +40,8 @@ export interface GitContextValidationResult {
 /**
  * Build a GitContextSnapshot from the current workspace Git repository.
  */
-async function buildCurrentSnapshot(): Promise<GitContextSnapshot | null> {
-  const repoInfo = await getRepositoryInfo();
+async function buildCurrentSnapshot(workspacePath?: string): Promise<GitContextSnapshot | null> {
+  const repoInfo = await getRepositoryInfo(workspacePath);
   if (!repoInfo) {
     return null;
   }
@@ -58,8 +58,10 @@ async function buildCurrentSnapshot(): Promise<GitContextSnapshot | null> {
  * Validate that the current Git repository and branch match the ones stored in
  * extension state from the last validation/reload.
  */
-export async function validateGitContextForGitHubOperation(): Promise<GitContextValidationResult> {
-  const current = await buildCurrentSnapshot();
+export async function validateGitContextForGitHubOperation(
+  workspacePath?: string
+): Promise<GitContextValidationResult> {
+  const current = await buildCurrentSnapshot(workspacePath);
 
   if (!current) {
     return {
@@ -115,8 +117,10 @@ export async function validateGitContextForGitHubOperation(): Promise<GitContext
  * Force-refresh the stored Git context to the current workspace state.
  * Call this when the user explicitly reloads extension data.
  */
-export async function refreshGitContext(): Promise<GitContextSnapshot | null> {
-  const current = await buildCurrentSnapshot();
+export async function refreshGitContext(
+  workspacePath?: string
+): Promise<GitContextSnapshot | null> {
+  const current = await buildCurrentSnapshot(workspacePath);
   if (current) {
     await Storage.setLastValidatedGitContext(current);
   } else {
@@ -128,16 +132,21 @@ export async function refreshGitContext(): Promise<GitContextSnapshot | null> {
 /**
  * Get the current Git context without validation.
  */
-export async function getCurrentGitContext(): Promise<GitContextSnapshot | null> {
-  return buildCurrentSnapshot();
+export async function getCurrentGitContext(
+  workspacePath?: string
+): Promise<GitContextSnapshot | null> {
+  return buildCurrentSnapshot(workspacePath);
 }
 
 /**
  * Validate Git context and, when invalid, show a standard warning message.
  * Returns true when it is safe to proceed with GitHub API operations.
  */
-export async function ensureGitContextValidOrWarn(source?: string): Promise<boolean> {
-  const result = await validateGitContextForGitHubOperation();
+export async function ensureGitContextValidOrWarn(
+  source?: string,
+  workspacePath?: string
+): Promise<boolean> {
+  const result = await validateGitContextForGitHubOperation(workspacePath);
 
   if (result.ok) {
     return true;

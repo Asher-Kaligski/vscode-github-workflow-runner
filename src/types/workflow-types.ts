@@ -370,6 +370,23 @@ export interface GitRepositoryInfo {
 }
 
 /**
+ * Summary of a workspace folder and its associated GitHub repository (if any).
+ * Used by the multi-workspace repo switcher.
+ */
+export interface WorkspaceRepoInfo {
+  /** VS Code workspace folder display name */
+  folderName: string;
+  /** Absolute path to the workspace folder */
+  folderPath: string;
+  /** GitHub repository owner (null if not a GitHub repo) */
+  owner: string | null;
+  /** GitHub repository name (null if not a GitHub repo) */
+  repoName: string | null;
+  /** Whether this folder is a GitHub-backed git repo */
+  isGitHub: boolean;
+}
+
+/**
  * GitHub user information
  */
 export interface GitHubUserInfo {
@@ -802,6 +819,8 @@ export type WebviewMessageType =
   | 'checkAuth'
   | 'signOut'
   | 'getUserInfo'
+  | 'getWorkspaceFolders'
+  | 'setActiveWorkspace'
   | 'getRepositoryConfig'
   | 'setRepositoryConfig'
   | 'resetRepositoryConfig'

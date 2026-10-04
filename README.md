@@ -25,11 +25,15 @@ Dispatch workflows with dynamic inputs, monitor runs in real-time, save presets,
 
 Stop switching between VS Code and GitHub's web UI. Dispatch workflows, monitor runs, and view logs without breaking your development flow.
 
+### 🗂️ **Multi-Workspace Support** _(New)_
+
+Works seamlessly in VS Code multi-root workspaces. A workspace switcher appears inside the **Git Context** box — click the repo name to switch between folders. Workflows, branches, and repository config reload automatically for the selected workspace.
+
 ### 🎯 **Smart & Dynamic**
 
 - **Auto-generated forms** from your workflow YAML — no manual configuration
 - **Intelligent input recovery** — rerun workflows with prefilled inputs from previous runs
-- **Branch auto-detection** — automatically uses your current Git branch
+- **Branch auto-detection** — automatically uses your current Git branch, with a suggestion dropdown showing your default and recent branches _(New)_
 - **Smart File Input** — enhanced input fields with file path autocomplete, content extraction, and favorites
 
 ### 📁 **Smart File Input** _(New in v1.3.0)_
@@ -90,10 +94,11 @@ Install from the [VS Code Marketplace](https://marketplace.visualstudio.com/item
 ### 3️⃣ **Dispatch Your First Workflow**
 
 1. Open a repository with GitHub Actions workflows
-2. Select a workflow from the dropdown (only `workflow_dispatch` workflows are shown)
-3. Fill in any required inputs
-4. Select a branch (defaults to your current branch)
-5. Click **"Dispatch Workflow"** 🚀
+2. If using a **multi-root workspace**, select the target repo from the switcher in the Git Context box
+3. Select a workflow from the dropdown (only `workflow_dispatch` workflows are shown)
+4. Fill in any required inputs
+5. Type a branch or pick one from the suggestion list (default branch, current branch, and recent branches are shown)
+6. Click **"Dispatch Workflow"** 🚀
 
 ### 4️⃣ **Monitor Workflow Runs**
 
